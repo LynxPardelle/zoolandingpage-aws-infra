@@ -325,3 +325,34 @@ test("FrontendStack can deploy pre-cutover CloudFront distributions without atta
     /var forwardedHost = "dev\.zoolandingpage\.com\.mx";/
   );
 });
+
+test("FrontendStack does not create a retained production SSR log group that can conflict after rollback", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "production",
+    removalPolicy: "retain",
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      releaseId: "test-release",
+      manifestKey: "frontend/angular-ssr/production/releases/test-release/manifest.json",
+      staticPrefix: "frontend/angular-ssr/production/releases/test-release/browser",
+      serverBundleKey: "frontend/angular-ssr/production/releases/test-release/server/ssr-handler.zip",
+      frontDoors: [
+        {
+          ...testEnvironment.frontendHosting.frontDoors[0],
+          customDomainNamesEnabled: false,
+          auditHostHint: "zoolandingpage.com.mx",
+        },
+      ],
+    },
+  };
+  const stack = new FrontendStack(app, "TestFrontendRetainLogGroupStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+
+  template.resourceCountIs("AWS::Logs::LogGroup", 0);
+  template.resourceCountIs("AWS::Lambda::Function", 1);
+});
