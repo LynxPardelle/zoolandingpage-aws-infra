@@ -60,6 +60,11 @@ const runtimeFallbackUrls = {
   production: "https://y84vk0v44l.execute-api.us-east-1.amazonaws.com/Prod",
 };
 
+const productionCustomDomainNamesEnabled = parseBooleanFlag(
+  process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED ||
+    process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
+);
+
 const zoolandingpageMxProductionAliases = [
   "alecfest-voliii.zoolandingpage.com.mx",
   "crearpaginaweb.zoolandingpage.com.mx",
@@ -192,6 +197,8 @@ const environments = [
           id: "zoolandingpage-mx",
           domainName: "zoolandingpage.com.mx",
           alternateDomainNames: zoolandingpageMxProductionAliases,
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "zoolandingpage.com.mx",
           certificateArn: certificates.zoolandingpageMx,
           aliasRecordGroups: [
             {
@@ -209,6 +216,8 @@ const environments = [
             "sulandingpage.com",
             "zoolandingpage.com",
           ],
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "zoositioweb.com.mx",
           certificateArn: certificates.zoositeAndSulanding,
           aliasRecordGroups: [
             {
@@ -237,6 +246,8 @@ const environments = [
           id: "lynx-draft-aliases",
           domainName: "music.lynxpardelle.com",
           alternateDomainNames: ["alecfest-voliii.lynxpardelle.com"],
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "music.lynxpardelle.com",
           certificateArn: certificates.lynxPardelleWildcard,
           aliasRecordGroups: [
             {
@@ -250,6 +261,10 @@ const environments = [
     removalPolicy: "retain",
   },
 ];
+
+function parseBooleanFlag(value) {
+  return String(value || "").toLowerCase() === "true";
+}
 
 module.exports = {
   environments,
