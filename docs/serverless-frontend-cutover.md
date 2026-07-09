@@ -27,6 +27,8 @@ The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT fai
 
 The first production alias attach attempt on 2026-07-09 CT failed on `FrontendDistributionZoolandingpageMx` with the same CloudFront CNAME conflict. Keep production in generated-domain audit mode until the conflicting CloudFront association is identified and moved intentionally.
 
+The rollback from that production attempt left `/aws/lambda/zoolandingpage-production-frontend-ssr` as an existing log group. Production no longer manages that log group through CloudFormation; Lambda can write to the existing group without deleting audit logs.
+
 When production cutover is approved, first enable custom domain names, then enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
 
 ## CloudFront Host Forwarding
