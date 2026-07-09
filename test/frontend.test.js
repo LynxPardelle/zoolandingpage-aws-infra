@@ -41,6 +41,32 @@ const testEnvironment = {
     runtimeEnvironment: "test",
     route53RecordsEnabled: false,
     route53RecordManagement: "upsert",
+    backendRoutes: [
+      {
+        id: "auth-admin",
+        domainName: "auth.example.com",
+        originPath: "/prod",
+        pathPatterns: ["auth/session", "auth/session/*", "auth/admin", "auth/admin/*"],
+      },
+      {
+        id: "combo-catalog",
+        domainName: "combo.example.com",
+        originPath: "/prod",
+        pathPatterns: ["features/combo-catalog/*"],
+      },
+      {
+        id: "content-hub",
+        domainName: "content.example.com",
+        originPath: "/prod",
+        pathPatterns: ["features/content-hub/*"],
+      },
+      {
+        id: "api-proxy",
+        domainName: "proxy.example.com",
+        originPath: "/Prod",
+        pathPatterns: ["auth/runtime-config", "api-proxy/*"],
+      },
+    ],
     frontDoors: [
       {
         id: "dev",
@@ -247,6 +273,46 @@ test("FrontendStack deploys Lambda SSR and CloudFront distributions when release
     LogGroupName: "/aws/lambda/zoolandingpage-dev-frontend-ssr",
     RetentionInDays: 30,
   });
+});
+
+test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      releaseId: "test-release",
+      manifestKey: "frontend/angular-ssr/dev/releases/test-release/manifest.json",
+      staticPrefix: "frontend/angular-ssr/dev/releases/test-release/browser",
+      serverBundleKey: "frontend/angular-ssr/dev/releases/test-release/server/ssr-handler.zip",
+    },
+  };
+  const stack = new FrontendStack(app, "TestFrontendBackendRouteStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+
+  const distribution = Object.values(template.findResources("AWS::CloudFront::Distribution"))[0];
+  const behaviors = distribution.Properties.DistributionConfig.CacheBehaviors;
+  const behaviorByPattern = new Map(behaviors.map((behavior) => [behavior.PathPattern, behavior]));
+  for (const expectedPattern of [
+    "auth/session",
+    "auth/session/*",
+    "auth/admin",
+    "auth/admin/*",
+    "features/combo-catalog/*",
+    "features/content-hub/*",
+    "auth/runtime-config",
+    "api-proxy/*",
+  ]) {
+    const behavior = behaviorByPattern.get(expectedPattern);
+    assert.ok(behavior, `missing backend behavior for ${expectedPattern}`);
+    assert.deepEqual(behavior.AllowedMethods, ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"]);
+    assert.equal(behavior.CachePolicyId, "4135ea2d-6df8-44a3-9df3-4b5a84be39ad");
+  }
+  assert.equal(behaviorByPattern.has("auth/callback"), false);
+  assert.equal(behaviorByPattern.has("auth/*"), false);
 });
 
 test("FrontendStack creates Route53 upsert custom resources only when record cutover is enabled", () => {
