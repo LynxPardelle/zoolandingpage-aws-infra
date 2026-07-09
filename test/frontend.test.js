@@ -209,6 +209,7 @@ test("FrontendStack deploys Lambda SSR and CloudFront distributions when release
     FunctionUrlAuthType: "AWS_IAM",
   });
   template.resourceCountIs("AWS::CloudFront::Distribution", 2);
+  template.resourceCountIs("AWS::CloudFront::Function", 2);
   template.hasResourceProperties("AWS::CloudFront::Distribution", {
     DistributionConfig: Match.objectLike({
       Aliases: ["dev.zoolandingpage.com.mx"],
@@ -229,6 +230,9 @@ test("FrontendStack deploys Lambda SSR and CloudFront distributions when release
   );
   const distributions = template.findResources("AWS::CloudFront::Distribution");
   for (const distribution of Object.values(distributions)) {
+    const defaultAssociations = distribution.Properties.DistributionConfig.DefaultCacheBehavior.FunctionAssociations;
+    assert.equal(defaultAssociations.length, 1);
+    assert.equal(defaultAssociations[0].EventType, "viewer-request");
     const pathPatterns = distribution.Properties.DistributionConfig.CacheBehaviors.map((behavior) => behavior.PathPattern);
     for (const expectedPattern of ["assets/*", "*.js", "*.css", "*.svg", "manifest.webmanifest"]) {
       assert.ok(pathPatterns.includes(expectedPattern), `missing static behavior for ${expectedPattern}`);
