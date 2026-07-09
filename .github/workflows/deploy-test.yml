@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   guard:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
@@ -33,6 +34,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: guard
+    if: always() && (needs.guard.result == 'success' || needs.guard.result == 'skipped')
     environment: test
     steps:
       - uses: actions/checkout@v7.0.0
@@ -73,4 +75,3 @@ jobs:
         env:
           FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
         run: npx cdk deploy "ZoolandingTest/*" --require-approval never
-
