@@ -1,0 +1,75 @@
+name: Production Alias Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_cleanup_retired_aliases:
+        description: "Delete exact Route53 records and CloudFront aliases for retired Zoolandingpage aliases."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      confirm_cleanup:
+        description: "Required when applying cleanup: remove-retired-zoolandingpage-aliases"
+        required: false
+        default: ""
+      preflight_custom_aliases:
+        description: "Check desired production custom aliases for CloudFront conflicts."
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  alias-ops:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run validate
+
+      - name: Validate AWS environment variables
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::AWS_ROLE_ARN environment variable is required for alias ops."
+            exit 1
+          fi
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::AWS_REGION environment variable is required for alias ops."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Confirm AWS caller identity
+        run: aws sts get-caller-identity
+
+      - name: Audit or clean production aliases
+        run: |
+          node tools/ops/frontend-alias-ops.mjs \
+            --apply-cleanup=${{ inputs.apply_cleanup_retired_aliases }} \
+            --confirm-cleanup="${{ inputs.confirm_cleanup }}" \
+            --preflight-custom-aliases=${{ inputs.preflight_custom_aliases }}
