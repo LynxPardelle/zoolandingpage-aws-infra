@@ -41,7 +41,7 @@ Do not set `X-Forwarded-Proto` in a CloudFront Function; AWS rejects it as a dis
 
 For generated CloudFront audit domains, set `auditHostHint` on the front door so SSR resolves the intended platform host without moving DNS.
 
-Same-origin app backend routes must be explicit CloudFront behaviors. EC2/Dokploy previously routed `/auth/session/*`, `/auth/admin/*`, `/features/content-hub/*`, `/features/combo-catalog/*`, and `/api-proxy/*` through Traefik; the serverless frontend distributions now route those path patterns directly to the existing API Gateway backends. Keep `/auth/runtime-config` on the SSR/app path because the auth-admin front door intentionally owns only session and admin routes.
+Same-origin app backend routes must be explicit CloudFront behaviors. EC2/Dokploy previously routed `/auth/session/*`, `/auth/admin/*`, `/auth/runtime-config`, `/features/content-hub/*`, `/features/combo-catalog/*`, and `/api-proxy/*` through Traefik; the serverless frontend distributions now route those path patterns directly to the existing API Gateway backends. Keep `/auth/runtime-config` as an exact API proxy behavior, not an auth-admin behavior and not a broad `/auth/*` route, because `/auth/callback` remains app-rendered.
 
 ## Known Alias Gaps
 
