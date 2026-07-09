@@ -281,3 +281,47 @@ test("FrontendStack creates Route53 upsert custom resources only when record cut
   assert.match(createPayload, /UPSERT/);
   assert.match(createPayload, /dev\.zoolandingpage\.com\.mx\./);
 });
+
+test("FrontendStack can deploy pre-cutover CloudFront distributions without attaching custom aliases", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      releaseId: "test-release",
+      manifestKey: "frontend/angular-ssr/dev/releases/test-release/manifest.json",
+      staticPrefix: "frontend/angular-ssr/dev/releases/test-release/browser",
+      serverBundleKey: "frontend/angular-ssr/dev/releases/test-release/server/ssr-handler.zip",
+      frontDoors: [
+        {
+          ...testEnvironment.frontendHosting.frontDoors[0],
+          customDomainNamesEnabled: false,
+          auditHostHint: "dev.zoolandingpage.com.mx",
+        },
+      ],
+    },
+  };
+  const stack = new FrontendStack(app, "TestFrontendPreCutoverStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+
+  template.resourceCountIs("AWS::CloudFront::Distribution", 1);
+  template.hasResourceProperties("AWS::SSM::Parameter", {
+    Name: "/zoolandingpage/dev/frontend/custom-domain-names-enabled",
+    Type: "String",
+    Value: "false",
+  });
+
+  const distributions = template.findResources("AWS::CloudFront::Distribution");
+  const distribution = Object.values(distributions)[0];
+  assert.equal(distribution.Properties.DistributionConfig.Aliases, undefined);
+
+  const functions = template.findResources("AWS::CloudFront::Function");
+  const viewerFunction = Object.values(functions)[0];
+  assert.match(
+    viewerFunction.Properties.FunctionCode,
+    /var forwardedHost = "dev\.zoolandingpage\.com\.mx";/
+  );
+});

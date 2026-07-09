@@ -13,18 +13,21 @@ Source facts verified on 2026-07-09 CT:
 
 1. Foundation deploy: create private artifact bucket and GitHub publisher role only.
 2. Artifact publish: app repo uploads browser files to `zoolandingpage-public-files` and SSR zip/manifest to the private artifact bucket.
-3. Hosting deploy: set `FRONTEND_RELEASE_ID`, then create Lambda SSR and CloudFront distributions.
-4. Live audit: test CloudFront distribution domains first, then custom domains only after DNS cutover is explicitly enabled.
-5. DNS cutover: set `route53RecordsEnabled: true` only after live audit passes.
-6. EC2 retirement: shut down EC2 only after all required production and draft aliases pass serverless browser QA.
+3. Hosting deploy: set `FRONTEND_RELEASE_ID`, then create Lambda SSR and generated CloudFront distributions.
+4. Live audit: test generated CloudFront distribution domains with `auditHostHint` while custom aliases remain detached.
+5. Custom alias attach: set `FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED=true` only after alias conflicts are resolved and cutover is approved.
+6. DNS cutover: set `route53RecordsEnabled: true` only after live audit passes.
+7. EC2 retirement: shut down EC2 only after all required production and draft aliases pass serverless browser QA.
 
 ## DNS Safety
 
-`route53RecordsEnabled` stays disabled globally. The `test` front door is deployed without a custom alias for audit through its generated CloudFront distribution domain.
+`route53RecordsEnabled` stays disabled globally. Test and pre-cutover production front doors deploy without custom aliases for audit through generated CloudFront distribution domains.
 
 The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT failed because CloudFront returned: `One or more of the CNAMEs you provided are already associated with a different resource.` Route53 still points `test.zoolandingpage.com.mx` to EC2 IP `32.195.120.158`; keep it there until the CNAME ownership/conflict is resolved and audit passes.
 
-When production cutover is approved, enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
+The first production alias attach attempt on 2026-07-09 CT failed on `FrontendDistributionZoolandingpageMx` with the same CloudFront CNAME conflict. Keep production in generated-domain audit mode until the conflicting CloudFront association is identified and moved intentionally.
+
+When production cutover is approved, first enable custom domain names, then enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
 
 ## CloudFront Host Forwarding
 
