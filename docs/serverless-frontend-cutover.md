@@ -20,7 +20,9 @@ Source facts verified on 2026-07-09 CT:
 
 ## DNS Safety
 
-`route53RecordsEnabled` stays disabled globally. The only front-door override enabled for audit is `test.zoolandingpage.com.mx`.
+`route53RecordsEnabled` stays disabled globally. The `test` front door is deployed without a custom alias for audit through its generated CloudFront distribution domain.
+
+The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT failed because CloudFront returned: `One or more of the CNAMEs you provided are already associated with a different resource.` Route53 still points `test.zoolandingpage.com.mx` to EC2 IP `32.195.120.158`; keep it there until the CNAME ownership/conflict is resolved and audit passes.
 
 When production cutover is approved, enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
 
