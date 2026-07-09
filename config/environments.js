@@ -67,20 +67,35 @@ const productionCustomDomainNamesEnabled = parseBooleanFlag(
 
 const zoolandingpageMxProductionAliases = [
   "alecfest-voliii.zoolandingpage.com.mx",
-  "crearpaginaweb.zoolandingpage.com.mx",
   "despacholegalastralex.zoolandingpage.com.mx",
-  "erosbarajas.zoolandingpage.com.mx",
   "pamelabetancourt.zoolandingpage.com.mx",
   "pokeapi-demo.zoolandingpage.com.mx",
-  "quierounsitioweb.zoolandingpage.com.mx",
-  "robertorodriguezrodriguez.zoolandingpage.com.mx",
-  "sitiosweb.zoolandingpage.com.mx",
 ];
 
 const unresolvedEc2Aliases = [
   {
     domainName: "erosbarajas.com",
     reason: "No issued ACM certificate was found in us-east-1 on 2026-07-09.",
+  },
+  {
+    domainName: "crearpaginaweb.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
+  },
+  {
+    domainName: "erosbarajas.zoolandingpage.com.mx",
+    reason: "Retired alias. EC2 returned HTTP 404 during 2026-07-09 audit; the production runtime API resolved it to zoolandingpage.com.mx/not-found.",
+  },
+  {
+    domainName: "quierounsitioweb.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
+  },
+  {
+    domainName: "robertorodriguezrodriguez.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
+  },
+  {
+    domainName: "sitiosweb.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
   },
   {
     domainName: "test.despacholegalastralex.zoolandingpage.com.mx",
