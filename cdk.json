@@ -1,0 +1,16 @@
+{
+  "app": "node bin/zoolandingpage-aws-infra.js",
+  "watch": {
+    "include": [
+      "**"
+    ],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "node_modules",
+      "test",
+      "cdk.out"
+    ]
+  }
+}
+

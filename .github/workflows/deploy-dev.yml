@@ -1,0 +1,56 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run validate
+
+      - name: Validate AWS environment variables
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::AWS_ROLE_ARN environment variable is required for deploy."
+            exit 1
+          fi
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::AWS_REGION environment variable is required for deploy."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Confirm AWS caller identity
+        run: aws sts get-caller-identity
+
+      - name: Deploy dev frontend stack
+        env:
+          FRONTEND_DEV_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+        run: npx cdk deploy "ZoolandingDev/*" --require-approval never
+

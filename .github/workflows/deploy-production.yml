@@ -1,0 +1,76 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Require test merge
+        run: |
+          set -euo pipefail
+          git fetch origin test main
+          parent_count="$(git rev-list --parents -n 1 HEAD | awk '{print NF-1}')"
+          if [ "$parent_count" -lt 2 ]; then
+            echo "Deploying production requires a merge commit from test."
+            exit 1
+          fi
+          second_parent="$(git rev-list --parents -n 1 HEAD | awk '{print $3}')"
+          git merge-base --is-ancestor "$second_parent" origin/test
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: guard
+    environment: production
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run validate
+
+      - name: Validate AWS environment variables
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AWS_ROLE_ARN" ]; then
+            echo "::error::AWS_ROLE_ARN environment variable is required for deploy."
+            exit 1
+          fi
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::AWS_REGION environment variable is required for deploy."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v6.1.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Confirm AWS caller identity
+        run: aws sts get-caller-identity
+
+      - name: Deploy production frontend stack
+        env:
+          FRONTEND_PRODUCTION_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+        run: npx cdk deploy "ZoolandingProduction/*" --require-approval never
+
