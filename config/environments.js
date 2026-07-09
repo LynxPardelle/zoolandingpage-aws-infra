@@ -200,7 +200,7 @@ function buildBackendRoutes(environmentName) {
       id: "api-proxy",
       domainName: apiFrontDoors.apiProxy.domainName,
       originPath: apiFrontDoors.apiProxy.originPath,
-      pathPatterns: ["api-proxy/*"],
+      pathPatterns: ["auth/runtime-config", "api-proxy/*"],
     },
   ];
 }
