@@ -167,9 +167,8 @@ const environments = [
       frontDoors: [
         {
           id: "test",
-          domainName: "test.zoolandingpage.com.mx",
-          certificateArn: certificates.zoolandingpageMx,
-          route53RecordsEnabled: true,
+          route53RecordsEnabled: false,
+          auditHostHint: "test.zoolandingpage.com.mx",
           aliasRecordGroups: [
             {
               ...hostedZones.zoolandingpageComMx,

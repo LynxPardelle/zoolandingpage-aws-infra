@@ -20,9 +20,19 @@ Source facts verified on 2026-07-09 CT:
 
 ## DNS Safety
 
-`route53RecordsEnabled` stays disabled globally. The only front-door override enabled for audit is `test.zoolandingpage.com.mx`.
+`route53RecordsEnabled` stays disabled globally. The `test` front door is deployed without a custom alias for audit through its generated CloudFront distribution domain.
+
+The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT failed because CloudFront returned: `One or more of the CNAMEs you provided are already associated with a different resource.` Route53 still points `test.zoolandingpage.com.mx` to EC2 IP `32.195.120.158`; keep it there until the CNAME ownership/conflict is resolved and audit passes.
 
 When production cutover is approved, enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
+
+## CloudFront Host Forwarding
+
+Lambda Function URL origins receive their own `*.lambda-url.*.on.aws` host when CloudFront uses `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER`. Each frontend distribution therefore attaches a viewer-request CloudFront Function that sets `X-Forwarded-Host` before the origin request. The app repo's packaged Lambda adapter rewrites `Host` from that forwarded value only when the incoming host is a Lambda Function URL host.
+
+Do not set `X-Forwarded-Proto` in a CloudFront Function; AWS rejects it as a disallowed edge-function header. The packaged Lambda adapter defaults the forwarded proto to `https` after host normalization.
+
+For generated CloudFront audit domains, set `auditHostHint` on the front door so SSR resolves the intended platform host without moving DNS.
 
 ## Known Alias Gaps
 
