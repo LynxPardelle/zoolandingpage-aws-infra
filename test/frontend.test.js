@@ -464,6 +464,60 @@ test("production front doors model Eros Barajas without enabling traffic cutover
   assert.equal(production.frontendHosting.route53RecordsEnabled, false);
 });
 
+test("production frontend stack creates guarded alias operations OIDC role", () => {
+  const app = new cdk.App();
+  const production = environments.find((environment) => environment.name === "production");
+  assert.ok(production);
+  const stack = new FrontendStack(app, "TestProductionAliasOpsRoleStack", {
+    env: { account: production.account, region: production.region },
+    environment: {
+      ...production,
+      frontendHosting: {
+        ...production.frontendHosting,
+        releaseId: "",
+      },
+    },
+  });
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties("AWS::IAM::Role", {
+    RoleName: "zoolandingpage-production-frontend-alias-ops",
+    AssumeRolePolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Condition: {
+            StringEquals: {
+              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+              "token.actions.githubusercontent.com:sub":
+                "repo:LynxPardelle/zoolandingpage-aws-infra:environment:production",
+            },
+          },
+        }),
+      ]),
+    }),
+  });
+  template.hasResourceProperties("AWS::IAM::Policy", {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: Match.arrayWith(["route53:ListResourceRecordSets", "route53:ChangeResourceRecordSets"]),
+        }),
+        Match.objectLike({
+          Action: Match.arrayWith(["cloudfront:ListDistributions", "cloudfront:ListConflictingAliases"]),
+          Resource: "*",
+        }),
+        Match.objectLike({
+          Action: Match.arrayWith([
+            "cloudfront:GetDistribution",
+            "cloudfront:GetDistributionConfig",
+            "cloudfront:UpdateDistribution",
+          ]),
+        }),
+      ]),
+    }),
+  });
+});
+
 test("production deploy workflow passes custom domain toggle to validation and deploy", () => {
   const workflow = readFileSync(
     path.join(__dirname, "..", ".github", "workflows", "deploy-production.yml"),
@@ -482,6 +536,8 @@ test("production alias ops workflow requires explicit retired alias cleanup conf
   );
 
   assert.match(workflow, /environment: production/);
+  assert.match(workflow, /AWS_ALIAS_OPS_ROLE_ARN/);
+  assert.doesNotMatch(workflow, /role-to-assume: \$\{\{ vars\.AWS_ROLE_ARN \}\}/);
   assert.match(workflow, /confirm_cleanup/);
   assert.match(workflow, /remove-retired-zoolandingpage-aliases/);
   assert.match(workflow, /tools\/ops\/frontend-alias-ops\.mjs/);

@@ -46,12 +46,12 @@ jobs:
 
       - name: Validate AWS environment variables
         env:
-          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_ALIAS_OPS_ROLE_ARN: ${{ vars.AWS_ALIAS_OPS_ROLE_ARN || 'arn:aws:iam::765932874577:role/zoolandingpage-production-frontend-alias-ops' }}
           AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
         run: |
           set -euo pipefail
-          if [ -z "$AWS_ROLE_ARN" ]; then
-            echo "::error::AWS_ROLE_ARN environment variable is required for alias ops."
+          if [ -z "$AWS_ALIAS_OPS_ROLE_ARN" ]; then
+            echo "::error::AWS_ALIAS_OPS_ROLE_ARN environment variable is required for alias ops."
             exit 1
           fi
           if [ -z "$AWS_REGION" ]; then
@@ -61,7 +61,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_ALIAS_OPS_ROLE_ARN || 'arn:aws:iam::765932874577:role/zoolandingpage-production-frontend-alias-ops' }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Confirm AWS caller identity
