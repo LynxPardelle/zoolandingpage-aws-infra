@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const cdk = require("aws-cdk-lib");
 const { Match, Template } = require("aws-cdk-lib/assertions");
@@ -460,4 +462,27 @@ test("production front doors model Eros Barajas without enabling traffic cutover
   assert.match(erosFrontDoor.certificateArn, /certificate\/4b190eff-7dde-435f-933b-da411d30ab50$/);
   assert.deepEqual(erosFrontDoor.aliasRecordGroups[0].domainNames, ["erosbarajas.com"]);
   assert.equal(production.frontendHosting.route53RecordsEnabled, false);
+});
+
+test("production deploy workflow passes custom domain toggle to validation and deploy", () => {
+  const workflow = readFileSync(
+    path.join(__dirname, "..", ".github", "workflows", "deploy-production.yml"),
+    "utf8"
+  );
+  const occurrences = workflow.match(/FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED/g) || [];
+
+  assert.ok(occurrences.length >= 2);
+  assert.match(workflow, /FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED: \$\{\{ vars\.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED \|\| 'false' \}\}/);
+});
+
+test("production alias ops workflow requires explicit retired alias cleanup confirmation", () => {
+  const workflow = readFileSync(
+    path.join(__dirname, "..", ".github", "workflows", "production-alias-ops.yml"),
+    "utf8"
+  );
+
+  assert.match(workflow, /environment: production/);
+  assert.match(workflow, /confirm_cleanup/);
+  assert.match(workflow, /remove-retired-zoolandingpage-aliases/);
+  assert.match(workflow, /tools\/ops\/frontend-alias-ops\.mjs/);
 });

@@ -50,6 +50,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run validate
+        env:
+          FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED: ${{ vars.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED || 'false' }}
 
       - name: Validate AWS environment variables
         env:
@@ -77,4 +79,5 @@ jobs:
       - name: Deploy production frontend stack
         env:
           FRONTEND_PRODUCTION_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+          FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED: ${{ vars.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED || 'false' }}
         run: npx cdk deploy "ZoolandingProduction/*" --require-approval never
