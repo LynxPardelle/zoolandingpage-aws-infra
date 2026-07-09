@@ -47,7 +47,7 @@ Same-origin app backend routes must be explicit CloudFront behaviors. EC2/Dokplo
 
 These aliases were not mapped into CloudFront because the required Route53/certificate evidence was missing or incomplete in this account during inspection:
 
-- `erosbarajas.com`: no issued us-east-1 ACM certificate found.
+- `erosbarajas.com`: an issued us-east-1 ACM certificate now exists and the domain is modeled as a generated-domain pre-cutover front door, but its traffic DNS record still points to EC2 until audit/cutover approval.
 - `crearpaginaweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
 - `erosbarajas.zoolandingpage.com.mx`: retired alias; EC2 returned HTTP 404 and the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
 - `quierounsitioweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.

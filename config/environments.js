@@ -10,6 +10,8 @@ const certificates = {
     "arn:aws:acm:us-east-1:765932874577:certificate/17f757f0-19bf-4e6d-b294-16f16092d8e6",
   lynxPardelleWildcard:
     "arn:aws:acm:us-east-1:765932874577:certificate/4b008cec-97a6-447e-bf2f-9165e435b363",
+  erosBarajas:
+    "arn:aws:acm:us-east-1:765932874577:certificate/4b190eff-7dde-435f-933b-da411d30ab50",
 };
 
 const hostedZones = {
@@ -40,6 +42,10 @@ const hostedZones = {
   zoositiowebComMx: {
     hostedZoneName: "zoositioweb.com.mx",
     hostedZoneId: "Z02338361297KZ2ZAC5WY",
+  },
+  erosBarajasCom: {
+    hostedZoneName: "erosbarajas.com",
+    hostedZoneId: "Z0572894Y6DV902JHMWS",
   },
 };
 
@@ -94,10 +100,6 @@ const zoolandingpageMxProductionAliases = [
 ];
 
 const unresolvedEc2Aliases = [
-  {
-    domainName: "erosbarajas.com",
-    reason: "No issued ACM certificate was found in us-east-1 on 2026-07-09.",
-  },
   {
     domainName: "crearpaginaweb.zoolandingpage.com.mx",
     reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
@@ -320,6 +322,19 @@ const environments = [
             {
               ...hostedZones.lynxPardelle,
               domainNames: ["music.lynxpardelle.com", "alecfest-voliii.lynxpardelle.com"],
+            },
+          ],
+        },
+        {
+          id: "erosbarajas",
+          domainName: "erosbarajas.com",
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "erosbarajas.com",
+          certificateArn: certificates.erosBarajas,
+          aliasRecordGroups: [
+            {
+              ...hostedZones.erosBarajasCom,
+              domainNames: ["erosbarajas.com"],
             },
           ],
         },
