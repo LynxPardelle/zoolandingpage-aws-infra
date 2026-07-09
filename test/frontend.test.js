@@ -449,3 +449,15 @@ test("production front doors exclude aliases that failed serverless browser QA",
     assert.equal(unresolvedDomains.has(domainName), true, `${domainName} must remain an explicit cutover blocker`);
   }
 });
+
+test("production front doors model Eros Barajas without enabling traffic cutover", () => {
+  const production = environments.find((environment) => environment.name === "production");
+  assert.ok(production);
+  const erosFrontDoor = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "erosbarajas");
+  assert.ok(erosFrontDoor);
+  assert.equal(erosFrontDoor.domainName, "erosbarajas.com");
+  assert.equal(erosFrontDoor.auditHostHint, "erosbarajas.com");
+  assert.match(erosFrontDoor.certificateArn, /certificate\/4b190eff-7dde-435f-933b-da411d30ab50$/);
+  assert.deepEqual(erosFrontDoor.aliasRecordGroups[0].domainNames, ["erosbarajas.com"]);
+  assert.equal(production.frontendHosting.route53RecordsEnabled, false);
+});
