@@ -30,6 +30,8 @@ When production cutover is approved, enable Route53 only in a separate commit an
 
 Lambda Function URL origins receive their own `*.lambda-url.*.on.aws` host when CloudFront uses `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER`. Each frontend distribution therefore attaches a viewer-request CloudFront Function that sets `X-Forwarded-Host` before the origin request. The app repo's packaged Lambda adapter rewrites `Host` from that forwarded value only when the incoming host is a Lambda Function URL host.
 
+Do not set `X-Forwarded-Proto` in a CloudFront Function; AWS rejects it as a disallowed edge-function header. The packaged Lambda adapter defaults the forwarded proto to `https` after host normalization.
+
 For generated CloudFront audit domains, set `auditHostHint` on the front door so SSR resolves the intended platform host without moving DNS.
 
 ## Known Alias Gaps
