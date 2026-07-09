@@ -26,6 +26,12 @@ The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT fai
 
 When production cutover is approved, enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
 
+## CloudFront Host Forwarding
+
+Lambda Function URL origins receive their own `*.lambda-url.*.on.aws` host when CloudFront uses `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER`. Each frontend distribution therefore attaches a viewer-request CloudFront Function that sets `X-Forwarded-Host` before the origin request. The app repo's packaged Lambda adapter rewrites `Host` from that forwarded value only when the incoming host is a Lambda Function URL host.
+
+For generated CloudFront audit domains, set `auditHostHint` on the front door so SSR resolves the intended platform host without moving DNS.
+
 ## Known Alias Gaps
 
 These aliases were not mapped into CloudFront because the required Route53/certificate evidence was missing or incomplete in this account during inspection:
