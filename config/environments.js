@@ -60,6 +60,27 @@ const runtimeFallbackUrls = {
   production: "https://y84vk0v44l.execute-api.us-east-1.amazonaws.com/Prod",
 };
 
+const backendApiFrontDoors = {
+  dev: {
+    authAdmin: { domainName: "bid2dc3wnb.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
+    comboCatalog: { domainName: "cw71dznnha.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
+    contentHub: { domainName: "ggh5l705de.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
+    apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+  },
+  test: {
+    authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    comboCatalog: { domainName: "5g5e63f3g4.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    contentHub: { domainName: "z1pub0v0c7.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+  },
+  production: {
+    authAdmin: { domainName: "88fcmasim1.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
+    comboCatalog: { domainName: "mtwne6uneh.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
+    contentHub: { domainName: "1qyli2au8f.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
+    apiProxy: { domainName: "yxp97qlog2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+  },
+};
+
 const productionCustomDomainNamesEnabled = parseBooleanFlag(
   process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED ||
     process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
@@ -150,7 +171,38 @@ function buildFrontendHostingConfig(environmentName) {
     runtimeEnvironment: environmentName === "production" ? "production" : "test",
     route53RecordsEnabled: false,
     route53RecordManagement: "upsert",
+    backendRoutes: buildBackendRoutes(environmentName),
   };
+}
+
+function buildBackendRoutes(environmentName) {
+  const apiFrontDoors = backendApiFrontDoors[environmentName] || backendApiFrontDoors.production;
+  return [
+    {
+      id: "auth-admin",
+      domainName: apiFrontDoors.authAdmin.domainName,
+      originPath: apiFrontDoors.authAdmin.originPath,
+      pathPatterns: ["auth/session", "auth/session/*", "auth/admin", "auth/admin/*"],
+    },
+    {
+      id: "combo-catalog",
+      domainName: apiFrontDoors.comboCatalog.domainName,
+      originPath: apiFrontDoors.comboCatalog.originPath,
+      pathPatterns: ["features/combo-catalog/*"],
+    },
+    {
+      id: "content-hub",
+      domainName: apiFrontDoors.contentHub.domainName,
+      originPath: apiFrontDoors.contentHub.originPath,
+      pathPatterns: ["features/content-hub/*"],
+    },
+    {
+      id: "api-proxy",
+      domainName: apiFrontDoors.apiProxy.domainName,
+      originPath: apiFrontDoors.apiProxy.originPath,
+      pathPatterns: ["api-proxy/*"],
+    },
+  ];
 }
 
 const environments = [
