@@ -11,6 +11,7 @@ const {
   buildResourceName,
   removalPolicyForEnvironment,
 } = require("../lib/project-helpers");
+const { environments, unresolvedEc2Aliases } = require("../config/environments");
 
 const testEnvironment = {
   account: "123456789012",
@@ -355,4 +356,30 @@ test("FrontendStack does not create a retained production SSR log group that can
 
   template.resourceCountIs("AWS::Logs::LogGroup", 0);
   template.resourceCountIs("AWS::Lambda::Function", 1);
+});
+
+test("production front doors exclude aliases that failed serverless browser QA", () => {
+  const production = environments.find((environment) => environment.name === "production");
+  assert.ok(production);
+  const frontDoors = production.frontendHosting.frontDoors || [];
+  const configuredDomainNames = new Set(
+    frontDoors.flatMap((frontDoor) => [
+      frontDoor.domainName,
+      ...(frontDoor.alternateDomainNames || []),
+      ...(frontDoor.aliasRecordGroups || []).flatMap((group) => group.domainNames || []),
+    ]).filter(Boolean)
+  );
+  const blockedDomains = [
+    "crearpaginaweb.zoolandingpage.com.mx",
+    "erosbarajas.zoolandingpage.com.mx",
+    "quierounsitioweb.zoolandingpage.com.mx",
+    "robertorodriguezrodriguez.zoolandingpage.com.mx",
+    "sitiosweb.zoolandingpage.com.mx",
+  ];
+  const unresolvedDomains = new Set(unresolvedEc2Aliases.map((entry) => entry.domainName));
+
+  for (const domainName of blockedDomains) {
+    assert.equal(configuredDomainNames.has(domainName), false, `${domainName} must not be attached to CloudFront`);
+    assert.equal(unresolvedDomains.has(domainName), true, `${domainName} must remain an explicit cutover blocker`);
+  }
 });

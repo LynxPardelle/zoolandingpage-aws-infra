@@ -31,6 +31,8 @@ The rollback from that production attempt left `/aws/lambda/zoolandingpage-produ
 
 When production cutover is approved, first enable custom domain names, then enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
 
+The 2026-07-09 generated-domain browser audit passed for the production release `7b349b216577d920eb788453f97cc58c38c98335` on 12 of 17 modeled hostnames in desktop and mobile. The failed hostnames rendered an empty hydrated app shell and must stay off CloudFront custom aliases until their runtime mapping is republished or intentionally retired.
+
 ## CloudFront Host Forwarding
 
 Lambda Function URL origins receive their own `*.lambda-url.*.on.aws` host when CloudFront uses `OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER`. Each frontend distribution therefore attaches a viewer-request CloudFront Function that sets `X-Forwarded-Host` before the origin request. The app repo's packaged Lambda adapter rewrites `Host` from that forwarded value only when the incoming host is a Lambda Function URL host.
@@ -44,6 +46,11 @@ For generated CloudFront audit domains, set `auditHostHint` on the front door so
 These aliases were not mapped into CloudFront because the required Route53/certificate evidence was missing or incomplete in this account during inspection:
 
 - `erosbarajas.com`: no issued us-east-1 ACM certificate found.
+- `crearpaginaweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
+- `erosbarajas.zoolandingpage.com.mx`: retired alias; EC2 returned HTTP 404 and the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
+- `quierounsitioweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
+- `robertorodriguezrodriguez.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
+- `sitiosweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
 - `test.despacholegalastralex.zoolandingpage.com.mx`: not covered by `*.zoolandingpage.com.mx` and no exact us-east-1 ACM certificate found.
 - `alecfest-voliii.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
 - `grupoastralegal.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
