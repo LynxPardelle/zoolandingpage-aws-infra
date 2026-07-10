@@ -447,7 +447,7 @@ test("production front doors exclude retired zoolandingpage.com.mx aliases", () 
   }
 });
 
-test("production front doors model Eros Barajas without enabling traffic cutover", () => {
+test("production front doors model Eros Barajas with traffic cutover enabled", () => {
   const production = environments.find((environment) => environment.name === "production");
   assert.ok(production);
   const erosFrontDoor = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "erosbarajas");
@@ -456,7 +456,7 @@ test("production front doors model Eros Barajas without enabling traffic cutover
   assert.equal(erosFrontDoor.auditHostHint, "erosbarajas.com");
   assert.match(erosFrontDoor.certificateArn, /certificate\/4b190eff-7dde-435f-933b-da411d30ab50$/);
   assert.deepEqual(erosFrontDoor.aliasRecordGroups[0].domainNames, ["erosbarajas.com"]);
-  assert.equal(production.frontendHosting.route53RecordsEnabled, false);
+  assert.equal(production.frontendHosting.route53RecordsEnabled, true);
 });
 
 test("production frontend stack creates guarded alias operations OIDC role", () => {
