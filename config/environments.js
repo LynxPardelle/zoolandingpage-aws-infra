@@ -269,6 +269,7 @@ const environments = [
     branch: "main",
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
+      route53RecordsEnabled: true,
       frontDoors: [
         {
           id: "zoolandingpage-mx",
