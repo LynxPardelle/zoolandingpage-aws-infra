@@ -27,11 +27,13 @@ The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT fai
 
 The first production alias attach attempt on 2026-07-09 CT failed on `FrontendDistributionZoolandingpageMx` with the same CloudFront CNAME conflict. Keep production in generated-domain audit mode until the conflicting CloudFront association is identified and moved intentionally.
 
+On 2026-07-10 CT, `alecfest-voliii.zoolandingpage.com.mx`, `despacholegalastralex.zoolandingpage.com.mx`, `pamelabetancourt.zoolandingpage.com.mx`, and `pokeapi-demo.zoolandingpage.com.mx` were retired by request, removed from the production CloudFront alias model, and deleted from Route53. Do not add them back without a new draft/runtime ownership decision and browser QA.
+
 The rollback from that production attempt left `/aws/lambda/zoolandingpage-production-frontend-ssr` as an existing log group. Production no longer manages that log group through CloudFormation; Lambda can write to the existing group without deleting audit logs.
 
 When production cutover is approved, first enable custom domain names, then enable Route53 only in a separate commit and deploy through `dev -> test -> main`.
 
-The 2026-07-09 generated-domain browser audit passed for the production release `7b349b216577d920eb788453f97cc58c38c98335` on 12 of 17 modeled hostnames in desktop and mobile. The failed hostnames rendered an empty hydrated app shell and must stay off CloudFront custom aliases until their runtime mapping is republished or intentionally retired.
+The 2026-07-09 generated-domain browser audit passed for the production release `7b349b216577d920eb788453f97cc58c38c98335` on 12 of 17 checked hostnames in desktop and mobile. Failed hostnames must stay off CloudFront custom aliases until their runtime mapping is republished or they are intentionally retired.
 
 ## CloudFront Host Forwarding
 
@@ -45,14 +47,10 @@ Same-origin app backend routes must be explicit CloudFront behaviors. EC2/Dokplo
 
 ## Known Alias Gaps
 
-These aliases were not mapped into CloudFront because the required Route53/certificate evidence was missing or incomplete in this account during inspection:
+These aliases were not mapped into CloudFront because the required Route53/certificate evidence was missing, incomplete, or intentionally retired:
 
 - `erosbarajas.com`: an issued us-east-1 ACM certificate now exists and the domain is modeled as a generated-domain pre-cutover front door, but its traffic DNS record still points to EC2 until audit/cutover approval.
-- `crearpaginaweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
-- `erosbarajas.zoolandingpage.com.mx`: retired alias; EC2 returned HTTP 404 and the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
-- `quierounsitioweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
-- `robertorodriguezrodriguez.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
-- `sitiosweb.zoolandingpage.com.mx`: generated CloudFront browser QA rendered an empty shell; the production runtime API resolved it to `zoolandingpage.com.mx` / `not-found`.
+- Retired `*.zoolandingpage.com.mx` aliases: `crearpaginaweb`, `erosbarajas`, `quierounsitioweb`, `robertorodriguezrodriguez`, `sitiosweb`, `alecfest-voliii`, `despacholegalastralex`, `pamelabetancourt`, and `pokeapi-demo`.
 - `test.despacholegalastralex.zoolandingpage.com.mx`: not covered by `*.zoolandingpage.com.mx` and no exact us-east-1 ACM certificate found.
 - `alecfest-voliii.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
 - `grupoastralegal.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
