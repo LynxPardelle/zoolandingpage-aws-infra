@@ -1,8 +1,8 @@
 # Serverless Frontend Cutover
 
-Source facts verified on 2026-07-09 CT:
+Source facts verified on 2026-07-09 CT, updated for test cutover on 2026-07-10 CT:
 
-- `zoolandingpage.com.mx`, `test.zoolandingpage.com.mx`, and multiple draft aliases still point to EC2 IP `32.195.120.158`.
+- `zoolandingpage.com.mx` and production draft aliases still point to EC2 IP `32.195.120.158`; `test.zoolandingpage.com.mx` now points to the test CloudFront serverless frontend.
 - `assets.zoolandingpage.com.mx` is CloudFront distribution `E2DVKBRSVK4JQG` with origin `zoolandingpage-public-files.s3.us-east-1.amazonaws.com`.
 - `api.zoolandingpage.com.mx` is already CloudFront and remains the app/runtime front door.
 - ACM certificate `0412c449-7cbd-4d99-a565-25f26a1b6c17` covers `zoolandingpage.com.mx` and `*.zoolandingpage.com.mx`.
@@ -21,9 +21,9 @@ Source facts verified on 2026-07-09 CT:
 
 ## DNS Safety
 
-`route53RecordsEnabled` stays disabled globally. Production custom aliases are attached to CloudFront, but traffic DNS still points the production domains to EC2 until the final Route53 cutover.
+Production `route53RecordsEnabled` stays disabled globally. Production custom aliases are attached to CloudFront, but traffic DNS still points the production domains to EC2 until the final Route53 cutover.
 
-The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT failed because CloudFront returned: `One or more of the CNAMEs you provided are already associated with a different resource.` Route53 still points `test.zoolandingpage.com.mx` to EC2 IP `32.195.120.158`; keep it there until the CNAME ownership/conflict is resolved and audit passes.
+The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT failed because CloudFront returned: `One or more of the CNAMEs you provided are already associated with a different resource.` The conflict was the old EC2-backed CloudFront distribution tenant `dt_3Bhy5qjEUxpR8ghObjxAxxgPRJz` on distribution `E10Y59XAIPQY6A`. On 2026-07-10 CT it was disabled/deleted after confirming Route53 still pointed directly to EC2, then `test.zoolandingpage.com.mx` was cut over to `dwjxhi1zggvug.cloudfront.net` (`E27T2MENBSWMWJ`) with Route53 A/AAAA alias records.
 
 The first production alias attach attempt on 2026-07-09 CT failed on `FrontendDistributionZoolandingpageMx` with the same CloudFront CNAME conflict. The conflict was resolved on 2026-07-10 CT by deleting the old CloudFront distribution tenant for `zoolandingpage.com.mx` after confirming Route53 still points the domain directly to EC2.
 
