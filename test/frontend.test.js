@@ -349,6 +349,11 @@ test("FrontendStack creates Route53 upsert custom resources only when record cut
   assert.match(createPayload, /changeResourceRecordSets/);
   assert.match(createPayload, /UPSERT/);
   assert.match(createPayload, /dev\.zoolandingpage\.com\.mx\./);
+  template.hasResourceProperties("AWS::SSM::Parameter", {
+    Name: "/zoolandingpage/dev/frontend/route53-records-enabled",
+    Type: "String",
+    Value: "true",
+  });
 });
 
 test("FrontendStack can deploy pre-cutover CloudFront distributions without attaching custom aliases", () => {
