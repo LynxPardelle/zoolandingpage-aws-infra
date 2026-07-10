@@ -86,6 +86,18 @@ function awsJson(args) {
   return output ? JSON.parse(output) : {};
 }
 
+function tryAwsJson(args) {
+  try {
+    return { ok: true, data: awsJson(args) };
+  } catch (error) {
+    return {
+      ok: false,
+      error,
+      message: `${error.stderr || error.message || error}`,
+    };
+  }
+}
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -154,8 +166,13 @@ async function auditAndMaybeRemoveRoute53Records() {
       "--change-batch",
       `file://${changeBatchPath}`,
     ]);
-    console.log(`route53.cleanupChangeId=${result.ChangeInfo?.Id || "unknown"}`);
+    const changeId = result.ChangeInfo?.Id || "";
+    console.log(`route53.cleanupChangeId=${changeId || "unknown"}`);
     console.log(`route53.cleanupStatus=${result.ChangeInfo?.Status || "unknown"}`);
+    if (changeId) {
+      aws(["route53", "wait", "resource-record-sets-changed", "--id", changeId]);
+      console.log("route53.cleanupWait=INSYNC");
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -221,8 +238,17 @@ async function auditCustomAliasConflicts() {
   const distributionByComment = new Map(
     distributions.map((distribution) => [distribution.Comment || "", distribution])
   );
+  const aliasOwners = new Map();
+  for (const distribution of distributions) {
+    for (const alias of distribution.Aliases?.Items || []) {
+      const owners = aliasOwners.get(alias) || [];
+      owners.push(distribution);
+      aliasOwners.set(alias, owners);
+    }
+  }
 
   console.log("cloudfront.customAliasPreflight=start");
+  let sameAccountConflictCount = 0;
   for (const frontDoor of frontDoors) {
     const comment = `Zoolandingpage Angular SSR frontend (production/${frontDoor.id || "default"})`;
     const distribution = distributionByComment.get(comment);
@@ -232,14 +258,39 @@ async function auditCustomAliasConflicts() {
       continue;
     }
     for (const domainName of domainNames) {
-      const conflicts = awsJson([
+      const sameAccountConflicts = (aliasOwners.get(domainName) || []).filter(
+        (ownerDistribution) => ownerDistribution.Id !== distribution.Id
+      );
+      for (const sameAccountConflict of sameAccountConflicts) {
+        sameAccountConflictCount += 1;
+        console.log(
+          `cloudfront.customAliasSameAccountConflict alias=${domainName} target=${distribution.Id} conflictingDistribution=${sameAccountConflict.Id} conflictingDomain=${sameAccountConflict.DomainName}`
+        );
+      }
+      if (distribution.ViewerCertificate?.CloudFrontDefaultCertificate === true) {
+        console.log(
+          `cloudfront.customAliasConflictSkipped alias=${domainName} target=${distribution.Id} reason=target-distribution-has-default-certificate`
+        );
+        continue;
+      }
+      const conflictResult = tryAwsJson([
         "cloudfront",
         "list-conflicting-aliases",
         "--distribution-id",
         distribution.Id,
         "--alias",
         domainName,
-      ]).ConflictingAliasesList;
+      ]);
+      if (!conflictResult.ok) {
+        if (conflictResult.message.includes("must attach a trusted certificate")) {
+          console.log(
+            `cloudfront.customAliasConflictSkipped alias=${domainName} target=${distribution.Id} reason=target-distribution-needs-trusted-certificate`
+          );
+          continue;
+        }
+        throw conflictResult.error;
+      }
+      const conflicts = conflictResult.data.ConflictingAliasesList;
       const quantity = conflicts?.Quantity || 0;
       console.log(`cloudfront.customAliasConflict alias=${domainName} target=${distribution.Id} quantity=${quantity}`);
       for (const item of conflicts?.Items || []) {
@@ -248,6 +299,9 @@ async function auditCustomAliasConflicts() {
         );
       }
     }
+  }
+  if (sameAccountConflictCount > 0) {
+    fail(`Found ${sameAccountConflictCount} same-account CloudFront alias conflict(s).`);
   }
   console.log("cloudfront.customAliasPreflight=end");
 }
