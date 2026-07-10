@@ -92,12 +92,19 @@ const productionCustomDomainNamesEnabled = parseBooleanFlag(
     process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
 );
 
-const zoolandingpageMxProductionAliases = [
+const retiredZoolandingpageComMxAliases = [
+  "crearpaginaweb.zoolandingpage.com.mx",
+  "erosbarajas.zoolandingpage.com.mx",
+  "quierounsitioweb.zoolandingpage.com.mx",
+  "robertorodriguezrodriguez.zoolandingpage.com.mx",
+  "sitiosweb.zoolandingpage.com.mx",
   "alecfest-voliii.zoolandingpage.com.mx",
   "despacholegalastralex.zoolandingpage.com.mx",
   "pamelabetancourt.zoolandingpage.com.mx",
   "pokeapi-demo.zoolandingpage.com.mx",
 ];
+
+const zoolandingpageMxProductionAliases = [];
 
 const unresolvedEc2Aliases = [
   {
@@ -354,5 +361,6 @@ module.exports = {
   defaultRegion,
   hostedZones,
   certificates,
+  retiredZoolandingpageComMxAliases,
   unresolvedEc2Aliases,
 };

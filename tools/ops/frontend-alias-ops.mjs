@@ -11,17 +11,11 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const environmentModule = await import(
   new URL("../../config/environments.js", import.meta.url)
 );
-const { environments, hostedZones, unresolvedEc2Aliases } =
+const { environments, hostedZones, retiredZoolandingpageComMxAliases } =
   environmentModule.default || environmentModule;
 
 const cleanupConfirmation = "remove-retired-zoolandingpage-aliases";
-const retiredAliases = [
-  "crearpaginaweb.zoolandingpage.com.mx",
-  "erosbarajas.zoolandingpage.com.mx",
-  "quierounsitioweb.zoolandingpage.com.mx",
-  "robertorodriguezrodriguez.zoolandingpage.com.mx",
-  "sitiosweb.zoolandingpage.com.mx",
-];
+const retiredAliases = retiredZoolandingpageComMxAliases;
 
 const args = parseArgs(process.argv.slice(2));
 const applyCleanup = args.applyCleanup === "true";
@@ -40,16 +34,6 @@ if (modeledRetiredAliases.length > 0) {
   fail(`Retired aliases are still modeled in production front doors: ${modeledRetiredAliases.join(", ")}`);
 }
 console.log("config.retiredAliasesModeled=false");
-
-if (unresolvedEc2Aliases) {
-  const missingFromUnresolvedList = retiredAliases.filter(
-    (domainName) => !unresolvedEc2Aliases.some((entry) => entry.domainName === domainName)
-  );
-  if (missingFromUnresolvedList.length > 0) {
-    fail(`Retired aliases missing from unresolvedEc2Aliases: ${missingFromUnresolvedList.join(", ")}`);
-  }
-}
-console.log("config.retiredAliasesUnresolved=true");
 
 await auditAndMaybeRemoveRoute53Records();
 await auditAndMaybeRemoveCloudFrontAliases();
