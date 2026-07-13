@@ -92,12 +92,19 @@ const productionCustomDomainNamesEnabled = parseBooleanFlag(
     process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
 );
 
-const zoolandingpageMxProductionAliases = [
+const retiredZoolandingpageComMxAliases = [
+  "crearpaginaweb.zoolandingpage.com.mx",
+  "erosbarajas.zoolandingpage.com.mx",
+  "quierounsitioweb.zoolandingpage.com.mx",
+  "robertorodriguezrodriguez.zoolandingpage.com.mx",
+  "sitiosweb.zoolandingpage.com.mx",
   "alecfest-voliii.zoolandingpage.com.mx",
   "despacholegalastralex.zoolandingpage.com.mx",
   "pamelabetancourt.zoolandingpage.com.mx",
   "pokeapi-demo.zoolandingpage.com.mx",
 ];
+
+const zoolandingpageMxProductionAliases = [];
 
 const unresolvedEc2Aliases = [
   {
@@ -241,8 +248,9 @@ const environments = [
       frontDoors: [
         {
           id: "test",
-          route53RecordsEnabled: false,
-          auditHostHint: "test.zoolandingpage.com.mx",
+          domainName: "test.zoolandingpage.com.mx",
+          certificateArn: certificates.zoolandingpageMx,
+          route53RecordsEnabled: true,
           aliasRecordGroups: [
             {
               ...hostedZones.zoolandingpageComMx,
@@ -261,6 +269,7 @@ const environments = [
     branch: "main",
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
+      route53RecordsEnabled: true,
       frontDoors: [
         {
           id: "zoolandingpage-mx",
@@ -354,5 +363,6 @@ module.exports = {
   defaultRegion,
   hostedZones,
   certificates,
+  retiredZoolandingpageComMxAliases,
   unresolvedEc2Aliases,
 };

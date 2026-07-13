@@ -13,7 +13,7 @@ const {
   buildResourceName,
   removalPolicyForEnvironment,
 } = require("../lib/project-helpers");
-const { environments, unresolvedEc2Aliases } = require("../config/environments");
+const { environments, retiredZoolandingpageComMxAliases } = require("../config/environments");
 
 const testEnvironment = {
   account: "123456789012",
@@ -349,6 +349,11 @@ test("FrontendStack creates Route53 upsert custom resources only when record cut
   assert.match(createPayload, /changeResourceRecordSets/);
   assert.match(createPayload, /UPSERT/);
   assert.match(createPayload, /dev\.zoolandingpage\.com\.mx\./);
+  template.hasResourceProperties("AWS::SSM::Parameter", {
+    Name: "/zoolandingpage/dev/frontend/route53-records-enabled",
+    Type: "String",
+    Value: "true",
+  });
 });
 
 test("FrontendStack can deploy pre-cutover CloudFront distributions without attaching custom aliases", () => {
@@ -426,7 +431,7 @@ test("FrontendStack does not create a retained production SSR log group that can
   template.resourceCountIs("AWS::Lambda::Function", 1);
 });
 
-test("production front doors exclude aliases that failed serverless browser QA", () => {
+test("production front doors exclude retired zoolandingpage.com.mx aliases", () => {
   const production = environments.find((environment) => environment.name === "production");
   assert.ok(production);
   const frontDoors = production.frontendHosting.frontDoors || [];
@@ -437,22 +442,12 @@ test("production front doors exclude aliases that failed serverless browser QA",
       ...(frontDoor.aliasRecordGroups || []).flatMap((group) => group.domainNames || []),
     ]).filter(Boolean)
   );
-  const blockedDomains = [
-    "crearpaginaweb.zoolandingpage.com.mx",
-    "erosbarajas.zoolandingpage.com.mx",
-    "quierounsitioweb.zoolandingpage.com.mx",
-    "robertorodriguezrodriguez.zoolandingpage.com.mx",
-    "sitiosweb.zoolandingpage.com.mx",
-  ];
-  const unresolvedDomains = new Set(unresolvedEc2Aliases.map((entry) => entry.domainName));
-
-  for (const domainName of blockedDomains) {
+  for (const domainName of retiredZoolandingpageComMxAliases) {
     assert.equal(configuredDomainNames.has(domainName), false, `${domainName} must not be attached to CloudFront`);
-    assert.equal(unresolvedDomains.has(domainName), true, `${domainName} must remain an explicit cutover blocker`);
   }
 });
 
-test("production front doors model Eros Barajas without enabling traffic cutover", () => {
+test("production front doors model Eros Barajas with traffic cutover enabled", () => {
   const production = environments.find((environment) => environment.name === "production");
   assert.ok(production);
   const erosFrontDoor = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "erosbarajas");
@@ -461,7 +456,7 @@ test("production front doors model Eros Barajas without enabling traffic cutover
   assert.equal(erosFrontDoor.auditHostHint, "erosbarajas.com");
   assert.match(erosFrontDoor.certificateArn, /certificate\/4b190eff-7dde-435f-933b-da411d30ab50$/);
   assert.deepEqual(erosFrontDoor.aliasRecordGroups[0].domainNames, ["erosbarajas.com"]);
-  assert.equal(production.frontendHosting.route53RecordsEnabled, false);
+  assert.equal(production.frontendHosting.route53RecordsEnabled, true);
 });
 
 test("production frontend stack creates guarded alias operations OIDC role", () => {
