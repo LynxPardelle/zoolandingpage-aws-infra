@@ -10,6 +10,8 @@ const certificates = {
     "arn:aws:acm:us-east-1:765932874577:certificate/17f757f0-19bf-4e6d-b294-16f16092d8e6",
   lynxPardelleWildcard:
     "arn:aws:acm:us-east-1:765932874577:certificate/4b008cec-97a6-447e-bf2f-9165e435b363",
+  erosBarajas:
+    "arn:aws:acm:us-east-1:765932874577:certificate/4b190eff-7dde-435f-933b-da411d30ab50",
 };
 
 const hostedZones = {
@@ -41,6 +43,10 @@ const hostedZones = {
     hostedZoneName: "zoositioweb.com.mx",
     hostedZoneId: "Z02338361297KZ2ZAC5WY",
   },
+  erosBarajasCom: {
+    hostedZoneName: "erosbarajas.com",
+    hostedZoneId: "Z0572894Y6DV902JHMWS",
+  },
 };
 
 const environmentDefaults = {
@@ -60,22 +66,66 @@ const runtimeFallbackUrls = {
   production: "https://y84vk0v44l.execute-api.us-east-1.amazonaws.com/Prod",
 };
 
-const zoolandingpageMxProductionAliases = [
-  "alecfest-voliii.zoolandingpage.com.mx",
+const backendApiFrontDoors = {
+  dev: {
+    authAdmin: { domainName: "bid2dc3wnb.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
+    comboCatalog: { domainName: "cw71dznnha.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
+    contentHub: { domainName: "ggh5l705de.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
+    apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+  },
+  test: {
+    authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    comboCatalog: { domainName: "5g5e63f3g4.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    contentHub: { domainName: "z1pub0v0c7.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+  },
+  production: {
+    authAdmin: { domainName: "88fcmasim1.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
+    comboCatalog: { domainName: "mtwne6uneh.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
+    contentHub: { domainName: "1qyli2au8f.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
+    apiProxy: { domainName: "yxp97qlog2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+  },
+};
+
+const productionCustomDomainNamesEnabled = parseBooleanFlag(
+  process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED ||
+    process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
+);
+
+const retiredZoolandingpageComMxAliases = [
   "crearpaginaweb.zoolandingpage.com.mx",
-  "despacholegalastralex.zoolandingpage.com.mx",
   "erosbarajas.zoolandingpage.com.mx",
-  "pamelabetancourt.zoolandingpage.com.mx",
-  "pokeapi-demo.zoolandingpage.com.mx",
   "quierounsitioweb.zoolandingpage.com.mx",
   "robertorodriguezrodriguez.zoolandingpage.com.mx",
   "sitiosweb.zoolandingpage.com.mx",
+  "alecfest-voliii.zoolandingpage.com.mx",
+  "despacholegalastralex.zoolandingpage.com.mx",
+  "pamelabetancourt.zoolandingpage.com.mx",
+  "pokeapi-demo.zoolandingpage.com.mx",
 ];
+
+const zoolandingpageMxProductionAliases = [];
 
 const unresolvedEc2Aliases = [
   {
-    domainName: "erosbarajas.com",
-    reason: "No issued ACM certificate was found in us-east-1 on 2026-07-09.",
+    domainName: "crearpaginaweb.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
+  },
+  {
+    domainName: "erosbarajas.zoolandingpage.com.mx",
+    reason: "Retired alias. EC2 returned HTTP 404 during 2026-07-09 audit; the production runtime API resolved it to zoolandingpage.com.mx/not-found.",
+  },
+  {
+    domainName: "quierounsitioweb.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
+  },
+  {
+    domainName: "robertorodriguezrodriguez.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
+  },
+  {
+    domainName: "sitiosweb.zoolandingpage.com.mx",
+    reason: "Serverless browser QA on 2026-07-09 rendered an empty app shell; the production runtime API resolved it to zoolandingpage.com.mx/not-found instead of a published draft.",
   },
   {
     domainName: "test.despacholegalastralex.zoolandingpage.com.mx",
@@ -130,7 +180,38 @@ function buildFrontendHostingConfig(environmentName) {
     runtimeEnvironment: environmentName === "production" ? "production" : "test",
     route53RecordsEnabled: false,
     route53RecordManagement: "upsert",
+    backendRoutes: buildBackendRoutes(environmentName),
   };
+}
+
+function buildBackendRoutes(environmentName) {
+  const apiFrontDoors = backendApiFrontDoors[environmentName] || backendApiFrontDoors.production;
+  return [
+    {
+      id: "auth-admin",
+      domainName: apiFrontDoors.authAdmin.domainName,
+      originPath: apiFrontDoors.authAdmin.originPath,
+      pathPatterns: ["auth/session", "auth/session/*", "auth/admin", "auth/admin/*"],
+    },
+    {
+      id: "combo-catalog",
+      domainName: apiFrontDoors.comboCatalog.domainName,
+      originPath: apiFrontDoors.comboCatalog.originPath,
+      pathPatterns: ["features/combo-catalog/*"],
+    },
+    {
+      id: "content-hub",
+      domainName: apiFrontDoors.contentHub.domainName,
+      originPath: apiFrontDoors.contentHub.originPath,
+      pathPatterns: ["features/content-hub/*"],
+    },
+    {
+      id: "api-proxy",
+      domainName: apiFrontDoors.apiProxy.domainName,
+      originPath: apiFrontDoors.apiProxy.originPath,
+      pathPatterns: ["auth/runtime-config", "api-proxy/*"],
+    },
+  ];
 }
 
 const environments = [
@@ -167,8 +248,9 @@ const environments = [
       frontDoors: [
         {
           id: "test",
-          route53RecordsEnabled: false,
-          auditHostHint: "test.zoolandingpage.com.mx",
+          domainName: "test.zoolandingpage.com.mx",
+          certificateArn: certificates.zoolandingpageMx,
+          route53RecordsEnabled: true,
           aliasRecordGroups: [
             {
               ...hostedZones.zoolandingpageComMx,
@@ -187,11 +269,14 @@ const environments = [
     branch: "main",
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
+      route53RecordsEnabled: true,
       frontDoors: [
         {
           id: "zoolandingpage-mx",
           domainName: "zoolandingpage.com.mx",
           alternateDomainNames: zoolandingpageMxProductionAliases,
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "zoolandingpage.com.mx",
           certificateArn: certificates.zoolandingpageMx,
           aliasRecordGroups: [
             {
@@ -209,6 +294,8 @@ const environments = [
             "sulandingpage.com",
             "zoolandingpage.com",
           ],
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "zoositioweb.com.mx",
           certificateArn: certificates.zoositeAndSulanding,
           aliasRecordGroups: [
             {
@@ -237,11 +324,26 @@ const environments = [
           id: "lynx-draft-aliases",
           domainName: "music.lynxpardelle.com",
           alternateDomainNames: ["alecfest-voliii.lynxpardelle.com"],
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "music.lynxpardelle.com",
           certificateArn: certificates.lynxPardelleWildcard,
           aliasRecordGroups: [
             {
               ...hostedZones.lynxPardelle,
               domainNames: ["music.lynxpardelle.com", "alecfest-voliii.lynxpardelle.com"],
+            },
+          ],
+        },
+        {
+          id: "erosbarajas",
+          domainName: "erosbarajas.com",
+          customDomainNamesEnabled: productionCustomDomainNamesEnabled,
+          auditHostHint: productionCustomDomainNamesEnabled ? undefined : "erosbarajas.com",
+          certificateArn: certificates.erosBarajas,
+          aliasRecordGroups: [
+            {
+              ...hostedZones.erosBarajasCom,
+              domainNames: ["erosbarajas.com"],
             },
           ],
         },
@@ -251,11 +353,16 @@ const environments = [
   },
 ];
 
+function parseBooleanFlag(value) {
+  return String(value || "").toLowerCase() === "true";
+}
+
 module.exports = {
   environments,
   expectedAccount,
   defaultRegion,
   hostedZones,
   certificates,
+  retiredZoolandingpageComMxAliases,
   unresolvedEc2Aliases,
 };
