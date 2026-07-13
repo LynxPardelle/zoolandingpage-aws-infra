@@ -333,6 +333,37 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
   }
 });
 
+test("FrontendStack creates scoped dev OIDC roles for backend SAM deployments", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "dev",
+    branch: "dev",
+    frontendHosting: { ...testEnvironment.frontendHosting, githubEnvironment: "dev" },
+  };
+  const template = Template.fromStack(new FrontendStack(app, "DevBackendDeployRolesStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  }));
+
+  for (const [roleName, repository] of [
+    ["zoolanding-config-authoring-dev-deploy", "zoolanding-config-authoring"],
+    ["zoolanding-data-dropper-dev-deploy", "zoolanding-data-dropper-lambda"],
+  ]) {
+    template.hasResourceProperties("AWS::IAM::Role", {
+      RoleName: roleName,
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([Match.objectLike({ Condition: { StringEquals: {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:dev`,
+        } } })]),
+      }),
+    });
+  }
+  assert.match(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
+  assert.match(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
+});
+
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
   const app = new cdk.App();
   const environment = {
