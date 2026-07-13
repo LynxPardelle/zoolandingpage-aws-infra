@@ -320,7 +320,7 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
-            Action: Match.arrayWith(["cloudformation:CreateChangeSet", "cloudformation:ExecuteChangeSet"]),
+            Action: Match.arrayWith(["cloudformation:CreateChangeSet", "cloudformation:ContinueUpdateRollback", "cloudformation:ExecuteChangeSet"]),
             Resource: Match.arrayWith([
               Match.objectLike({ "Fn::Join": Match.anyValue() }),
             ]),
