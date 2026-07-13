@@ -277,6 +277,62 @@ test("FrontendStack deploys Lambda SSR and CloudFront distributions when release
   });
 });
 
+test("FrontendStack creates scoped test OIDC roles for backend SAM deployments", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "test",
+    branch: "test",
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      githubEnvironment: "test",
+    },
+  };
+  const stack = new FrontendStack(app, "TestBackendDeployRolesStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+
+  for (const [roleName, repository] of [
+    ["zoolanding-config-authoring-test-deploy", "zoolanding-config-authoring"],
+    ["zoolanding-data-dropper-test-deploy", "zoolanding-data-dropper-lambda"],
+  ]) {
+    template.hasResourceProperties("AWS::IAM::Role", {
+      RoleName: roleName,
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Condition: {
+              StringEquals: {
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:test`,
+              },
+            },
+          }),
+        ]),
+      }),
+    });
+  }
+
+  for (const stackName of ["zoolanding-config-authoring-test", "zoolanding-data-dropper-test"]) {
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(["cloudformation:CreateChangeSet", "cloudformation:ExecuteChangeSet"]),
+            Resource: Match.arrayWith([
+              Match.objectLike({ "Fn::Join": Match.anyValue() }),
+            ]),
+          }),
+        ]),
+      }),
+      Roles: Match.anyValue(),
+    });
+    assert.match(JSON.stringify(template.toJSON()), new RegExp(stackName));
+  }
+});
+
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
   const app = new cdk.App();
   const environment = {
