@@ -363,6 +363,8 @@ test("FrontendStack creates scoped dev OIDC roles for backend SAM deployments", 
   assert.match(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
   assert.match(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
   assert.match(JSON.stringify(template.toJSON()), /aws-sam-cli-managed-default/);
+  assert.match(JSON.stringify(template.toJSON()), /role\/zoolanding-config-\*/);
+  assert.match(JSON.stringify(template.toJSON()), /role\/zoolanding-data-\*/);
 });
 
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
