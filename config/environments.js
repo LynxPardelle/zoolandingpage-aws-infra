@@ -61,18 +61,11 @@ const environmentDefaults = {
 };
 
 const runtimeFallbackUrls = {
-  dev: "https://p5sbs2w8zb.execute-api.us-east-1.amazonaws.com/Prod",
   test: "https://jaay9p8gv5.execute-api.us-east-1.amazonaws.com/Prod",
   production: "https://y84vk0v44l.execute-api.us-east-1.amazonaws.com/Prod",
 };
 
 const backendApiFrontDoors = {
-  dev: {
-    authAdmin: { domainName: "bid2dc3wnb.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
-    comboCatalog: { domainName: "cw71dznnha.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
-    contentHub: { domainName: "ggh5l705de.execute-api.us-east-1.amazonaws.com", originPath: "/dev" },
-    apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
-  },
   test: {
     authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     comboCatalog: { domainName: "5g5e63f3g4.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
@@ -215,29 +208,6 @@ function buildBackendRoutes(environmentName) {
 }
 
 const environments = [
-  {
-    ...environmentDefaults,
-    name: "dev",
-    stageId: "ZoolandingDev",
-    branch: "dev",
-    frontendHosting: {
-      ...buildFrontendHostingConfig("dev"),
-      frontDoors: [
-        {
-          id: "dev",
-          domainName: "dev.zoolandingpage.com.mx",
-          certificateArn: certificates.zoolandingpageMx,
-          aliasRecordGroups: [
-            {
-              ...hostedZones.zoolandingpageComMx,
-              domainNames: ["dev.zoolandingpage.com.mx"],
-            },
-          ],
-        },
-      ],
-    },
-    removalPolicy: "destroy",
-  },
   {
     ...environmentDefaults,
     name: "test",

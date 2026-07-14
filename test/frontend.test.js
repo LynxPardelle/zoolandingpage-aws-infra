@@ -15,6 +15,10 @@ const {
 } = require("../lib/project-helpers");
 const { environments, retiredZoolandingpageComMxAliases } = require("../config/environments");
 
+test("cloud environments exclude dev", () => {
+  assert.deepEqual(environments.map((environment) => environment.name), ["test", "production"]);
+});
+
 const testEnvironment = {
   account: "123456789012",
   region: "us-east-1",
@@ -275,6 +279,84 @@ test("FrontendStack deploys Lambda SSR and CloudFront distributions when release
     LogGroupName: "/aws/lambda/zoolandingpage-dev-frontend-ssr",
     RetentionInDays: 30,
   });
+});
+
+test("FrontendStack creates scoped test OIDC roles for backend SAM deployments", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "test",
+    branch: "test",
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      githubEnvironment: "test",
+    },
+  };
+  const stack = new FrontendStack(app, "TestBackendDeployRolesStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+  const resources = template.toJSON().Resources;
+
+  assert.ok(resources.ConfigAuthoringTestDeployRoleD18F6A7E);
+  assert.ok(resources.DataDropperTestDeployRole3CA98201);
+
+  for (const [roleName, repository] of [
+    ["zoolanding-config-authoring-test-deploy", "zoolanding-config-authoring"],
+    ["zoolanding-data-dropper-test-deploy", "zoolanding-data-dropper-lambda"],
+  ]) {
+    template.hasResourceProperties("AWS::IAM::Role", {
+      RoleName: roleName,
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Condition: {
+              StringEquals: {
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:test`,
+              },
+            },
+          }),
+        ]),
+      }),
+    });
+  }
+
+  for (const stackName of ["zoolanding-config-authoring-test", "zoolanding-data-dropper-test"]) {
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(["cloudformation:CreateChangeSet", "cloudformation:ContinueUpdateRollback", "cloudformation:ExecuteChangeSet"]),
+            Resource: Match.arrayWith([
+              Match.objectLike({ "Fn::Join": Match.anyValue() }),
+            ]),
+          }),
+        ]),
+      }),
+      Roles: Match.anyValue(),
+    });
+    assert.match(JSON.stringify(template.toJSON()), new RegExp(stackName));
+  }
+});
+
+test("FrontendStack does not create backend SAM deployment roles for dev", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "dev",
+    branch: "dev",
+    frontendHosting: { ...testEnvironment.frontendHosting, githubEnvironment: "dev" },
+  };
+  const template = Template.fromStack(new FrontendStack(app, "DevBackendDeployRolesStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  }));
+
+  template.resourceCountIs("AWS::IAM::Role", 1);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
 });
 
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {

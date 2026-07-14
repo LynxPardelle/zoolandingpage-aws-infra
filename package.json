@@ -10,23 +10,20 @@
     "cdk": "cdk",
     "test": "node --test",
     "synth": "cdk synth",
-    "synth:dev": "cdk synth \"ZoolandingDev/*\"",
     "synth:test": "cdk synth \"ZoolandingTest/*\"",
     "synth:production": "cdk synth \"ZoolandingProduction/*\"",
-    "diff:dev": "cdk diff \"ZoolandingDev/*\"",
     "diff:test": "cdk diff \"ZoolandingTest/*\"",
     "diff:production": "cdk diff \"ZoolandingProduction/*\"",
     "validate": "npm run synth"
   },
   "dependencies": {
-    "aws-cdk-lib": "2.260.0",
+    "aws-cdk-lib": "2.261.0",
     "constructs": "10.6.0"
   },
   "devDependencies": {
-    "aws-cdk": "2.1128.0"
+    "aws-cdk": "2.1129.0"
   },
   "engines": {
     "node": ">=20"
   }
 }
-
