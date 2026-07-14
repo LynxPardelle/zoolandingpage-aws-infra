@@ -359,6 +359,35 @@ test("FrontendStack does not create backend SAM deployment roles for dev", () =>
   assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
 });
 
+test("FrontendStack creates scoped production OIDC roles for backend SAM deployments", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "production",
+    branch: "main",
+    removalPolicy: "retain",
+    frontendHosting: { ...testEnvironment.frontendHosting, githubEnvironment: "production" },
+  };
+  const template = Template.fromStack(new FrontendStack(app, "ProductionBackendDeployRolesStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  }));
+
+  for (const [roleName, repository] of [
+    ["zoolanding-config-authoring-production-deploy", "zoolanding-config-authoring"],
+    ["zoolanding-data-dropper-production-deploy", "zoolanding-data-dropper-lambda"],
+  ]) {
+    template.hasResourceProperties("AWS::IAM::Role", {
+      RoleName: roleName,
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([Match.objectLike({ Condition: { StringEquals: {
+          "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:production`,
+        } } })]),
+      }),
+    });
+  }
+});
+
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
   const app = new cdk.App();
   const environment = {
