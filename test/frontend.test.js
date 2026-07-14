@@ -297,6 +297,10 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
     environment,
   });
   const template = Template.fromStack(stack);
+  const resources = template.toJSON().Resources;
+
+  assert.ok(resources.ConfigAuthoringTestDeployRoleD18F6A7E);
+  assert.ok(resources.DataDropperTestDeployRole3CA98201);
 
   for (const [roleName, repository] of [
     ["zoolanding-config-authoring-test-deploy", "zoolanding-config-authoring"],
