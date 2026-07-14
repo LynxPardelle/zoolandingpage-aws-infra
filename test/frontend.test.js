@@ -15,6 +15,10 @@ const {
 } = require("../lib/project-helpers");
 const { environments, retiredZoolandingpageComMxAliases } = require("../config/environments");
 
+test("cloud environments exclude dev", () => {
+  assert.deepEqual(environments.map((environment) => environment.name), ["test", "production"]);
+});
+
 const testEnvironment = {
   account: "123456789012",
   region: "us-east-1",
@@ -320,7 +324,7 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
-            Action: Match.arrayWith(["cloudformation:CreateChangeSet", "cloudformation:ExecuteChangeSet"]),
+            Action: Match.arrayWith(["cloudformation:CreateChangeSet", "cloudformation:ContinueUpdateRollback", "cloudformation:ExecuteChangeSet"]),
             Resource: Match.arrayWith([
               Match.objectLike({ "Fn::Join": Match.anyValue() }),
             ]),
@@ -331,6 +335,24 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
     });
     assert.match(JSON.stringify(template.toJSON()), new RegExp(stackName));
   }
+});
+
+test("FrontendStack does not create backend SAM deployment roles for dev", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    name: "dev",
+    branch: "dev",
+    frontendHosting: { ...testEnvironment.frontendHosting, githubEnvironment: "dev" },
+  };
+  const template = Template.fromStack(new FrontendStack(app, "DevBackendDeployRolesStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  }));
+
+  template.resourceCountIs("AWS::IAM::Role", 1);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
 });
 
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
