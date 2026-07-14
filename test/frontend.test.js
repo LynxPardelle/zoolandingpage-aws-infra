@@ -15,6 +15,10 @@ const {
 } = require("../lib/project-helpers");
 const { environments, retiredZoolandingpageComMxAliases } = require("../config/environments");
 
+test("cloud environments exclude dev", () => {
+  assert.deepEqual(environments.map((environment) => environment.name), ["test", "production"]);
+});
+
 const testEnvironment = {
   account: "123456789012",
   region: "us-east-1",
@@ -333,7 +337,7 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
   }
 });
 
-test("FrontendStack creates scoped dev OIDC roles for backend SAM deployments", () => {
+test("FrontendStack does not create backend SAM deployment roles for dev", () => {
   const app = new cdk.App();
   const environment = {
     ...testEnvironment,
@@ -346,25 +350,9 @@ test("FrontendStack creates scoped dev OIDC roles for backend SAM deployments", 
     environment,
   }));
 
-  for (const [roleName, repository] of [
-    ["zoolanding-config-authoring-dev-deploy", "zoolanding-config-authoring"],
-    ["zoolanding-data-dropper-dev-deploy", "zoolanding-data-dropper-lambda"],
-  ]) {
-    template.hasResourceProperties("AWS::IAM::Role", {
-      RoleName: roleName,
-      AssumeRolePolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([Match.objectLike({ Condition: { StringEquals: {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:dev`,
-        } } })]),
-      }),
-    });
-  }
-  assert.match(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
-  assert.match(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
-  assert.match(JSON.stringify(template.toJSON()), /aws-sam-cli-managed-default/);
-  assert.match(JSON.stringify(template.toJSON()), /role\/zoolanding-config-\*/);
-  assert.match(JSON.stringify(template.toJSON()), /role\/zoolanding-data-\*/);
+  template.resourceCountIs("AWS::IAM::Role", 1);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
 });
 
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
