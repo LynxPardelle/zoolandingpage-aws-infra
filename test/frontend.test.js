@@ -27,6 +27,18 @@ const testEnvironment = {
   branch: "dev",
   hostedZoneName: "zoolandingpage.com.mx",
   hostedZoneId: "Z0769334CXKBHR43ZZH6",
+  runtimeReadDeployment: {
+    stackName: "zoolanding-config-runtime-read-fixture",
+    apiId: "example",
+    functionName: "zoolanding-config-runtime-fixture-function",
+    executionRoleName: "zoolanding-config-runtime-fixture-role",
+    samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-fixture",
+    samArtifactPrefix: "zoolanding-config-runtime-read-fixture",
+    configTableName: "zoolanding-config-registry-fixture",
+    configPayloadsBucketName: "zoolanding-config-payloads-fixture",
+    contentHubMetadataTableNames: ["content-hub-test", "content-hub-production"],
+    contentHubPackageBucketNames: ["content-hub-packages-test", "content-hub-packages-production"],
+  },
   frontendHosting: {
     architecture: "cloudfront-s3-lambda-ssr",
     apiBaseUrl: "https://api.zoolandingpage.com.mx",
@@ -354,6 +366,182 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
   );
 });
 
+test("FrontendStack creates bounded Runtime Read deployment identities", () => {
+  for (const definition of [
+    {
+      name: "test",
+      branch: "test",
+      githubEnvironment: "test",
+      apiId: "testruntime1",
+      stackName: "zoolanding-config-runtime-read-test",
+      packagingPrefix: "zoolanding-config-runtime-read-test",
+      functionName: "zoolanding-config-runtime-test-function",
+      executionRoleName: "zoolanding-config-runtime-test-role",
+      samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-testfixture",
+      configTableName: "zoolanding-config-registry-test",
+      configPayloadsBucketName: "zoolanding-config-payloads-test",
+    },
+    {
+      name: "production",
+      branch: "main",
+      githubEnvironment: "production",
+      apiId: "prodruntime1",
+      stackName: "zoolanding-config-runtime-read",
+      packagingPrefix: "zoolanding-config-runtime-read",
+      functionName: "zoolanding-config-runtime-production-function",
+      executionRoleName: "zoolanding-config-runtime-production-role",
+      samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-prodfixture",
+      configTableName: "zoolanding-config-registry",
+      configPayloadsBucketName: "zoolanding-config-payloads",
+    },
+  ]) {
+    const environment = {
+      ...testEnvironment,
+      name: definition.name,
+      branch: definition.branch,
+      removalPolicy: definition.name === "production" ? "retain" : "destroy",
+      runtimeReadDeployment: {
+        stackName: definition.stackName,
+        apiId: definition.apiId,
+        functionName: definition.functionName,
+        executionRoleName: definition.executionRoleName,
+        samArtifactBucketName: definition.samArtifactBucketName,
+        samArtifactPrefix: definition.packagingPrefix,
+        configTableName: definition.configTableName,
+        configPayloadsBucketName: definition.configPayloadsBucketName,
+        contentHubMetadataTableNames: ["content-hub-test", "content-hub-production"],
+        contentHubPackageBucketNames: ["content-hub-packages-test", "content-hub-packages-production"],
+      },
+      frontendHosting: {
+        ...testEnvironment.frontendHosting,
+        githubEnvironment: definition.githubEnvironment,
+        configApiServerFallbackUrl: `https://${definition.apiId}.execute-api.us-east-1.amazonaws.com/Prod`,
+      },
+    };
+    const template = Template.fromStack(new FrontendStack(
+      new cdk.App(),
+      `RuntimeRead${definition.name}DeployRoleStack`,
+      { env: { account: environment.account, region: environment.region }, environment }
+    ));
+    const resources = template.toJSON().Resources;
+    const githubRoleEntry = Object.entries(resources).find(([, resource]) => (
+      resource.Type === "AWS::IAM::Role"
+      && resource.Properties.RoleName === `zoolanding-config-runtime-read-${definition.githubEnvironment}-github-deploy`
+    ));
+    assert.ok(githubRoleEntry, `missing Runtime Read GitHub role for ${definition.name}`);
+    const [githubRoleLogicalId, githubRoleResource] = githubRoleEntry;
+    const trust = githubRoleResource.Properties.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals;
+    assert.equal(trust["token.actions.githubusercontent.com:aud"], "sts.amazonaws.com");
+    assert.equal(
+      trust["token.actions.githubusercontent.com:sub"],
+      `repo:LynxPardelle/zoolanding-config-runtime-read:environment:${definition.githubEnvironment}`
+    );
+    assert.equal(
+      trust["token.actions.githubusercontent.com:ref"],
+      definition.name === "test" ? "refs/heads/test" : "refs/heads/main"
+    );
+
+    const githubPolicy = Object.values(resources).find((resource) => (
+      resource.Type === "AWS::IAM::Policy"
+      && JSON.stringify(resource.Properties.Roles).includes(githubRoleLogicalId)
+    ));
+    assert.ok(githubPolicy, `missing Runtime Read GitHub policy for ${definition.name}`);
+    const githubStatements = githubPolicy.Properties.PolicyDocument.Statement;
+    const serializedGithubPolicy = JSON.stringify(githubPolicy.Properties.PolicyDocument);
+    assert.doesNotMatch(serializedGithubPolicy, /lambda:/);
+    assert.doesNotMatch(serializedGithubPolicy, /apigateway:/);
+    const githubActions = githubStatements.flatMap((statement) => (
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action]
+    ));
+    assert.deepEqual(githubActions.filter((action) => action.startsWith("iam:")), ["iam:PassRole"]);
+    const summaryStatement = githubStatements.find((statement) => statement.Action === "cloudformation:GetTemplateSummary");
+    assert.ok(summaryStatement);
+    assert.match(JSON.stringify(summaryStatement.Resource), new RegExp(definition.stackName));
+    assert.equal(
+      githubStatements.filter((statement) => statement.Resource === "*").length,
+      0,
+      "the GitHub role must not use an explicit wildcard resource"
+    );
+    const passCloudFormationRole = githubStatements.find((statement) => statement.Action === "iam:PassRole");
+    assert.ok(passCloudFormationRole);
+    assert.match(JSON.stringify(passCloudFormationRole.Resource), /RuntimeReadCloudFormationExecutionRole/);
+    assert.equal(passCloudFormationRole.Condition.StringEquals["iam:PassedToService"], "cloudformation.amazonaws.com");
+    const createChangeSet = githubStatements.find((statement) => (
+      statement.Action === "cloudformation:CreateChangeSet"
+      || (Array.isArray(statement.Action) && statement.Action.includes("cloudformation:CreateChangeSet"))
+    ));
+    assert.match(JSON.stringify(createChangeSet.Condition), /cloudformation:RoleArn/);
+    assert.match(serializedGithubPolicy, new RegExp(definition.stackName));
+    assert.match(serializedGithubPolicy, new RegExp(definition.packagingPrefix));
+    assert.match(serializedGithubPolicy, new RegExp(definition.samArtifactBucketName));
+    assert.doesNotMatch(serializedGithubPolicy, /samclisourcebucket-\*/);
+
+    const cloudFormationRoleEntry = Object.entries(resources).find(([, resource]) => (
+      resource.Type === "AWS::IAM::Role"
+      && resource.Properties.RoleName ===
+        `zoolanding-config-runtime-read-${definition.githubEnvironment}-cfn-exec`
+    ));
+    assert.ok(cloudFormationRoleEntry, `missing Runtime Read CloudFormation role for ${definition.name}`);
+    const [cloudFormationRoleLogicalId, cloudFormationRoleResource] = cloudFormationRoleEntry;
+    assert.equal(
+      cloudFormationRoleResource.Properties.AssumeRolePolicyDocument.Statement[0].Principal.Service,
+      "cloudformation.amazonaws.com"
+    );
+    const cloudFormationPolicy = Object.values(resources).find((resource) => (
+      resource.Type === "AWS::IAM::Policy"
+      && JSON.stringify(resource.Properties.Roles).includes(cloudFormationRoleLogicalId)
+    ));
+    assert.ok(cloudFormationPolicy);
+    const serializedCloudFormationPolicy = JSON.stringify(cloudFormationPolicy.Properties.PolicyDocument);
+    assert.match(serializedCloudFormationPolicy, new RegExp(definition.apiId));
+    assert.match(serializedCloudFormationPolicy, new RegExp(definition.functionName));
+    assert.match(serializedCloudFormationPolicy, new RegExp(definition.executionRoleName));
+    assert.match(serializedCloudFormationPolicy, /iam:PutRolePermissionsBoundary/);
+    assert.match(serializedCloudFormationPolicy, /lambda:GetPolicy/);
+    assert.doesNotMatch(
+      serializedCloudFormationPolicy,
+      /iam:(PutRolePolicy|DeleteRolePolicy|AttachRolePolicy|DetachRolePolicy|UpdateAssumeRolePolicy|TagRole|UntagRole)/
+    );
+    assert.doesNotMatch(serializedCloudFormationPolicy, /iam:(CreatePolicy|CreatePolicyVersion|DeletePolicy|DeletePolicyVersion)/);
+
+    const boundary = Object.values(resources).find((resource) => (
+      resource.Type === "AWS::IAM::ManagedPolicy"
+      && resource.Properties.ManagedPolicyName ===
+        `zoolanding-config-runtime-read-${definition.githubEnvironment}-execution-boundary`
+    ));
+    assert.ok(boundary, `missing Runtime Read permissions boundary for ${definition.name}`);
+    const boundaryStatements = boundary.Properties.PolicyDocument.Statement;
+    const serializedBoundary = JSON.stringify(boundary.Properties.PolicyDocument);
+    assert.match(serializedBoundary, new RegExp(definition.configTableName));
+    assert.match(serializedBoundary, new RegExp(definition.configPayloadsBucketName));
+    assert.match(serializedBoundary, /DenyServerOnlyDraftDescriptors/);
+    assert.doesNotMatch(serializedBoundary, /secretsmanager:|iam:|lambda:|apigateway:|sts:/);
+    assert.doesNotMatch(serializedBoundary, /logs:CreateLogGroup/);
+    const payloadList = boundaryStatements.find((statement) => statement.Action === "s3:ListBucket");
+    assert.ok(payloadList, "optional payload misses require ListBucket to preserve S3 404 semantics");
+    assert.match(JSON.stringify(payloadList.Resource), new RegExp(definition.configPayloadsBucketName));
+    assert.doesNotMatch(JSON.stringify(payloadList.Resource), /content-hub/);
+    const registryQuery = boundaryStatements.find((statement) => (
+      (Array.isArray(statement.Action) ? statement.Action : [statement.Action]).includes("dynamodb:Query")
+      && JSON.stringify(statement.Resource).includes(definition.configTableName)
+    ));
+    assert.equal(registryQuery, undefined, "the registry needs GetItem, not Query");
+    const wildcardBoundaryActions = boundaryStatements
+      .filter((statement) => statement.Resource === "*")
+      .flatMap((statement) => Array.isArray(statement.Action) ? statement.Action : [statement.Action]);
+    assert.deepEqual(
+      wildcardBoundaryActions.sort(),
+      [
+        "xray:GetSamplingRules",
+        "xray:GetSamplingStatisticSummaries",
+        "xray:GetSamplingTargets",
+        "xray:PutTelemetryRecords",
+        "xray:PutTraceSegments",
+      ].sort()
+    );
+  }
+});
+
 test("FrontendStack does not create backend SAM deployment roles for dev", () => {
   const app = new cdk.App();
   const environment = {
@@ -370,6 +558,7 @@ test("FrontendStack does not create backend SAM deployment roles for dev", () =>
   template.resourceCountIs("AWS::IAM::Role", 1);
   assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-config-authoring-dev/);
   assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-data-dropper-dev/);
+  assert.doesNotMatch(JSON.stringify(template.toJSON()), /zoolanding-config-runtime-read-dev/);
 });
 
 test("FrontendStack creates scoped production OIDC roles for backend SAM deployments", () => {
