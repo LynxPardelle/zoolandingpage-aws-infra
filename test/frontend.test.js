@@ -497,6 +497,28 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.functionName));
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.executionRoleName));
     assert.match(serializedCloudFormationPolicy, /iam:PutRolePermissionsBoundary/);
+    const temporaryBoundaryRollbackStatements = cloudFormationPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Action === "iam:DeleteRolePermissionsBoundary"
+    );
+    assert.equal(
+      temporaryBoundaryRollbackStatements.length,
+      1,
+      "the temporary boundary rollback grant must exist exactly once"
+    );
+    assert.equal(
+      temporaryBoundaryRollbackStatements[0].Sid,
+      "TemporaryDeleteBoundaryRemoveAfterBothMigrations"
+    );
+    assert.deepEqual(temporaryBoundaryRollbackStatements[0].Resource, {
+      "Fn::Join": [
+        "",
+        [
+          "arn:",
+          { Ref: "AWS::Partition" },
+          `:iam::${environment.account}:role/${definition.executionRoleName}`,
+        ],
+      ],
+    });
     assert.match(serializedCloudFormationPolicy, /lambda:GetPolicy/);
     assert.doesNotMatch(
       serializedCloudFormationPolicy,
