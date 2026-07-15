@@ -302,9 +302,9 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
   assert.ok(resources.ConfigAuthoringTestDeployRoleD18F6A7E);
   assert.ok(resources.DataDropperTestDeployRole3CA98201);
 
-  for (const [roleName, repository] of [
-    ["zoolanding-config-authoring-test-deploy", "zoolanding-config-authoring"],
-    ["zoolanding-data-dropper-test-deploy", "zoolanding-data-dropper-lambda"],
+  for (const [roleName, repository, ref] of [
+    ["zoolanding-config-authoring-test-deploy", "zoolanding-config-authoring", "refs/heads/test"],
+    ["zoolanding-data-dropper-test-deploy", "zoolanding-data-dropper-lambda", "refs/heads/test"],
   ]) {
     template.hasResourceProperties("AWS::IAM::Role", {
       RoleName: roleName,
@@ -315,6 +315,7 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
               StringEquals: {
                 "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
                 "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:test`,
+                "token.actions.githubusercontent.com:ref": ref,
               },
             },
           }),
@@ -386,15 +387,17 @@ test("FrontendStack creates scoped production OIDC roles for backend SAM deploym
   }));
   const resources = template.toJSON().Resources;
 
-  for (const [roleName, repository] of [
-    ["zoolanding-config-authoring-production-deploy", "zoolanding-config-authoring"],
-    ["zoolanding-data-dropper-production-deploy", "zoolanding-data-dropper-lambda"],
+  for (const [roleName, repository, ref] of [
+    ["zoolanding-config-authoring-production-deploy", "zoolanding-config-authoring", "refs/heads/main"],
+    ["zoolanding-data-dropper-production-deploy", "zoolanding-data-dropper-lambda", "refs/heads/main"],
   ]) {
     template.hasResourceProperties("AWS::IAM::Role", {
       RoleName: roleName,
       AssumeRolePolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([Match.objectLike({ Condition: { StringEquals: {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           "token.actions.githubusercontent.com:sub": `repo:LynxPardelle/${repository}:environment:production`,
+          "token.actions.githubusercontent.com:ref": ref,
         } } })]),
       }),
     });
