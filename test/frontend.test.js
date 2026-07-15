@@ -496,6 +496,21 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.apiId));
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.functionName));
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.executionRoleName));
+    const samTransformStatements = cloudFormationPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Action === "cloudformation:CreateChangeSet"
+    );
+    assert.equal(samTransformStatements.length, 1, "the SAM transform grant must exist exactly once");
+    assert.notEqual(samTransformStatements[0].Resource, "*");
+    assert.deepEqual(samTransformStatements[0].Resource, {
+      "Fn::Join": [
+        "",
+        [
+          "arn:",
+          { Ref: "AWS::Partition" },
+          `:cloudformation:${environment.region}:aws:transform/Serverless-2016-10-31`,
+        ],
+      ],
+    });
     assert.match(serializedCloudFormationPolicy, /iam:PutRolePermissionsBoundary/);
     const temporaryBoundaryRollbackStatements = cloudFormationPolicy.Properties.PolicyDocument.Statement.filter(
       (statement) => statement.Action === "iam:DeleteRolePermissionsBoundary"
