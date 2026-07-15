@@ -339,6 +339,18 @@ test("FrontendStack creates scoped test OIDC roles for backend SAM deployments",
     });
     assert.match(JSON.stringify(template.toJSON()), new RegExp(stackName));
   }
+  const testConfigPolicy = Object.values(resources).find((resource) => (
+    resource.Type === "AWS::IAM::Policy"
+    && JSON.stringify(resource.Properties.Roles).includes("ConfigAuthoringTestDeployRole")
+  ));
+  assert.ok(testConfigPolicy);
+  assert.equal(
+    testConfigPolicy.Properties.PolicyDocument.Statement.some((statement) => (
+      statement.Action === "cloudformation:DescribeStacks"
+    )),
+    false,
+    "the test role must not receive a separate cross-environment read grant"
+  );
 });
 
 test("FrontendStack does not create backend SAM deployment roles for dev", () => {
@@ -372,6 +384,7 @@ test("FrontendStack creates scoped production OIDC roles for backend SAM deploym
     env: { account: environment.account, region: environment.region },
     environment,
   }));
+  const resources = template.toJSON().Resources;
 
   for (const [roleName, repository] of [
     ["zoolanding-config-authoring-production-deploy", "zoolanding-config-authoring"],
@@ -386,6 +399,31 @@ test("FrontendStack creates scoped production OIDC roles for backend SAM deploym
       }),
     });
   }
+
+  const configAuthoringPolicy = Object.values(resources).find((resource) => (
+    resource.Type === "AWS::IAM::Policy"
+    && JSON.stringify(resource.Properties.Roles).includes("ConfigAuthoringProductionDeployRole")
+  ));
+  assert.ok(configAuthoringPolicy, "missing config authoring production deploy policy");
+  const testStackRead = configAuthoringPolicy.Properties.PolicyDocument.Statement.find((statement) => (
+    statement.Action === "cloudformation:DescribeStacks"
+  ));
+  assert.ok(testStackRead, "production config authoring role must read the exact test stack outputs");
+  assert.match(JSON.stringify(testStackRead.Resource), /stack\/zoolanding-config-authoring-test\/\*/);
+  assert.doesNotMatch(JSON.stringify(testStackRead.Resource), /zoolanding-data-dropper-test/);
+  assert.notEqual(testStackRead.Resource, "*");
+  const dataDropperPolicy = Object.values(resources).find((resource) => (
+    resource.Type === "AWS::IAM::Policy"
+    && JSON.stringify(resource.Properties.Roles).includes("DataDropperProductionDeployRole")
+  ));
+  assert.ok(dataDropperPolicy);
+  assert.equal(
+    dataDropperPolicy.Properties.PolicyDocument.Statement.some((statement) => (
+      statement.Action === "cloudformation:DescribeStacks"
+    )),
+    false,
+    "the production data-dropper role must not receive the config-authoring test read grant"
+  );
 });
 
 test("FrontendStack routes same-origin backend paths to existing serverless APIs", () => {
