@@ -415,6 +415,17 @@ test("FrontendStack creates scoped production OIDC roles for backend SAM deploym
   assert.match(JSON.stringify(testStackRead.Resource), /stack\/zoolanding-config-authoring-test\/\*/);
   assert.doesNotMatch(JSON.stringify(testStackRead.Resource), /zoolanding-data-dropper-test/);
   assert.notEqual(testStackRead.Resource, "*");
+  const versionedArtifactRead = configAuthoringPolicy.Properties.PolicyDocument.Statement.find((statement) => (
+    statement.Action === "s3:GetObjectVersion"
+  ));
+  assert.ok(
+    versionedArtifactRead,
+    "production config authoring role must read the exact pinned deployment artifact version"
+  );
+  const versionedArtifactResources = JSON.stringify(versionedArtifactRead.Resource);
+  assert.match(versionedArtifactResources, /zoolanding-config-payloads\/\*/);
+  assert.doesNotMatch(versionedArtifactResources, /payloads-test|samclisourcebucket/);
+  assert.notEqual(versionedArtifactRead.Resource, "*");
   const dataDropperPolicy = Object.values(resources).find((resource) => (
     resource.Type === "AWS::IAM::Policy"
     && JSON.stringify(resource.Properties.Roles).includes("DataDropperProductionDeployRole")
@@ -426,6 +437,14 @@ test("FrontendStack creates scoped production OIDC roles for backend SAM deploym
     )),
     false,
     "the production data-dropper role must not receive the config-authoring test read grant"
+  );
+  assert.equal(
+    dataDropperPolicy.Properties.PolicyDocument.Statement.some((statement) => (
+      statement.Action === "s3:GetObjectVersion"
+      || (Array.isArray(statement.Action) && statement.Action.includes("s3:GetObjectVersion"))
+    )),
+    false,
+    "the production data-dropper role must not receive versioned config artifact reads"
   );
 });
 
