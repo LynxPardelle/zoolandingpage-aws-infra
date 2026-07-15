@@ -65,6 +65,45 @@ const runtimeFallbackUrls = {
   production: "https://y84vk0v44l.execute-api.us-east-1.amazonaws.com/Prod",
 };
 
+const runtimeReadDeploymentTargets = {
+  test: {
+    stackName: "zoolanding-config-runtime-read-test",
+    apiId: "jaay9p8gv5",
+    functionName: "zoolanding-config-runtime-ConfigRuntimeReadFunctio-h2B86UU86X18",
+    executionRoleName: "zoolanding-config-runtime-ConfigRuntimeReadFunction-zKufNNnTJX6V",
+    samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-obthkeitxden",
+    samArtifactPrefix: "zoolanding-config-runtime-read-test",
+    configTableName: "zoolanding-config-registry-test",
+    configPayloadsBucketName: "zoolanding-config-payloads-test",
+    contentHubMetadataTableNames: [
+      "zoolanding-content-hub-test-ContentHubMetadataTable-ZV7P652CS11F",
+      "zoolanding-content-hub-prod-ContentHubMetadataTable-IQ1WMU24XMPB",
+    ],
+    contentHubPackageBucketNames: [
+      "zoolanding-content-hub-te-contenthubpackagesbucket-gdgtasj0yb0o",
+      "zoolanding-content-hub-pr-contenthubpackagesbucket-ujejm7mr5unu",
+    ],
+  },
+  production: {
+    stackName: "zoolanding-config-runtime-read",
+    apiId: "y84vk0v44l",
+    functionName: "zoolanding-config-runtime-ConfigRuntimeReadFunctio-tyt19jOfQNXg",
+    executionRoleName: "zoolanding-config-runtime-ConfigRuntimeReadFunction-qscTUaEzOR3C",
+    samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-obthkeitxden",
+    samArtifactPrefix: "zoolanding-config-runtime-read",
+    configTableName: "zoolanding-config-registry",
+    configPayloadsBucketName: "zoolanding-config-payloads",
+    contentHubMetadataTableNames: [
+      "zoolanding-content-hub-test-ContentHubMetadataTable-ZV7P652CS11F",
+      "zoolanding-content-hub-prod-ContentHubMetadataTable-IQ1WMU24XMPB",
+    ],
+    contentHubPackageBucketNames: [
+      "zoolanding-content-hub-te-contenthubpackagesbucket-gdgtasj0yb0o",
+      "zoolanding-content-hub-pr-contenthubpackagesbucket-ujejm7mr5unu",
+    ],
+  },
+};
+
 const backendApiFrontDoors = {
   test: {
     authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
@@ -213,6 +252,7 @@ const environments = [
     name: "test",
     stageId: "ZoolandingTest",
     branch: "test",
+    runtimeReadDeployment: runtimeReadDeploymentTargets.test,
     frontendHosting: {
       ...buildFrontendHostingConfig("test"),
       frontDoors: [
@@ -237,6 +277,7 @@ const environments = [
     name: "production",
     stageId: "ZoolandingProduction",
     branch: "main",
+    runtimeReadDeployment: runtimeReadDeploymentTargets.production,
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
       route53RecordsEnabled: true,
