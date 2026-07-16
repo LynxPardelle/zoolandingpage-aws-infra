@@ -21,7 +21,7 @@
     "constructs": "10.6.0"
   },
   "devDependencies": {
-    "aws-cdk": "2.1129.0"
+    "aws-cdk": "2.1131.0"
   },
   "engines": {
     "node": ">=20"
