@@ -9,6 +9,14 @@ Source facts verified on 2026-07-09 CT, updated for test cutover on 2026-07-10 C
 - ACM certificate `17f757f0-19bf-4e6d-b294-16f16092d8e6` covers `zoositioweb.com.mx`, `zoositioweb.com`, `sulandingpage.com.mx`, `sulandingpage.com`, and `zoolandingpage.com`.
 - ACM certificate `4b008cec-97a6-447e-bf2f-9165e435b363` covers `lynxpardelle.com` and `*.lynxpardelle.com`.
 
+Astra Legal pre-cutover state verified on 2026-07-21 CT:
+
+- Public Route53 hosted zone `Z05844193OR5CAJJCR2ZJ` exists for `grupoastralegal.com`, but the registrar still delegates to HostGator nameservers. Creating the zone did not change public DNS.
+- The inactive Route53 zone contains the HostGator mail, DKIM, SPF, autodiscovery, CardDAV, CalDAV, webmail, and cPanel records with migration TTL `300`. Apex and `www` temporarily retain the HostGator address until CloudFront browser QA passes.
+- ACM certificate `882ab0a9-c900-482d-ac9b-2f3baca96f40` covers the apex and `www` and remains pending DNS validation. Its two validation CNAMEs exist in Route53 and must also exist in the currently authoritative HostGator zone before issuance.
+- `_acme-challenge`, `_cpanel-dcv-test-record`, and `localhost` were intentionally not copied. They are not required to preserve HostGator mail and must not be treated as production mail dependencies.
+- The public resolver returned no MX answer during the pre-cutover audit even though the HostGator export supplied `0 mail.grupoastralegal.com`. The Route53 copy includes that explicit MX record; confirm send and receive behavior before changing nameservers.
+
 ## Phases
 
 1. Foundation deploy: create private artifact bucket and GitHub publisher role only.

@@ -12,6 +12,8 @@ const certificates = {
     "arn:aws:acm:us-east-1:765932874577:certificate/4b008cec-97a6-447e-bf2f-9165e435b363",
   erosBarajas:
     "arn:aws:acm:us-east-1:765932874577:certificate/4b190eff-7dde-435f-933b-da411d30ab50",
+  grupoAstraLegal:
+    "arn:aws:acm:us-east-1:765932874577:certificate/882ab0a9-c900-482d-ac9b-2f3baca96f40",
 };
 
 const hostedZones = {
@@ -46,6 +48,10 @@ const hostedZones = {
   erosBarajasCom: {
     hostedZoneName: "erosbarajas.com",
     hostedZoneId: "Z0572894Y6DV902JHMWS",
+  },
+  grupoAstraLegalCom: {
+    hostedZoneName: "grupoastralegal.com",
+    hostedZoneId: "Z05844193OR5CAJJCR2ZJ",
   },
 };
 
@@ -165,10 +171,6 @@ const unresolvedEc2Aliases = [
   },
   {
     domainName: "alecfest-voliii.com",
-    reason: "Draft registry lists the domain, but Route53/ACM ownership was not verified in this account.",
-  },
-  {
-    domainName: "grupoastralegal.com",
     reason: "Draft registry lists the domain, but Route53/ACM ownership was not verified in this account.",
   },
   {
@@ -355,6 +357,21 @@ const environments = [
             {
               ...hostedZones.erosBarajasCom,
               domainNames: ["erosbarajas.com"],
+            },
+          ],
+        },
+        {
+          id: "grupoastralegal",
+          domainName: "grupoastralegal.com",
+          alternateDomainNames: ["www.grupoastralegal.com"],
+          customDomainNamesEnabled: false,
+          route53RecordsEnabled: false,
+          auditHostHint: "grupoastralegal.com",
+          certificateArn: certificates.grupoAstraLegal,
+          aliasRecordGroups: [
+            {
+              ...hostedZones.grupoAstraLegalCom,
+              domainNames: ["grupoastralegal.com", "www.grupoastralegal.com"],
             },
           ],
         },
