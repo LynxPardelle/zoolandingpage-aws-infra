@@ -851,7 +851,7 @@ test("production front doors activate Astra Legal aliases and Route53 cutover", 
   assert.deepEqual(astraLegal.alternateDomainNames, ["www.grupoastralegal.com"]);
   assert.equal(astraLegal.customDomainNamesEnabled, true);
   assert.equal(astraLegal.route53RecordsEnabled, true);
-  assert.equal(astraLegal.auditHostHint, undefined);
+  assert.equal(astraLegal.auditHostHint, "grupoastralegal.com");
   assert.match(astraLegal.certificateArn, /certificate\/882ab0a9-c900-482d-ac9b-2f3baca96f40$/);
   assert.deepEqual(astraLegal.aliasRecordGroups, [
     {

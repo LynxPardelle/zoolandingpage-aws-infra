@@ -366,6 +366,7 @@ const environments = [
           alternateDomainNames: ["www.grupoastralegal.com"],
           customDomainNamesEnabled: true,
           route53RecordsEnabled: true,
+          auditHostHint: "grupoastralegal.com",
           certificateArn: certificates.grupoAstraLegal,
           aliasRecordGroups: [
             {
