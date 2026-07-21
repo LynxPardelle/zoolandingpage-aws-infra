@@ -778,9 +778,16 @@ test("FrontendStack can deploy pre-cutover CloudFront distributions without atta
 
   const functions = template.findResources("AWS::CloudFront::Function");
   const viewerFunction = Object.values(functions)[0];
-  assert.match(
+  assert.equal(
     viewerFunction.Properties.FunctionCode,
-    /var forwardedHost = "dev\.zoolandingpage\.com\.mx";/
+    `function handler(event) {
+  var request = event.request;
+  var forwardedHost = "dev.zoolandingpage.com.mx";
+  if (forwardedHost) {
+    request.headers["x-forwarded-host"] = { value: forwardedHost };
+  }
+  return request;
+}`
   );
 });
 
