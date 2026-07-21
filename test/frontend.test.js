@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 const cdk = require("aws-cdk-lib");
 const { Match, Template } = require("aws-cdk-lib/assertions");
 
@@ -783,6 +784,56 @@ test("FrontendStack can deploy pre-cutover CloudFront distributions without atta
   );
 });
 
+test("FrontendStack redirects alternate hosts to the canonical domain before SSR", () => {
+  const app = new cdk.App();
+  const environment = {
+    ...testEnvironment,
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      releaseId: "test-release",
+      manifestKey: "frontend/angular-ssr/dev/releases/test-release/manifest.json",
+      staticPrefix: "frontend/angular-ssr/dev/releases/test-release/browser",
+      serverBundleKey: "frontend/angular-ssr/dev/releases/test-release/server/ssr-handler.zip",
+      frontDoors: [
+        {
+          ...testEnvironment.frontendHosting.frontDoors[0],
+          domainName: "grupoastralegal.com",
+          alternateDomainNames: ["www.grupoastralegal.com"],
+          auditHostHint: "grupoastralegal.com",
+          redirectAlternateDomainNamesToPrimary: true,
+        },
+      ],
+    },
+  };
+  const stack = new FrontendStack(app, "TestFrontendCanonicalRedirectStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+  const functions = template.findResources("AWS::CloudFront::Function");
+  const viewerFunction = Object.values(functions)[0];
+  const context = {};
+  vm.runInNewContext(viewerFunction.Properties.FunctionCode, context);
+
+  const redirect = context.handler({
+    request: {
+      headers: { host: { value: "www.grupoastralegal.com" } },
+      method: "GET",
+      querystring: {
+        tag: { multiValue: [{ value: "one" }, { value: "two" }] },
+        utm_source: { value: "qa" },
+      },
+      uri: "/servicios",
+    },
+  });
+
+  assert.equal(redirect.statusCode, 308);
+  assert.equal(
+    redirect.headers.location.value,
+    "https://grupoastralegal.com/servicios?tag=one&tag=two&utm_source=qa"
+  );
+});
+
 test("FrontendStack does not create a retained production SSR log group that can conflict after rollback", () => {
   const app = new cdk.App();
   const environment = {
@@ -852,6 +903,7 @@ test("production front doors activate Astra Legal aliases and Route53 cutover", 
   assert.equal(astraLegal.customDomainNamesEnabled, true);
   assert.equal(astraLegal.route53RecordsEnabled, true);
   assert.equal(astraLegal.auditHostHint, "grupoastralegal.com");
+  assert.equal(astraLegal.redirectAlternateDomainNamesToPrimary, true);
   assert.match(astraLegal.certificateArn, /certificate\/882ab0a9-c900-482d-ac9b-2f3baca96f40$/);
   assert.deepEqual(astraLegal.aliasRecordGroups, [
     {
