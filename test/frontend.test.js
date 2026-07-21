@@ -842,6 +842,26 @@ test("production front doors model Eros Barajas with traffic cutover enabled", (
   assert.equal(production.frontendHosting.route53RecordsEnabled, true);
 });
 
+test("production front doors stage Astra Legal without public DNS cutover", () => {
+  const production = environments.find((environment) => environment.name === "production");
+  assert.ok(production);
+  const astraLegal = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "grupoastralegal");
+  assert.ok(astraLegal);
+  assert.equal(astraLegal.domainName, "grupoastralegal.com");
+  assert.deepEqual(astraLegal.alternateDomainNames, ["www.grupoastralegal.com"]);
+  assert.equal(astraLegal.customDomainNamesEnabled, false);
+  assert.equal(astraLegal.route53RecordsEnabled, false);
+  assert.equal(astraLegal.auditHostHint, "grupoastralegal.com");
+  assert.match(astraLegal.certificateArn, /certificate\/882ab0a9-c900-482d-ac9b-2f3baca96f40$/);
+  assert.deepEqual(astraLegal.aliasRecordGroups, [
+    {
+      hostedZoneName: "grupoastralegal.com",
+      hostedZoneId: "Z05844193OR5CAJJCR2ZJ",
+      domainNames: ["grupoastralegal.com", "www.grupoastralegal.com"],
+    },
+  ]);
+});
+
 test("production frontend stack creates guarded alias operations OIDC role", () => {
   const app = new cdk.App();
   const production = environments.find((environment) => environment.name === "production");
