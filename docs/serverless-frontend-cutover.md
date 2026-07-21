@@ -9,11 +9,11 @@ Source facts verified on 2026-07-09 CT, updated for test cutover on 2026-07-10 C
 - ACM certificate `17f757f0-19bf-4e6d-b294-16f16092d8e6` covers `zoositioweb.com.mx`, `zoositioweb.com`, `sulandingpage.com.mx`, `sulandingpage.com`, and `zoolandingpage.com`.
 - ACM certificate `4b008cec-97a6-447e-bf2f-9165e435b363` covers `lynxpardelle.com` and `*.lynxpardelle.com`.
 
-Astra Legal pre-cutover state verified on 2026-07-21 CT:
+Astra Legal DNS cutover preparation verified on 2026-07-21 CT:
 
 - Public Route53 hosted zone `Z05844193OR5CAJJCR2ZJ` exists for `grupoastralegal.com`, but the registrar still delegates to HostGator nameservers. Creating the zone did not change public DNS.
-- The inactive Route53 zone contains the HostGator mail, DKIM, SPF, autodiscovery, CardDAV, CalDAV, webmail, and cPanel records with migration TTL `300`. Apex and `www` temporarily retain the HostGator address until CloudFront browser QA passes.
-- ACM certificate `882ab0a9-c900-482d-ac9b-2f3baca96f40` covers the apex and `www` and remains pending DNS validation. Its two validation CNAMEs exist in Route53 and must also exist in the currently authoritative HostGator zone before issuance.
+- The inactive Route53 zone contains the HostGator mail, DKIM, SPF, autodiscovery, CardDAV, CalDAV, webmail, and cPanel records with migration TTL `300`. Apex and `www` retain the HostGator address until this cutover deploy replaces them with CloudFront aliases.
+- ACM certificate `882ab0a9-c900-482d-ac9b-2f3baca96f40` covers the apex and `www` and is `ISSUED`. Both validation CNAMEs resolve publicly from the authoritative HostGator zone and also exist in Route53 for renewal after delegation.
 - `_acme-challenge`, `_cpanel-dcv-test-record`, and `localhost` were intentionally not copied. They are not required to preserve HostGator mail and must not be treated as production mail dependencies.
 - The public resolver returned no MX answer during the pre-cutover audit even though the HostGator export supplied `0 mail.grupoastralegal.com`. The Route53 copy includes that explicit MX record; confirm send and receive behavior before changing nameservers.
 
@@ -61,6 +61,5 @@ These aliases were not mapped into CloudFront because the required Route53/certi
 - Retired `*.zoolandingpage.com.mx` aliases: `crearpaginaweb`, `erosbarajas`, `quierounsitioweb`, `robertorodriguezrodriguez`, `sitiosweb`, `alecfest-voliii`, `despacholegalastralex`, `pamelabetancourt`, and `pokeapi-demo`.
 - `test.despacholegalastralex.zoolandingpage.com.mx`: not covered by `*.zoolandingpage.com.mx` and no exact us-east-1 ACM certificate found.
 - `alecfest-voliii.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
-- `grupoastralegal.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
 - `pamelabetancourt.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
 - `robertorodriguezrodriguez.com.mx`: draft registry lists it, but Route53/ACM ownership was not verified in this account.

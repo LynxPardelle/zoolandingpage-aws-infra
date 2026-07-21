@@ -842,16 +842,16 @@ test("production front doors model Eros Barajas with traffic cutover enabled", (
   assert.equal(production.frontendHosting.route53RecordsEnabled, true);
 });
 
-test("production front doors stage Astra Legal without public DNS cutover", () => {
+test("production front doors activate Astra Legal aliases and Route53 cutover", () => {
   const production = environments.find((environment) => environment.name === "production");
   assert.ok(production);
   const astraLegal = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "grupoastralegal");
   assert.ok(astraLegal);
   assert.equal(astraLegal.domainName, "grupoastralegal.com");
   assert.deepEqual(astraLegal.alternateDomainNames, ["www.grupoastralegal.com"]);
-  assert.equal(astraLegal.customDomainNamesEnabled, false);
-  assert.equal(astraLegal.route53RecordsEnabled, false);
-  assert.equal(astraLegal.auditHostHint, "grupoastralegal.com");
+  assert.equal(astraLegal.customDomainNamesEnabled, true);
+  assert.equal(astraLegal.route53RecordsEnabled, true);
+  assert.equal(astraLegal.auditHostHint, undefined);
   assert.match(astraLegal.certificateArn, /certificate\/882ab0a9-c900-482d-ac9b-2f3baca96f40$/);
   assert.deepEqual(astraLegal.aliasRecordGroups, [
     {
