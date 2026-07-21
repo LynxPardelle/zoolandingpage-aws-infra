@@ -367,6 +367,7 @@ const environments = [
           customDomainNamesEnabled: true,
           route53RecordsEnabled: true,
           auditHostHint: "grupoastralegal.com",
+          redirectAlternateDomainNamesToPrimary: true,
           certificateArn: certificates.grupoAstraLegal,
           aliasRecordGroups: [
             {
