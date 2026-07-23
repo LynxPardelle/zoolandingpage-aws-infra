@@ -17,7 +17,7 @@
     "validate": "npm run synth"
   },
   "dependencies": {
-    "aws-cdk-lib": "2.261.0",
+    "aws-cdk-lib": "2.262.0",
     "constructs": "10.6.0"
   },
   "devDependencies": {
