@@ -16,8 +16,58 @@ const {
 } = require("../lib/project-helpers");
 const { environments, retiredZoolandingpageComMxAliases } = require("../config/environments");
 
+const phase8BackendPaths = {
+  "data-spaces": [
+    "features/data-spaces/read",
+    "features/data-spaces/action",
+    "features/data-spaces/public-read",
+  ],
+  commerce: [
+    "features/commerce/public-read",
+    "features/commerce/read",
+    "features/commerce/catalog/action",
+    "features/commerce/inventory/action",
+    "features/commerce/subscription/action",
+    "features/commerce/public-action",
+    "features/commerce/fiscal/request",
+    "features/commerce/fiscal/admin",
+  ],
+  integrations: [
+    "features/integrations/read",
+    "features/integrations/action",
+    "features/integrations/stripe/onboarding",
+  ],
+};
+
 test("cloud environments exclude dev", () => {
   assert.deepEqual(environments.map((environment) => environment.name), ["test", "production"]);
+});
+
+test("test and production configure exact Phase 8 service routes from environment-scoped API id parameters", () => {
+  for (const environment of environments) {
+    const routes = environment.frontendHosting.backendRoutes;
+    const expectedStagePath = `/${environment.name}`;
+
+    for (const [serviceId, expectedPaths] of Object.entries(phase8BackendPaths)) {
+      const route = routes.find((candidate) => candidate.id === serviceId);
+      assert.ok(route, `missing ${serviceId} backend route in ${environment.name}`);
+      assert.equal(
+        route.apiIdParameterName,
+        `/zoolanding/${environment.name}/services/${serviceId}/api-id`
+      );
+      assert.equal(route.originPath, expectedStagePath);
+      assert.deepEqual(route.pathPatterns, expectedPaths);
+      assert.equal(Object.hasOwn(route, "domainName"), false);
+    }
+
+    const configuredPaths = routes
+      .filter((route) => Object.hasOwn(phase8BackendPaths, route.id))
+      .flatMap((route) => route.pathPatterns);
+    assert.deepEqual(configuredPaths, Object.values(phase8BackendPaths).flat());
+    assert.equal(routes.find((route) => route.id === "api-proxy").originPath, "/Prod");
+    assert.doesNotMatch(JSON.stringify(routes), /features\/\*/);
+    assert.doesNotMatch(JSON.stringify(routes), /webhooks\/stripe\/connect/);
+  }
 });
 
 const testEnvironment = {
@@ -701,6 +751,70 @@ test("FrontendStack routes same-origin backend paths to existing serverless APIs
   assert.equal(behaviorByPattern.has("auth/*"), false);
 });
 
+test("FrontendStack resolves exact Phase 8 service origins from environment-scoped SSM API ids", () => {
+  const app = new cdk.App();
+  const environment = phase8RouteEnvironment();
+  const stack = new FrontendStack(app, "TestFrontendPhase8RouteStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  const template = Template.fromStack(stack);
+  const synthesized = template.toJSON();
+  const distribution = Object.values(template.findResources("AWS::CloudFront::Distribution"))[0];
+  const behaviors = distribution.Properties.DistributionConfig.CacheBehaviors;
+  const behaviorByPattern = new Map(behaviors.map((behavior) => [behavior.PathPattern, behavior]));
+  const origins = distribution.Properties.DistributionConfig.Origins;
+  const ssmParameters = Object.entries(synthesized.Parameters || {})
+    .filter(([, parameter]) => parameter.Type === "AWS::SSM::Parameter::Value<String>");
+
+  for (const [serviceId, paths] of Object.entries(phase8BackendPaths)) {
+    const parameterName = `/zoolanding/test/services/${serviceId}/api-id`;
+    const parameterEntry = ssmParameters.find(([, parameter]) => parameter.Default === parameterName);
+    assert.ok(parameterEntry, `missing SSM deployment input for ${serviceId}`);
+    const [logicalId] = parameterEntry;
+
+    for (const expectedPath of paths) {
+      const behavior = behaviorByPattern.get(expectedPath);
+      assert.ok(behavior, `missing backend behavior for ${expectedPath}`);
+      assert.deepEqual(
+        behavior.AllowedMethods,
+        ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"]
+      );
+      assert.equal(behavior.CachePolicyId, "4135ea2d-6df8-44a3-9df3-4b5a84be39ad");
+      assert.equal(behavior.ViewerProtocolPolicy, "redirect-to-https");
+
+      const origin = origins.find((candidate) => candidate.Id === behavior.TargetOriginId);
+      assert.ok(origin, `missing origin for ${expectedPath}`);
+      assert.equal(origin.OriginPath, "/test");
+      assert.equal(origin.CustomOriginConfig.OriginProtocolPolicy, "https-only");
+      assert.match(JSON.stringify(origin.DomainName), new RegExp(logicalId));
+      assert.match(JSON.stringify(origin.DomainName), /execute-api\.us-east-1/);
+    }
+  }
+
+  assert.equal(behaviorByPattern.has("features/*"), false);
+  assert.equal(behaviorByPattern.has("features/data-spaces/*"), false);
+  assert.equal(behaviorByPattern.has("features/commerce/*"), false);
+  assert.equal(behaviorByPattern.has("features/integrations/*"), false);
+  assert.equal(behaviorByPattern.has("webhooks/stripe/connect"), false);
+  assert.doesNotMatch(JSON.stringify(synthesized), /\/zoolanding\/dev\/services\//);
+});
+
+test("FrontendStack rejects ambiguous or cross-environment SSM service origins", () => {
+  assert.throws(
+    () => synthesizePhase8Route({ domainName: "api.example.com" }),
+    /ambiguous origin configuration for test/
+  );
+  assert.throws(
+    () => synthesizePhase8Route({}, { name: "dev", branch: "dev" }),
+    /SSM-backed service API origins are not allowed for dev/
+  );
+  assert.throws(
+    () => synthesizePhase8Route({ apiIdParameterName: "/zoolanding/production/services/data-spaces/api-id" }),
+    /Invalid backend API id parameter for data-spaces in test/
+  );
+});
+
 test("FrontendStack creates Route53 upsert custom resources only when record cutover is enabled", () => {
   const app = new cdk.App();
   const environment = {
@@ -739,6 +853,52 @@ test("FrontendStack creates Route53 upsert custom resources only when record cut
     Value: "true",
   });
 });
+
+function phase8RouteEnvironment(routeOverrides = {}, environmentOverrides = {}) {
+  const serviceRoute = {
+    id: "data-spaces",
+    apiIdParameterName: "/zoolanding/test/services/data-spaces/api-id",
+    originPath: "/test",
+    pathPatterns: phase8BackendPaths["data-spaces"],
+    ...routeOverrides,
+  };
+  return {
+    ...testEnvironment,
+    name: "test",
+    branch: "test",
+    ...environmentOverrides,
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      githubEnvironment: "test",
+      runtimeEnvironment: "test",
+      backendRoutes: [
+        ...testEnvironment.frontendHosting.backendRoutes,
+        serviceRoute,
+        ...Object.entries(phase8BackendPaths)
+          .filter(([serviceId]) => serviceId !== "data-spaces")
+          .map(([serviceId, pathPatterns]) => ({
+            id: serviceId,
+            apiIdParameterName: `/zoolanding/test/services/${serviceId}/api-id`,
+            originPath: "/test",
+            pathPatterns,
+          })),
+      ],
+      releaseId: "test-release",
+      manifestKey: "frontend/angular-ssr/test/releases/test-release/manifest.json",
+      staticPrefix: "frontend/angular-ssr/test/releases/test-release/browser",
+      serverBundleKey: "frontend/angular-ssr/test/releases/test-release/server/ssr-handler.zip",
+    },
+  };
+}
+
+function synthesizePhase8Route(routeOverrides = {}, environmentOverrides = {}) {
+  const app = new cdk.App();
+  const environment = phase8RouteEnvironment(routeOverrides, environmentOverrides);
+  return Template.fromStack(new FrontendStack(app, "Phase8RouteValidationStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  }));
+}
 
 test("FrontendStack can deploy pre-cutover CloudFront distributions without attaching custom aliases", () => {
   const app = new cdk.App();

@@ -125,6 +125,29 @@ const backendApiFrontDoors = {
   },
 };
 
+const phase8ServicePathPatterns = {
+  "data-spaces": [
+    "features/data-spaces/read",
+    "features/data-spaces/action",
+    "features/data-spaces/public-read",
+  ],
+  commerce: [
+    "features/commerce/public-read",
+    "features/commerce/read",
+    "features/commerce/catalog/action",
+    "features/commerce/inventory/action",
+    "features/commerce/subscription/action",
+    "features/commerce/public-action",
+    "features/commerce/fiscal/request",
+    "features/commerce/fiscal/admin",
+  ],
+  integrations: [
+    "features/integrations/read",
+    "features/integrations/action",
+    "features/integrations/stripe/onboarding",
+  ],
+};
+
 const productionCustomDomainNamesEnabled = parseBooleanFlag(
   process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED ||
     process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
@@ -220,7 +243,7 @@ function buildFrontendHostingConfig(environmentName) {
 
 function buildBackendRoutes(environmentName) {
   const apiFrontDoors = backendApiFrontDoors[environmentName] || backendApiFrontDoors.production;
-  return [
+  const existingRoutes = [
     {
       id: "auth-admin",
       domainName: apiFrontDoors.authAdmin.domainName,
@@ -245,6 +268,20 @@ function buildBackendRoutes(environmentName) {
       originPath: apiFrontDoors.apiProxy.originPath,
       pathPatterns: ["auth/runtime-config", "api-proxy/*"],
     },
+  ];
+
+  if (environmentName !== "test" && environmentName !== "production") {
+    return existingRoutes;
+  }
+
+  return [
+    ...existingRoutes,
+    ...Object.entries(phase8ServicePathPatterns).map(([serviceId, pathPatterns]) => ({
+      id: serviceId,
+      apiIdParameterName: `/zoolanding/${environmentName}/services/${serviceId}/api-id`,
+      originPath: `/${environmentName}`,
+      pathPatterns,
+    })),
   ];
 }
 
