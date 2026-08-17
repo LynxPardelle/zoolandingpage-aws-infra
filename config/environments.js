@@ -110,6 +110,10 @@ const runtimeReadDeploymentTargets = {
   },
 };
 
+const serviceRepositoryBootstrap = {
+  samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-obthkeitxden",
+};
+
 const backendApiFrontDoors = {
   test: {
     authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
@@ -255,6 +259,7 @@ const environments = [
     stageId: "ZoolandingTest",
     branch: "test",
     runtimeReadDeployment: runtimeReadDeploymentTargets.test,
+    serviceRepositoryBootstrap,
     frontendHosting: {
       ...buildFrontendHostingConfig("test"),
       frontDoors: [
@@ -280,6 +285,7 @@ const environments = [
     stageId: "ZoolandingProduction",
     branch: "main",
     runtimeReadDeployment: runtimeReadDeploymentTargets.production,
+    serviceRepositoryBootstrap,
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
       route53RecordsEnabled: true,
