@@ -42,9 +42,12 @@ npx cdk deploy --profile ADMIN-AIM-CLI "ZoolandingProduction/Zoolandingpage-prod
 
 These deploy commands are operator instructions. Repository validation must not run them automatically.
 
-## Outputs and GitHub Environment variables
+## Outputs and GitHub Environment secrets
 
-Copy each repository's output pair into its protected `test` or `production` GitHub Environment:
+Copy each repository's output pair into its protected `test` or `production`
+GitHub Environment as encrypted secrets. Pass values through standard input or an
+approved secret manager; do not print them, save them in repository files, or
+duplicate them as GitHub variables.
 
 | Repository | `AWS_ROLE_ARN` output | `AWS_CLOUDFORMATION_ROLE_ARN` output |
 | --- | --- | --- |
@@ -53,18 +56,9 @@ Copy each repository's output pair into its protected `test` or `production` Git
 | `zoolanding-integrations` | `IntegrationsGithubDeployRoleArn` | `IntegrationsCloudFormationExecutionRoleArn` |
 | `zoolanding-notifications` | `NotificationsGithubDeployRoleArn` | `NotificationsCloudFormationExecutionRoleArn` |
 
-Role ARNs are deterministic. Replace `{environment}` with `test` or `production`:
-
-```text
-arn:aws:iam::765932874577:role/zoolanding-deployer-data-spaces-{environment}-github-deploy
-arn:aws:iam::765932874577:role/zoolanding-deployer-data-spaces-{environment}-cfn-exec
-arn:aws:iam::765932874577:role/zoolanding-deployer-commerce-{environment}-github-deploy
-arn:aws:iam::765932874577:role/zoolanding-deployer-commerce-{environment}-cfn-exec
-arn:aws:iam::765932874577:role/zoolanding-deployer-integrations-{environment}-github-deploy
-arn:aws:iam::765932874577:role/zoolanding-deployer-integrations-{environment}-cfn-exec
-arn:aws:iam::765932874577:role/zoolanding-deployer-notifications-{environment}-github-deploy
-arn:aws:iam::765932874577:role/zoolanding-deployer-notifications-{environment}-cfn-exec
-```
+Read the exact values from the deployed stack outputs at configuration time.
+Operational account, role and bucket identifiers are intentionally omitted from
+this public document.
 
 ## Scope contract
 
@@ -74,7 +68,7 @@ GitHub OIDC trust uses three exact `StringEquals` conditions:
 - subject: `repo:LynxPardelle/{repository}:environment:{environment}`;
 - ref: `refs/heads/test` for `test`, or `refs/heads/main` for `production`.
 
-The GitHub role can operate only its exact SAM stack, exact CloudFormation execution role, exact managed SAM bucket, service-specific artifact prefix, and literal non-secret SSM validation parameters. The managed bucket is `aws-sam-cli-managed-default-samclisourcebucket-obthkeitxden`; each artifact prefix equals the SAM stack name.
+The GitHub role can operate only its exact SAM stack, exact CloudFormation execution role, exact configured managed SAM bucket, service-specific artifact prefix, and literal non-secret SSM validation parameters. Each artifact prefix equals the SAM stack name.
 
 The CloudFormation role can fetch only that service's SAM artifacts, resolve only the literal SSM inputs used by its template, manage only the literal SSM outputs published by its template, and operate only AWS resource families present after SAM transformation. IAM roles and policies are restricted to service- and stage-specific generated prefixes. No role receives `AdministratorAccess`, Secrets Manager actions, application data reads/writes, or a wildcard repository/ref trust.
 
