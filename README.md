@@ -1,6 +1,6 @@
 # Zoolandingpage AWS Infra
 
-Serverless frontend infrastructure for `LynxPardelle/zoolandingpage`.
+Serverless frontend infrastructure for `LynxPardelle/zoolandingpage` plus bounded deployment identities for approved Zoolanding service repositories.
 
 This repo follows the Lynx Portfolio split: the Angular app publishes immutable SSR artifacts, and this CDK repo consumes a release id to deploy CloudFront plus Lambda SSR.
 
@@ -11,12 +11,14 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 - Lambda SSR on Node.js 22, ARM64, behind Lambda Function URL with IAM auth.
 - CloudFront distributions for the verified certificate groups.
 - Optional Route53 alias upserts, disabled by default.
+- Retained, branch-bound GitHub OIDC and CloudFormation execution roles for Data Spaces, Commerce, Integrations, and Notifications.
 
 ## What This Does Not Touch
 
 - EC2.
 - Dokploy.
 - Existing API/runtime/content/auth/combo Lambdas.
+- Service application resources directly; each service SAM template remains in its owning repository.
 - DNS cutover by default.
 
 ## Bootstrap Flow
@@ -30,3 +32,4 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 
 See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
+Service identity scope, outputs, and independent deployment targets are in [docs/service-repository-bootstrap.md](docs/service-repository-bootstrap.md).
