@@ -77,4 +77,22 @@ jobs:
       - name: Deploy test frontend stack
         env:
           FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
-        run: npx cdk deploy "ZoolandingTest/*" --require-approval never
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FRONTEND_TEST_RELEASE_ID" ]; then
+            echo "::error::FRONTEND_RELEASE_ID environment variable is required for deploy."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            DEPLOYED_FRONTEND_RELEASE_ID="$(aws cloudformation describe-stacks \
+              --stack-name "ZoolandingTest-Zoolandingpage-test-Frontend" \
+              --query "Stacks[0].Outputs[?OutputKey=='FrontendReleaseId'].OutputValue | [0]" \
+              --output text)"
+            if [ -z "$DEPLOYED_FRONTEND_RELEASE_ID" ] || [ "$DEPLOYED_FRONTEND_RELEASE_ID" = "None" ]; then
+              echo "::error::The deployed TEST frontend release could not be read."
+              exit 1
+            fi
+            test "$DEPLOYED_FRONTEND_RELEASE_ID" = "$FRONTEND_TEST_RELEASE_ID"
+          fi
+          npx cdk deploy "ZoolandingTest/Zoolandingpage-test-Frontend" --require-approval never --exclusively
