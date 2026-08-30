@@ -448,8 +448,10 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
     ));
     assert.ok(githubPolicy, `missing Runtime Read GitHub policy for ${definition.name}`);
     const githubStatements = githubPolicy.Properties.PolicyDocument.Statement;
+    const statementActions = (statement) => (
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action]
+    );
     const serializedGithubPolicy = JSON.stringify(githubPolicy.Properties.PolicyDocument);
-    assert.doesNotMatch(serializedGithubPolicy, /lambda:/);
     assert.doesNotMatch(serializedGithubPolicy, /apigateway:/);
     const githubActions = githubStatements.flatMap((statement) => (
       Array.isArray(statement.Action) ? statement.Action : [statement.Action]
@@ -476,6 +478,27 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
     assert.match(serializedGithubPolicy, new RegExp(definition.packagingPrefix));
     assert.match(serializedGithubPolicy, new RegExp(definition.samArtifactBucketName));
     assert.doesNotMatch(serializedGithubPolicy, /samclisourcebucket-\*/);
+    const githubLambdaStatements = githubStatements.filter((statement) => (
+      statementActions(statement).some((action) => action.startsWith("lambda:"))
+    ));
+    if (definition.name === "test") {
+      assert.equal(githubLambdaStatements.length, 2);
+      const githubAliasRead = githubLambdaStatements.find((statement) => (
+        statementActions(statement).includes("lambda:GetAlias")
+      ));
+      assert.deepEqual(statementActions(githubAliasRead), ["lambda:GetAlias"]);
+      const serializedAliasReadResources = JSON.stringify(githubAliasRead.Resource);
+      assert.match(serializedAliasReadResources, new RegExp(`function:${definition.functionName}"`));
+      assert.doesNotMatch(serializedAliasReadResources, new RegExp(`function:${definition.functionName}:live`));
+      const githubVersionRead = githubLambdaStatements.find((statement) => (
+        statementActions(statement).includes("lambda:GetFunctionConfiguration")
+      ));
+      assert.deepEqual(statementActions(githubVersionRead), ["lambda:GetFunctionConfiguration"]);
+      assert.match(JSON.stringify(githubVersionRead.Resource), new RegExp(`function:${definition.functionName}:\\*`));
+    } else {
+      assert.equal(githubLambdaStatements.length, 0, "production caller must keep its existing scope");
+    }
+    assert.equal(githubActions.includes("cloudformation:DescribeStackResource"), false);
 
     const cloudFormationRoleEntry = Object.entries(resources).find(([, resource]) => (
       resource.Type === "AWS::IAM::Role"
@@ -493,6 +516,96 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
       && JSON.stringify(resource.Properties.Roles).includes(cloudFormationRoleLogicalId)
     ));
     assert.ok(cloudFormationPolicy);
+    const requiredAliasVersionActions = [
+      "lambda:CreateAlias",
+      "lambda:DeleteAlias",
+      "lambda:GetAlias",
+      "lambda:ListVersionsByFunction",
+      "lambda:PublishVersion",
+      "lambda:UpdateAlias",
+    ].sort();
+    const cloudFormationStatements = cloudFormationPolicy.Properties.PolicyDocument.Statement;
+    const aliasVersionStatements = cloudFormationStatements.filter((statement) => (
+      statementActions(statement).some((action) => requiredAliasVersionActions.includes(action))
+    ));
+
+    assert.equal(
+      aliasVersionStatements.length,
+      definition.name === "test" ? 1 : 0,
+      `Runtime Read ${definition.name} alias/version grant has the expected environment scope`
+    );
+    if (definition.name === "test") {
+      const aliasVersionStatement = aliasVersionStatements[0];
+      assert.deepEqual(
+        statementActions(aliasVersionStatement).sort(),
+        requiredAliasVersionActions
+      );
+      assert.deepEqual(aliasVersionStatement.Resource, {
+        "Fn::Join": [
+          "",
+          [
+            "arn:",
+            { Ref: "AWS::Partition" },
+            `:lambda:${environment.region}:${environment.account}:function:${definition.functionName}`,
+          ],
+        ],
+      });
+    }
+    const permissionActions = [
+      "lambda:AddPermission",
+      "lambda:GetPolicy",
+      "lambda:RemovePermission",
+    ].sort();
+    const livePermissionStatements = cloudFormationStatements.filter((statement) => (
+      JSON.stringify(statement.Resource).includes(`function:${definition.functionName}:live`)
+    ));
+    assert.equal(
+      livePermissionStatements.length,
+      definition.name === "test" ? 1 : 0,
+      `Runtime Read ${definition.name} live permission migration has the expected environment scope`
+    );
+    if (definition.name === "test") {
+      assert.deepEqual(statementActions(livePermissionStatements[0]).sort(), permissionActions);
+      assert.deepEqual(livePermissionStatements[0].Resource, {
+        "Fn::Join": [
+          "",
+          [
+            "arn:",
+            { Ref: "AWS::Partition" },
+            `:lambda:${environment.region}:${environment.account}:function:${definition.functionName}:live`,
+          ],
+        ],
+      });
+    }
+    const qualifiedVersionReadStatements = cloudFormationStatements.filter((statement) => (
+      JSON.stringify(statement.Resource).includes(`function:${definition.functionName}:*`)
+    ));
+    assert.equal(
+      qualifiedVersionReadStatements.length,
+      definition.name === "test" ? 1 : 0,
+      `Runtime Read ${definition.name} qualified version read has the expected environment scope`
+    );
+    if (definition.name === "test") {
+      assert.deepEqual(statementActions(qualifiedVersionReadStatements[0]), [
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionScalingConfig",
+        "lambda:GetProvisionedConcurrencyConfig",
+        "lambda:GetRuntimeManagementConfig",
+      ]);
+      assert.deepEqual(qualifiedVersionReadStatements[0].Resource, {
+        "Fn::Join": [
+          "",
+          [
+            "arn:",
+            { Ref: "AWS::Partition" },
+            `:lambda:${environment.region}:${environment.account}:function:${definition.functionName}:*`,
+          ],
+        ],
+      });
+    }
+    const cloudFormationActions = cloudFormationStatements.flatMap(statementActions);
+    assert.equal(cloudFormationActions.includes("lambda:DeleteFunction"), false);
+    assert.equal(cloudFormationActions.includes("lambda:*"), false);
     const serializedCloudFormationPolicy = JSON.stringify(cloudFormationPolicy.Properties.PolicyDocument);
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.apiId));
     assert.match(serializedCloudFormationPolicy, new RegExp(definition.functionName));
@@ -500,9 +613,9 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
     const samTransformStatements = cloudFormationPolicy.Properties.PolicyDocument.Statement.filter(
       (statement) => statement.Action === "cloudformation:CreateChangeSet"
     );
-    assert.equal(samTransformStatements.length, 1, "the SAM transform grant must exist exactly once");
+    assert.equal(samTransformStatements.length, 1, "the required transform grant must exist exactly once");
     assert.notEqual(samTransformStatements[0].Resource, "*");
-    assert.deepEqual(samTransformStatements[0].Resource, {
+    const serverlessTransformResource = {
       "Fn::Join": [
         "",
         [
@@ -511,7 +624,20 @@ test("FrontendStack creates bounded Runtime Read deployment identities", () => {
           `:cloudformation:${environment.region}:aws:transform/Serverless-2016-10-31`,
         ],
       ],
-    });
+    };
+    const expectedTransformResources = definition.name === "test"
+      ? [{
+        "Fn::Join": [
+          "",
+          [
+            "arn:",
+            { Ref: "AWS::Partition" },
+            `:cloudformation:${environment.region}:aws:transform/LanguageExtensions`,
+          ],
+        ],
+      }, serverlessTransformResource]
+      : serverlessTransformResource;
+    assert.deepEqual(samTransformStatements[0].Resource, expectedTransformResources);
     assert.match(serializedCloudFormationPolicy, /iam:PutRolePermissionsBoundary/);
     const boundaryRollbackStatements = cloudFormationPolicy.Properties.PolicyDocument.Statement.filter(
       (statement) => statement.Action === "iam:DeleteRolePermissionsBoundary"
@@ -973,6 +1099,27 @@ test("production frontend stack creates guarded alias operations OIDC role", () 
       ]),
     }),
   });
+});
+
+test("test deploy workflow targets only the frontend stack", () => {
+  const workflow = readFileSync(
+    path.join(__dirname, "..", ".github", "workflows", "deploy-test.yml"),
+    "utf8"
+  );
+
+  assert.match(
+    workflow,
+    /npx cdk deploy "ZoolandingTest\/Zoolandingpage-test-Frontend" --require-approval never --exclusively/
+  );
+  assert.doesNotMatch(workflow, /ZoolandingTest\/\*/);
+  assert.match(workflow, /FRONTEND_TEST_RELEASE_ID: \$\{\{ vars\.FRONTEND_RELEASE_ID \}\}/);
+  assert.match(workflow, /GITHUB_EVENT_NAME: \$\{\{ github\.event_name \}\}/);
+  assert.match(workflow, /if \[ -z "\$FRONTEND_TEST_RELEASE_ID" \]; then/);
+  assert.match(workflow, /aws cloudformation describe-stacks/);
+  assert.match(workflow, /--stack-name "ZoolandingTest-Zoolandingpage-test-Frontend"/);
+  assert.match(workflow, /OutputKey=='FrontendReleaseId'/);
+  assert.match(workflow, /if \[ "\$GITHUB_EVENT_NAME" = "push" \]; then/);
+  assert.match(workflow, /test "\$DEPLOYED_FRONTEND_RELEASE_ID" = "\$FRONTEND_TEST_RELEASE_ID"/);
 });
 
 test("production deploy workflow passes custom domain toggle to validation and deploy", () => {

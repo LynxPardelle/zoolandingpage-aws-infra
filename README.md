@@ -12,6 +12,7 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 - CloudFront distributions for the verified certificate groups.
 - Optional Route53 alias upserts, disabled by default.
 - Retained, branch-bound GitHub OIDC and CloudFormation execution roles for Data Spaces, Commerce, Integrations, and Notifications.
+- Bounded Runtime Read deployment identities; TEST alone adds the AWS-managed `LanguageExtensions` transform and narrowly scoped alias/version permissions required by its immutable release, while production keeps its existing scope.
 
 ## What This Does Not Touch
 
@@ -33,3 +34,4 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
 Service identity scope, outputs, and independent deployment targets are in [docs/service-repository-bootstrap.md](docs/service-repository-bootstrap.md).
+The TEST frontend workflow deploys only the Frontend stack and fails closed when its immutable release ID is absent; service repository bootstrap stacks remain independent operator targets.
