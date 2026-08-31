@@ -14,7 +14,11 @@ const {
   buildResourceName,
   removalPolicyForEnvironment,
 } = require("../lib/project-helpers");
-const { environments, retiredZoolandingpageComMxAliases } = require("../config/environments");
+const {
+  buildThnAdminTestFrontDoor,
+  environments,
+  retiredZoolandingpageComMxAliases,
+} = require("../config/environments");
 
 test("cloud environments exclude dev", () => {
   assert.deepEqual(environments.map((environment) => environment.name), ["test", "production"]);
@@ -103,6 +107,159 @@ const testEnvironment = {
   },
   removalPolicy: "destroy",
 };
+
+const THN_ADMIN_HOST = "admin-test.thehairnarrative.com";
+const THN_ADMIN_INPUTS = {
+  FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true",
+  FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN:
+    "arn:aws:acm:us-east-1:123456789012:certificate/thn-admin-test",
+  FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: "ZTHNFIXTURE",
+  FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: "true",
+};
+
+const releasedTestFrontend = environments.find(
+  (environment) => environment.name === "test"
+).frontendHosting;
+const releasedTestBackendOwner = (id) => {
+  const owner = releasedTestFrontend.backendRoutes.find((backendRoute) => backendRoute.id === id);
+  return { domainName: owner.domainName, originPath: owner.originPath };
+};
+const THN_TRUSTED_TEST_API_FRONT_DOORS = {
+  apiProxy: releasedTestBackendOwner("api-proxy"),
+  authAdmin: releasedTestBackendOwner("auth-admin"),
+  contentHub: releasedTestBackendOwner("content-hub"),
+};
+
+function buildFixtureThnAdminFrontDoor(
+  source = THN_ADMIN_INPUTS,
+  trustedApiFrontDoors = THN_TRUSTED_TEST_API_FRONT_DOORS
+) {
+  return buildThnAdminTestFrontDoor(
+    source,
+    testEnvironment.account,
+    trustedApiFrontDoors
+  );
+}
+
+function releasedEnvironmentWithThnAdmin(environmentName = "test") {
+  const frontDoor = buildFixtureThnAdminFrontDoor();
+  const backendOwnerFixtures = {
+    "api-proxy": THN_TRUSTED_TEST_API_FRONT_DOORS.apiProxy,
+    "auth-admin": THN_TRUSTED_TEST_API_FRONT_DOORS.authAdmin,
+    "content-hub": THN_TRUSTED_TEST_API_FRONT_DOORS.contentHub,
+  };
+  return {
+    ...testEnvironment,
+    name: environmentName,
+    branch: environmentName === "production" ? "main" : "test",
+    stageId: environmentName === "production" ? "ZoolandingProductionFixture" : "ZoolandingTestFixture",
+    frontendHosting: {
+      ...testEnvironment.frontendHosting,
+      releaseId: "test-release",
+      manifestKey: `frontend/angular-ssr/${environmentName}/releases/test-release/manifest.json`,
+      staticPrefix: `frontend/angular-ssr/${environmentName}/releases/test-release/browser`,
+      serverBundleKey: `frontend/angular-ssr/${environmentName}/releases/test-release/server/ssr-handler.zip`,
+      backendRoutes: testEnvironment.frontendHosting.backendRoutes.map((backendRoute) => (
+        backendOwnerFixtures[backendRoute.id]
+          ? { ...backendRoute, ...backendOwnerFixtures[backendRoute.id] }
+          : backendRoute
+      )),
+      frontDoors: [testEnvironment.frontendHosting.frontDoors[0], frontDoor],
+    },
+  };
+}
+
+let thnAdminFixtureTemplate;
+
+function synthesizeThnAdminFixture() {
+  if (thnAdminFixtureTemplate) {
+    return thnAdminFixtureTemplate;
+  }
+  const environment = releasedEnvironmentWithThnAdmin();
+  const app = new cdk.App();
+  const stack = new FrontendStack(app, "TestThnAdminFrontendStack", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  thnAdminFixtureTemplate = Template.fromStack(stack);
+  return thnAdminFixtureTemplate;
+}
+
+function assertThnAdminFrontDoorRejected(mutator, expectedError) {
+  const environment = releasedEnvironmentWithThnAdmin();
+  const adminIndex = environment.frontendHosting.frontDoors.findIndex(
+    (frontDoor) => frontDoor.domainName === THN_ADMIN_HOST
+  );
+  const original = environment.frontendHosting.frontDoors[adminIndex];
+  environment.frontendHosting.frontDoors[adminIndex] = mutator({
+    ...original,
+    aliasRecordGroups: original.aliasRecordGroups.map((group) => ({
+      ...group,
+      domainNames: [...group.domainNames],
+    })),
+    backendRoutes: original.backendRoutes.map((backendRoute) => ({
+      ...backendRoute,
+      routes: backendRoute.routes.map((route) => ({
+        ...route,
+        methods: [...route.methods],
+      })),
+    })),
+    pageRoutes: original.pageRoutes.map((route) => ({
+      ...route,
+      methods: [...route.methods],
+    })),
+    staticAssetPaths: [...original.staticAssetPaths],
+  });
+
+  const app = new cdk.App();
+  assert.throws(
+    () => new FrontendStack(app, `RejectedThnAdmin${Math.random().toString(16).slice(2)}`, {
+      env: { account: environment.account, region: environment.region },
+      environment,
+    }),
+    expectedError
+  );
+}
+
+function distributionForAlias(template, alias) {
+  return Object.values(template.findResources("AWS::CloudFront::Distribution")).find((resource) =>
+    (resource.Properties.DistributionConfig.Aliases || []).includes(alias)
+  );
+}
+
+function viewerHandlerForDistribution(template, distribution) {
+  const association = distribution.Properties.DistributionConfig.DefaultCacheBehavior.FunctionAssociations.find(
+    (item) => item.EventType === "viewer-request"
+  );
+  assert.ok(association, "missing viewer-request fence");
+  const functionLogicalId = association.FunctionARN["Fn::GetAtt"][0];
+  const resources = template.toJSON().Resources;
+  const edgeFunction = resources[functionLogicalId];
+  assert.ok(edgeFunction, `missing CloudFront Function ${functionLogicalId}`);
+  const context = {};
+  vm.runInNewContext(edgeFunction.Properties.FunctionCode, context);
+  return {
+    functionArn: association.FunctionARN,
+    functionCode: edgeFunction.Properties.FunctionCode,
+    handler: context.handler,
+  };
+}
+
+function cloudFrontRequest({
+  host = THN_ADMIN_HOST,
+  method = "GET",
+  uri = "/admin/journal",
+  querystring = {},
+} = {}) {
+  return {
+    request: {
+      headers: { host: { value: host } },
+      method,
+      querystring,
+      uri,
+    },
+  };
+}
 
 test("buildResourceName prefixes Zoolandingpage environment and service", () => {
   assert.equal(
@@ -1145,4 +1302,562 @@ test("production alias ops workflow requires explicit retired alias cleanup conf
   assert.match(workflow, /confirm_cleanup/);
   assert.match(workflow, /remove-retired-zoolandingpage-aliases/);
   assert.match(workflow, /tools\/ops\/frontend-alias-ops\.mjs/);
+});
+
+test("THN admin front door stays disabled until every explicit TEST input is present", () => {
+  assert.equal(buildThnAdminTestFrontDoor({}, testEnvironment.account), null);
+
+  const frontDoor = buildFixtureThnAdminFrontDoor();
+  assert.equal(frontDoor.id, "thehairnarrative-admin-test");
+  assert.equal(frontDoor.securityProfile, "thn-admin-test");
+  assert.equal(frontDoor.domainName, THN_ADMIN_HOST);
+  assert.equal(frontDoor.certificateDomainName, THN_ADMIN_HOST);
+  assert.deepEqual(frontDoor.alternateDomainNames, []);
+  assert.equal(frontDoor.route53RecordsEnabled, true);
+  assert.deepEqual(frontDoor.aliasRecordGroups, [
+    {
+      hostedZoneName: "thehairnarrative.com",
+      hostedZoneId: "ZTHNFIXTURE",
+      domainNames: [THN_ADMIN_HOST],
+    },
+  ]);
+  assert.deepEqual(frontDoor.staticAssetPaths, []);
+  assert.equal(frontDoor.route53RecordManagement, "create-only");
+});
+
+test("THN admin inputs fail closed on missing or non-exact certificate coordinates", () => {
+  assert.throws(
+    () => buildThnAdminTestFrontDoor({ FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true" }, testEnvironment.account),
+    /FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN/
+  );
+  assert.throws(
+    () => buildThnAdminTestFrontDoor({
+      ...THN_ADMIN_INPUTS,
+      FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN:
+        "arn:aws:acm:us-west-2:123456789012:certificate/thn-admin-test",
+    }, testEnvironment.account),
+    /us-east-1/
+  );
+  assert.throws(
+    () => buildThnAdminTestFrontDoor({
+      ...THN_ADMIN_INPUTS,
+      FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN:
+        "arn:aws:acm:us-east-1:999999999999:certificate/thn-admin-test",
+    }, testEnvironment.account),
+    /AWS account 123456789012/
+  );
+  assert.throws(
+    () => buildFixtureThnAdminFrontDoor(THN_ADMIN_INPUTS, {
+      ...THN_TRUSTED_TEST_API_FRONT_DOORS,
+      authAdmin: {
+        ...THN_TRUSTED_TEST_API_FRONT_DOORS.authAdmin,
+        domainName: "https://auth-v2.example.com",
+      },
+    }),
+    /bare HTTPS origin domain name/
+  );
+  assert.throws(
+    () => buildFixtureThnAdminFrontDoor(THN_ADMIN_INPUTS, {
+      ...THN_TRUSTED_TEST_API_FRONT_DOORS,
+      authAdmin: {
+        ...THN_TRUSTED_TEST_API_FRONT_DOORS.authAdmin,
+        domainName: "attacker.example",
+      },
+    }),
+    /exact regional API Gateway origin/
+  );
+  assert.throws(
+    () => buildFixtureThnAdminFrontDoor(THN_ADMIN_INPUTS, {
+      ...THN_TRUSTED_TEST_API_FRONT_DOORS,
+      contentHub: {
+        ...THN_TRUSTED_TEST_API_FRONT_DOORS.contentHub,
+        originPath: "//test",
+      },
+    }),
+    /absolute path/
+  );
+});
+
+test("production configuration contains no THN admin origin, alias, certificate, or v2 route", () => {
+  const production = environments.find((environment) => environment.name === "production");
+  assert.ok(production);
+  assert.doesNotMatch(JSON.stringify(production), /admin-test\.thehairnarrative\.com/);
+  assert.doesNotMatch(JSON.stringify(production), /auth-v2|content-hub-v2/);
+});
+
+test("THN admin front doors cannot be synthesized outside TEST", () => {
+  const environment = releasedEnvironmentWithThnAdmin("production");
+  const app = new cdk.App();
+  assert.throws(
+    () => new FrontendStack(app, "RejectedProductionThnAdminStack", {
+      env: { account: environment.account, region: environment.region },
+      environment,
+    }),
+    /THN admin front door is TEST-only/
+  );
+});
+
+test("THN exact admin host and security profile cannot be separated", () => {
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({ ...frontDoor, securityProfile: undefined }),
+    /exact THN admin host and thn-admin-test security profile must be configured together/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({ ...frontDoor, domainName: "other.example.com" }),
+    /exact THN admin host and thn-admin-test security profile must be configured together/
+  );
+
+  const environment = releasedEnvironmentWithThnAdmin();
+  environment.frontendHosting.frontDoors[0] = {
+    ...environment.frontendHosting.frontDoors[0],
+    alternateDomainNames: [THN_ADMIN_HOST],
+  };
+  const app = new cdk.App();
+  assert.throws(
+    () => new FrontendStack(app, "RejectedThnAdminAlternateAlias", {
+      env: { account: environment.account, region: environment.region },
+      environment,
+    }),
+    /exact THN admin host and thn-admin-test security profile must be configured together/
+  );
+
+  const uppercaseEnvironment = releasedEnvironmentWithThnAdmin();
+  uppercaseEnvironment.frontendHosting.frontDoors[0] = {
+    ...uppercaseEnvironment.frontendHosting.frontDoors[0],
+    alternateDomainNames: [THN_ADMIN_HOST.toUpperCase()],
+  };
+  const uppercaseApp = new cdk.App();
+  assert.throws(
+    () => new FrontendStack(uppercaseApp, "RejectedUppercaseThnAdminAlias", {
+      env: { account: uppercaseEnvironment.account, region: uppercaseEnvironment.region },
+      environment: uppercaseEnvironment,
+    }),
+    /exact THN admin host and thn-admin-test security profile must be configured together/
+  );
+
+  const wildcardEnvironment = releasedEnvironmentWithThnAdmin();
+  wildcardEnvironment.frontendHosting.frontDoors[0] = {
+    ...wildcardEnvironment.frontendHosting.frontDoors[0],
+    alternateDomainNames: ["*.thehairnarrative.com"],
+  };
+  const wildcardApp = new cdk.App();
+  assert.throws(
+    () => new FrontendStack(wildcardApp, "RejectedWildcardThnAdminAlias", {
+      env: { account: wildcardEnvironment.account, region: wildcardEnvironment.region },
+      environment: wildcardEnvironment,
+    }),
+    /exact THN admin host and thn-admin-test security profile must be configured together/
+  );
+});
+
+test("THN admin certificate, DNS, HSTS, route, and asset contracts fail closed", () => {
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({ ...frontDoor, certificateVerification: undefined }),
+    /exact certificate CN\/SAN preflight verification/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({ ...frontDoor, route53RecordManagement: "upsert" }),
+    /create-only Route 53 record management/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      hsts: { ...frontDoor.hsts, includeSubdomains: true },
+    }),
+    /bounded host-only HSTS/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      pageRoutes: [
+        ...frontDoor.pageRoutes,
+        { path: "/admin/journal/:slug/edit", methods: ["GET"] },
+      ],
+    }),
+    /duplicate path shape/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({ ...frontDoor, staticAssetPaths: ["/assets/admin.js"] }),
+    /exact manifest-hashed files/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      staticAssetPaths: ["/assets/../admin.12345678.js"],
+    }),
+    /exact absolute path/
+  );
+});
+
+test("THN admin page and backend route inventories are sealed exactly", () => {
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      pageRoutes: frontDoor.pageRoutes.filter(
+        (route) => route.path !== "/admin/journal/mfa"
+      ),
+    }),
+    /exact approved page route inventory/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      backendRoutes: frontDoor.backendRoutes.map((backendRoute) => (
+        backendRoute.id === "thn-admin-auth-v2"
+          ? {
+            ...backendRoute,
+            routes: [
+              ...backendRoute.routes,
+              { path: "/auth-v2/session/debug", methods: ["GET"] },
+            ],
+          }
+          : backendRoute
+      )),
+    }),
+    /exact approved routes for thn-admin-auth-v2/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      backendRoutes: frontDoor.backendRoutes.map((backendRoute) => (
+        backendRoute.id === "thn-admin-content-hub-v2"
+          ? { ...backendRoute, id: "thn-admin-content-hub-debug" }
+          : backendRoute
+      )),
+    }),
+    /exact approved backend owner inventory/
+  );
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      backendRoutes: frontDoor.backendRoutes.map((backendRoute) => (
+        backendRoute.id === "thn-admin-auth-v2"
+          ? {
+            ...backendRoute,
+            domainName: "attacker123.execute-api.us-east-1.amazonaws.com",
+            originPath: "/evil",
+          }
+          : backendRoute
+      )),
+    }),
+    /must use the verified TEST coordinates owned by auth-admin/
+  );
+
+  const coordinatedDriftEnvironment = releasedEnvironmentWithThnAdmin();
+  coordinatedDriftEnvironment.frontendHosting.backendRoutes =
+    coordinatedDriftEnvironment.frontendHosting.backendRoutes.map((backendRoute) => (
+      backendRoute.id === "auth-admin"
+        ? {
+          ...backendRoute,
+          domainName: "attacker123.execute-api.us-east-1.amazonaws.com",
+          originPath: "/evil",
+        }
+        : backendRoute
+    ));
+  coordinatedDriftEnvironment.frontendHosting.frontDoors =
+    coordinatedDriftEnvironment.frontendHosting.frontDoors.map((frontDoor) => (
+      frontDoor.domainName === THN_ADMIN_HOST
+        ? {
+          ...frontDoor,
+          backendRoutes: frontDoor.backendRoutes.map((backendRoute) => (
+            backendRoute.id === "thn-admin-auth-v2"
+              ? {
+                ...backendRoute,
+                domainName: "attacker123.execute-api.us-east-1.amazonaws.com",
+                originPath: "/evil",
+              }
+              : backendRoute
+          )),
+        }
+        : frontDoor
+    ));
+  const coordinatedDriftApp = new cdk.App();
+  assert.throws(
+    () => new FrontendStack(coordinatedDriftApp, "RejectedCoordinatedOwnerDrift", {
+      env: {
+        account: coordinatedDriftEnvironment.account,
+        region: coordinatedDriftEnvironment.region,
+      },
+      environment: coordinatedDriftEnvironment,
+    }),
+    /does not match the immutable TEST owner seal/
+  );
+});
+
+test("THN admin refuses a route inventory that exceeds the CloudFront Function quota", () => {
+  assertThnAdminFrontDoorRejected(
+    (frontDoor) => ({
+      ...frontDoor,
+      staticAssetPaths: Array.from(
+        { length: 500 },
+        (_, index) => `/assets/admin.${String(index).padStart(8, "0")}.js`
+      ),
+    }),
+    /exceeds the CloudFront Function 10 KiB code limit/
+  );
+});
+
+test("THN admin distribution does not inherit public static or v1 backend behaviors", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  assert.ok(admin);
+  const patterns = (admin.Properties.DistributionConfig.CacheBehaviors || []).map(
+    (behavior) => behavior.PathPattern
+  );
+  for (const forbidden of [
+    "assets/*",
+    "*.js",
+    "*.css",
+    "*.svg",
+    "auth/session",
+    "auth/session/*",
+    "auth/admin",
+    "auth/admin/*",
+    "auth/runtime-config",
+    "features/content-hub/*",
+    "api-proxy/*",
+  ]) {
+    assert.equal(patterns.includes(forbidden), false, `admin distribution inherited ${forbidden}`);
+  }
+
+  const publicDistribution = distributionForAlias(template, "dev.zoolandingpage.com.mx");
+  assert.ok(publicDistribution);
+  const publicPatterns = publicDistribution.Properties.DistributionConfig.CacheBehaviors.map(
+    (behavior) => behavior.PathPattern
+  );
+  assert.ok(publicPatterns.includes("assets/*"));
+  assert.ok(publicPatterns.includes("auth/session/*"));
+  assert.equal(publicPatterns.includes("auth-v2/runtime-config"), false);
+  assert.equal(publicPatterns.includes("features/content-hub-v2/read"), false);
+});
+
+test("THN admin distribution routes only the exact v2 backend inventory", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  assert.ok(admin);
+  const patterns = admin.Properties.DistributionConfig.CacheBehaviors.map(
+    (behavior) => behavior.PathPattern
+  ).sort();
+  assert.deepEqual(patterns, [
+    "auth-v2/runtime-config",
+    "auth-v2/session/challenge/respond",
+    "auth-v2/session/logout",
+    "auth-v2/session/me",
+    "auth-v2/session/mfa/setup",
+    "auth-v2/session/mfa/verify",
+    "auth-v2/session/signin",
+    "features/content-hub-v2/action",
+    "features/content-hub-v2/read",
+  ].sort());
+});
+
+test("THN admin viewer fence is attached to the default and every ordered behavior", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  assert.ok(admin);
+  const config = admin.Properties.DistributionConfig;
+  const behaviors = [config.DefaultCacheBehavior, ...(config.CacheBehaviors || [])];
+  const functionArns = behaviors.map((behavior) => {
+    assert.deepEqual(
+      behavior.AllowedMethods,
+      ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"],
+      "the viewer fence must receive every method so it can return the contract 405"
+    );
+    const association = behavior.FunctionAssociations.find((item) => item.EventType === "viewer-request");
+    assert.ok(association);
+    return JSON.stringify(association.FunctionARN);
+  });
+  assert.equal(new Set(functionArns).size, 1);
+});
+
+test("THN admin viewer fence rejects foreign hosts and draft-selected context with 404", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  for (const host of [
+    "test.zoolandingpage.com.mx",
+    "another-draft.example.com",
+    "d111111abcdef8.cloudfront.net",
+    "",
+  ]) {
+    assert.equal(handler(cloudFrontRequest({ host })).statusCode, 404, host || "empty host");
+  }
+  for (const queryKey of ["draftDomain", "DRAFTDOMAIN", "draft%44omain"]) {
+    const result = handler(cloudFrontRequest({
+      querystring: { [queryKey]: { value: "thehairnarrative.com" } },
+    }));
+    assert.equal(result.statusCode, 404);
+  }
+});
+
+test("THN admin viewer fence allows only reviewed page shapes", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  for (const uri of [
+    "/admin/journal/access",
+    "/admin/journal/mfa",
+    "/admin/journal",
+    "/admin/journal/new",
+    "/admin/journal/article-123/edit",
+    "/admin/journal/article-123/preview",
+  ]) {
+    const result = handler(cloudFrontRequest({ uri, querystring: { lang: { value: "es" } } }));
+    assert.equal(result.statusCode, undefined, uri);
+    assert.equal(result.headers["x-forwarded-host"].value, THN_ADMIN_HOST);
+  }
+});
+
+test("THN admin viewer fence allows only the exact safe language query on pages", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  for (const value of ["en", "es"]) {
+    const result = handler(cloudFrontRequest({
+      querystring: { lang: { value } },
+    }));
+    assert.equal(result.statusCode, undefined, value);
+  }
+  for (const querystring of [
+    { returnUrl: { value: "/admin/journal" } },
+    { Lang: { value: "en" } },
+    { lang: { value: "fr" } },
+    { lang: { value: "en", multiValue: [{ value: "en" }] } },
+    { lang: { value: "en" }, other: { value: "value" } },
+  ]) {
+    assert.equal(handler(cloudFrontRequest({ querystring })).statusCode, 404);
+  }
+  assert.equal(handler(cloudFrontRequest({
+    method: "POST",
+    uri: "/features/content-hub-v2/read",
+    querystring: { lang: { value: "en" } },
+  })).statusCode, 404);
+});
+
+test("THN admin viewer fence bounds article identifiers and removes viewer proxy headers", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  const overlongArticleId = "a".repeat(129);
+  assert.equal(handler(cloudFrontRequest({
+    uri: `/admin/journal/${overlongArticleId}/edit`,
+  })).statusCode, 404);
+
+  const event = cloudFrontRequest();
+  event.request.headers.forwarded = { value: "for=attacker.example" };
+  event.request.headers["x-forwarded-for"] = { value: "203.0.113.10" };
+  event.request.headers["x-forwarded-port"] = { value: "81" };
+  event.request.headers["x-forwarded-host"] = { value: "attacker.example" };
+  const result = handler(event);
+  assert.equal(result.statusCode, undefined);
+  assert.equal(result.headers.forwarded, undefined);
+  assert.equal(result.headers["x-forwarded-for"], undefined);
+  assert.equal(result.headers["x-forwarded-port"], undefined);
+  assert.equal(result.headers["x-forwarded-host"].value, THN_ADMIN_HOST);
+});
+
+test("THN admin viewer fence returns 404 for public, v1, malformed, and non-manifest paths", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  for (const uri of [
+    "/",
+    "/the-journal",
+    "/the-narrative",
+    "/admin",
+    "/admin/journal/",
+    "/admin/journal/../edit",
+    "/admin/journal/article-123/edit/extra",
+    "/auth/session",
+    "/auth-v2/session/unknown",
+    "/features/content-hub/read",
+    "/features/content-hub-v2/public-media/article/en/revision/asset/variant",
+    "/main.not-in-manifest.js",
+    "/assets/not-in-manifest.svg",
+  ]) {
+    assert.equal(handler(cloudFrontRequest({ uri })).statusCode, 404, uri);
+  }
+});
+
+test("THN admin viewer fence enforces the exact API method matrix", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  const allowed = [
+    ["GET", "/auth-v2/runtime-config"],
+    ["POST", "/auth-v2/runtime-config"],
+    ["POST", "/auth-v2/session/signin"],
+    ["POST", "/auth-v2/session/challenge/respond"],
+    ["POST", "/auth-v2/session/mfa/setup"],
+    ["POST", "/auth-v2/session/mfa/verify"],
+    ["GET", "/auth-v2/session/me"],
+    ["POST", "/auth-v2/session/logout"],
+    ["POST", "/features/content-hub-v2/read"],
+    ["POST", "/features/content-hub-v2/action"],
+  ];
+  for (const [method, uri] of allowed) {
+    const result = handler(cloudFrontRequest({ method, uri }));
+    assert.equal(result.statusCode, undefined, `${method} ${uri}`);
+  }
+  for (const [method, uri] of [
+    ["POST", "/admin/journal"],
+    ["HEAD", "/admin/journal"],
+    ["GET", "/auth-v2/session/signin"],
+    ["DELETE", "/auth-v2/session/me"],
+    ["GET", "/features/content-hub-v2/action"],
+    ["OPTIONS", "/auth-v2/runtime-config"],
+    ["get", "/admin/journal"],
+  ]) {
+    const result = handler(cloudFrontRequest({ method, uri }));
+    assert.equal(result.statusCode, 405, `${method} ${uri}`);
+    assert.ok(result.headers.allow.value);
+  }
+});
+
+test("THN admin viewer fence remains below the CloudFront Function size quota", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { functionCode } = viewerHandlerForDistribution(template, admin);
+  assert.ok(Buffer.byteLength(functionCode, "utf8") < 10 * 1024);
+});
+
+test("THN admin distribution has exact TLS, HTTPS, and host-only HSTS controls", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  assert.ok(admin);
+  const config = admin.Properties.DistributionConfig;
+  assert.deepEqual(config.Aliases, [THN_ADMIN_HOST]);
+  assert.equal(config.ViewerCertificate.MinimumProtocolVersion, "TLSv1.2_2021");
+  assert.equal(config.ViewerCertificate.SslSupportMethod, "sni-only");
+  for (const behavior of [config.DefaultCacheBehavior, ...(config.CacheBehaviors || [])]) {
+    assert.equal(behavior.ViewerProtocolPolicy, "redirect-to-https");
+  }
+
+  const policyLogicalId = config.DefaultCacheBehavior.ResponseHeadersPolicyId.Ref;
+  const policy = template.toJSON().Resources[policyLogicalId];
+  assert.ok(policy);
+  const hsts = policy.Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.StrictTransportSecurity;
+  assert.equal(hsts.AccessControlMaxAgeSec, 2_592_000);
+  assert.equal(hsts.IncludeSubdomains, false);
+  assert.equal(hsts.Preload, false);
+  assert.equal(hsts.Override, true);
+});
+
+test("THN admin Route53 operation creates only its exact TEST A and AAAA aliases", () => {
+  const template = synthesizeThnAdminFixture();
+  const resources = template.findResources("Custom::ZoolandingFrontendAliasRecords");
+  const thnResource = Object.values(resources).find((resource) =>
+    JSON.stringify(resource.Properties).includes(THN_ADMIN_HOST)
+  );
+  assert.ok(thnResource);
+  const payload = JSON.stringify(thnResource.Properties);
+  assert.match(payload, /ZTHNFIXTURE/);
+  assert.match(payload, /admin-test\.thehairnarrative\.com\./);
+  assert.ok(payload.includes('\\"Type\\":\\"A\\"'));
+  assert.ok(payload.includes('\\"Type\\":\\"AAAA\\"'));
+  assert.ok(payload.includes('\\"Action\\":\\"CREATE\\"'));
+  assert.equal(payload.includes('\\"Action\\":\\"UPSERT\\"'), false);
+  assert.equal(Object.hasOwn(thnResource.Properties, "Update"), false);
+  assert.doesNotMatch(payload, /test\.zoolandingpage\.com\.mx/);
+  assert.doesNotMatch(payload, /production/i);
 });

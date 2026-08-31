@@ -129,6 +129,9 @@ const backendApiFrontDoors = {
   },
 };
 
+const thnAdminTestHost = "admin-test.thehairnarrative.com";
+const thnAdminHostedZoneName = "thehairnarrative.com";
+
 const productionCustomDomainNamesEnabled = parseBooleanFlag(
   process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED ||
     process.env.FRONTEND_CUSTOM_DOMAIN_NAMES_ENABLED
@@ -252,6 +255,170 @@ function buildBackendRoutes(environmentName) {
   ];
 }
 
+function buildThnAdminTestFrontDoor(
+  source = process.env,
+  account = environmentDefaults.account,
+  trustedApiFrontDoors = backendApiFrontDoors.test
+) {
+  if (!parseBooleanFlag(source.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED)) {
+    return null;
+  }
+
+  const certificateArn = requiredInput(source, "FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN");
+  const certificatePrefix = `arn:aws:acm:us-east-1:${account}:certificate/`;
+  const certificateId = certificateArn.slice(certificatePrefix.length);
+  if (!certificateArn.startsWith(certificatePrefix) || !/^[a-zA-Z0-9-]+$/.test(certificateId)) {
+    throw new Error(
+      `FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN must be an ACM certificate in us-east-1 for AWS account ${account}.`
+    );
+  }
+
+  const hostedZoneId = requiredInput(source, "FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID");
+  if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
+    throw new Error("FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID must be an exact public Route 53 hosted zone ID.");
+  }
+
+  const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "apiProxy");
+  const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "authAdmin");
+  const contentHubOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "contentHub");
+
+  return {
+    id: "thehairnarrative-admin-test",
+    securityProfile: "thn-admin-test",
+    domainName: thnAdminTestHost,
+    alternateDomainNames: [],
+    customDomainNamesEnabled: true,
+    certificateArn,
+    certificateDomainName: thnAdminTestHost,
+    certificateVerification: "exact-cn-san-preflight-required",
+    minimumProtocolVersion: "TLSv1.2_2021",
+    route53RecordsEnabled: parseBooleanFlag(
+      source.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED
+    ),
+    route53RecordManagement: "create-only",
+    aliasRecordGroups: [
+      {
+        hostedZoneName: thnAdminHostedZoneName,
+        hostedZoneId,
+        domainNames: [thnAdminTestHost],
+      },
+    ],
+    hsts: {
+      maxAgeSeconds: 2_592_000,
+      includeSubdomains: false,
+      preload: false,
+    },
+    pageRoutes: [
+      { path: "/admin/journal/access", methods: ["GET"] },
+      { path: "/admin/journal/mfa", methods: ["GET"] },
+      { path: "/admin/journal", methods: ["GET"] },
+      { path: "/admin/journal/new", methods: ["GET"] },
+      { path: "/admin/journal/:articleId/edit", methods: ["GET"] },
+      { path: "/admin/journal/:articleId/preview", methods: ["GET"] },
+    ],
+    staticAssetPaths: [],
+    backendRoutes: [
+      {
+        id: "thn-admin-auth-runtime-v2",
+        domainName: authRuntimeOrigin.domainName,
+        originPath: authRuntimeOrigin.originPath,
+        routes: [
+          { path: "/auth-v2/runtime-config", methods: ["GET", "POST"] },
+        ],
+      },
+      {
+        id: "thn-admin-auth-v2",
+        domainName: authOrigin.domainName,
+        originPath: authOrigin.originPath,
+        routes: [
+          { path: "/auth-v2/session/signin", methods: ["POST"] },
+          { path: "/auth-v2/session/challenge/respond", methods: ["POST"] },
+          { path: "/auth-v2/session/mfa/setup", methods: ["POST"] },
+          { path: "/auth-v2/session/mfa/verify", methods: ["POST"] },
+          { path: "/auth-v2/session/me", methods: ["GET"] },
+          { path: "/auth-v2/session/logout", methods: ["POST"] },
+        ],
+      },
+      {
+        id: "thn-admin-content-hub-v2",
+        domainName: contentHubOrigin.domainName,
+        originPath: contentHubOrigin.originPath,
+        routes: [
+          { path: "/features/content-hub-v2/read", methods: ["POST"] },
+          { path: "/features/content-hub-v2/action", methods: ["POST"] },
+        ],
+      },
+    ],
+  };
+}
+
+function requiredInput(source, name) {
+  const value = String(source[name] || "").trim();
+  if (!value) {
+    throw new Error(`${name} is required when FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED=true.`);
+  }
+  return value;
+}
+
+function requiredOwnedApiOrigin(trustedApiFrontDoors, ownerKey) {
+  const owner = trustedApiFrontDoors && trustedApiFrontDoors[ownerKey];
+  if (!owner) {
+    throw new Error(`Missing verified TEST API owner coordinates for ${ownerKey}.`);
+  }
+  return {
+    domainName: requiredOriginDomain(owner.domainName, `${ownerKey}.domainName`),
+    originPath: requiredOriginPath(owner.originPath, `${ownerKey}.originPath`),
+  };
+}
+
+function requiredOriginDomain(value, name) {
+  const domainName = String(value || "").trim().toLowerCase();
+  const labels = domainName.split(".");
+  if (
+    domainName.length > 253
+    || labels.length < 2
+    || labels.some((label) => (
+      !label
+      || label.length > 63
+      || !/^[a-z0-9-]+$/.test(label)
+      || label.startsWith("-")
+      || label.endsWith("-")
+    ))
+  ) {
+    throw new Error(`${name} must be a bare HTTPS origin domain name.`);
+  }
+  const apiGatewaySuffix = `.execute-api.${defaultRegion}.amazonaws.com`;
+  const apiId = domainName.slice(0, -apiGatewaySuffix.length);
+  if (!domainName.endsWith(apiGatewaySuffix) || !/^[a-z0-9]+$/.test(apiId)) {
+    throw new Error(`${name} must be an exact regional API Gateway origin in ${defaultRegion}.`);
+  }
+  return domainName;
+}
+
+function requiredOriginPath(value, name) {
+  const originPath = String(value || "").trim();
+  const segments = originPath.split("/").slice(1);
+  if (
+    !originPath.startsWith("/")
+    || originPath.includes("//")
+    || originPath.includes("\\")
+    || originPath.includes("%")
+    || originPath.includes("?")
+    || originPath.includes("#")
+    || segments.some((segment) => (
+      !segment
+      || segment === "."
+      || segment === ".."
+      || !/^[a-zA-Z0-9._~-]+$/.test(segment)
+    ))
+  ) {
+    throw new Error(`${name} must be an absolute path without a query or fragment.`);
+  }
+  return originPath.replace(/\/+$/, "") || "/";
+}
+
+const thnAdminTestFrontDoor = buildThnAdminTestFrontDoor();
+
 const environments = [
   {
     ...environmentDefaults,
@@ -275,6 +442,7 @@ const environments = [
             },
           ],
         },
+        ...(thnAdminTestFrontDoor ? [thnAdminTestFrontDoor] : []),
       ],
     },
     removalPolicy: "destroy",
@@ -393,6 +561,7 @@ function parseBooleanFlag(value) {
 }
 
 module.exports = {
+  buildThnAdminTestFrontDoor,
   environments,
   expectedAccount,
   defaultRegion,
