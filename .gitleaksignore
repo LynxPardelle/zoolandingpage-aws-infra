@@ -1,0 +1,4 @@
+# Exact historical SHA-256 ownership seals, compared with computed role hashes.
+# These public checksums are not API keys or runtime credentials.
+f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:452
+f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:453
