@@ -250,8 +250,10 @@ function cloudFrontRequest({
   method = "GET",
   uri = "/admin/journal",
   querystring = {},
+  viewerIp = "198.51.100.42",
 } = {}) {
   return {
+    viewer: { ip: viewerIp },
     request: {
       headers: { host: { value: host } },
       method,
@@ -1263,20 +1265,47 @@ test("test deploy workflow targets only the frontend stack", () => {
     path.join(__dirname, "..", ".github", "workflows", "deploy-test.yml"),
     "utf8"
   );
-
-  assert.match(
-    workflow,
-    /npx cdk deploy "ZoolandingTest\/Zoolandingpage-test-Frontend" --require-approval never --exclusively/
+  const runner = readFileSync(
+    path.join(__dirname, "..", "tools", "run-test-infra-change-set.sh"),
+    "utf8"
   );
+
+  assert.match(workflow, /STACK_PATH: ZoolandingTest\/Zoolandingpage-test-Frontend/);
+  assert.match(workflow, /STACK_NAME: ZoolandingTest-Zoolandingpage-test-Frontend/);
+  assert.match(runner, /EXPECTED_STACK="ZoolandingTest-Zoolandingpage-test-Frontend"/);
+  assert.match(runner, /EXPECTED_STACK_PATH="ZoolandingTest\/Zoolandingpage-test-Frontend"/);
+  assert.match(runner, /--method prepare-change-set/);
+  assert.match(runner, /--require-approval never/);
+  assert.match(runner, /--exclusively/);
   assert.doesNotMatch(workflow, /ZoolandingTest\/\*/);
   assert.match(workflow, /FRONTEND_TEST_RELEASE_ID: \$\{\{ vars\.FRONTEND_RELEASE_ID \}\}/);
-  assert.match(workflow, /GITHUB_EVENT_NAME: \$\{\{ github\.event_name \}\}/);
-  assert.match(workflow, /if \[ -z "\$FRONTEND_TEST_RELEASE_ID" \]; then/);
+  assert.match(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);
+  assert.match(workflow, /test -n "\$FRONTEND_TEST_RELEASE_ID"/);
   assert.match(workflow, /aws cloudformation describe-stacks/);
   assert.match(workflow, /--stack-name "ZoolandingTest-Zoolandingpage-test-Frontend"/);
   assert.match(workflow, /OutputKey=='FrontendReleaseId'/);
-  assert.match(workflow, /if \[ "\$GITHUB_EVENT_NAME" = "push" \]; then/);
-  assert.match(workflow, /test "\$DEPLOYED_FRONTEND_RELEASE_ID" = "\$FRONTEND_TEST_RELEASE_ID"/);
+  assert.match(workflow, /if \[ "\$EVENT_NAME" = "push" \]; then/);
+  assert.match(workflow, /test "\$deployed_release" = "\$FRONTEND_TEST_RELEASE_ID"/);
+});
+
+test("test deploy workflow injects the THN Auth Admin origin proof without storing it", () => {
+  const workflow = readFileSync(
+    path.join(__dirname, "..", ".github", "workflows", "deploy-test.yml"),
+    "utf8"
+  );
+  const runner = readFileSync(
+    path.join(__dirname, "..", "tools", "run-test-infra-change-set.sh"),
+    "utf8"
+  );
+
+  assert.match(
+    workflow,
+    /THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: \$\{\{ secrets\.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET \}\}/
+  );
+  assert.match(workflow, /if \[ "\$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true" \]; then/);
+  assert.match(runner, /ThnAdminAuthAdminOriginVerifySecret=\$THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET/);
+  assert.doesNotMatch(workflow, /THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET:\s*[A-Za-z0-9_-]{43}/);
+  assert.doesNotMatch(runner, /THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET=[A-Za-z0-9_-]{43}/);
 });
 
 test("production deploy workflow passes custom domain toggle to validation and deploy", () => {
@@ -1651,6 +1680,44 @@ test("THN admin distribution routes only the exact v2 backend inventory", () => 
   ].sort());
 });
 
+test("THN admin Auth Admin origin alone receives a NoEcho proof parameter", () => {
+  const template = synthesizeThnAdminFixture();
+  const json = template.toJSON();
+  const parameter = json.Parameters.ThnAdminAuthAdminOriginVerifySecret;
+  assert.ok(parameter);
+  assert.equal(parameter.Type, "String");
+  assert.equal(parameter.NoEcho, true);
+  assert.equal(parameter.MinLength, 43);
+  assert.equal(parameter.MaxLength, 43);
+  assert.equal(parameter.AllowedPattern, "^[A-Za-z0-9_-]{43}$");
+  assert.equal(Object.hasOwn(parameter, "Default"), false);
+
+  const distributions = Object.values(
+    template.findResources("AWS::CloudFront::Distribution")
+  );
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const authBehavior = admin.Properties.DistributionConfig.CacheBehaviors.find(
+    (behavior) => behavior.PathPattern === "auth-v2/session/signin"
+  );
+  assert.ok(authBehavior);
+
+  const originsWithProof = distributions.flatMap((distribution) =>
+    (distribution.Properties.DistributionConfig.Origins || []).filter((origin) =>
+      (origin.OriginCustomHeaders || []).some(
+        (header) => header.HeaderName === "x-zlp-origin-verify"
+      )
+    )
+  );
+  assert.equal(originsWithProof.length, 1);
+  assert.equal(originsWithProof[0].Id, authBehavior.TargetOriginId);
+  assert.deepEqual(originsWithProof[0].OriginCustomHeaders, [
+    {
+      HeaderName: "x-zlp-origin-verify",
+      HeaderValue: { Ref: "ThnAdminAuthAdminOriginVerifySecret" },
+    },
+  ]);
+});
+
 test("THN admin viewer fence is attached to the default and every ordered behavior", () => {
   const template = synthesizeThnAdminFixture();
   const admin = distributionForAlias(template, THN_ADMIN_HOST);
@@ -1748,12 +1815,25 @@ test("THN admin viewer fence bounds article identifiers and removes viewer proxy
   event.request.headers["x-forwarded-for"] = { value: "203.0.113.10" };
   event.request.headers["x-forwarded-port"] = { value: "81" };
   event.request.headers["x-forwarded-host"] = { value: "attacker.example" };
+  event.request.headers["x-zlp-viewer-ip"] = { value: "192.0.2.99" };
+  event.viewer.ip = "2001:db8::42";
   const result = handler(event);
   assert.equal(result.statusCode, undefined);
   assert.equal(result.headers.forwarded, undefined);
   assert.equal(result.headers["x-forwarded-for"], undefined);
   assert.equal(result.headers["x-forwarded-port"], undefined);
   assert.equal(result.headers["x-forwarded-host"].value, THN_ADMIN_HOST);
+  assert.equal(result.headers["x-zlp-viewer-ip"].value, "2001:db8::42");
+});
+
+test("THN admin viewer fence fails closed when CloudFront supplies no viewer IP", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  const event = cloudFrontRequest();
+  delete event.viewer;
+
+  assert.equal(handler(event).statusCode, 404);
 });
 
 test("THN admin viewer fence returns 404 for public, v1, malformed, and non-manifest paths", () => {

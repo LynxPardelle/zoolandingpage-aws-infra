@@ -35,3 +35,27 @@ See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
 Service identity scope, outputs, and independent deployment targets are in [docs/service-repository-bootstrap.md](docs/service-repository-bootstrap.md).
 The TEST frontend workflow deploys only the Frontend stack and fails closed when its immutable release ID is absent; service repository bootstrap stacks remain independent operator targets.
+
+## TEST Frontend Delivery Guardrails
+
+The TEST frontend deploy and rollback workflows use an immutable CDK assembly
+produced by an unprivileged validation job. The credential-bearing job accepts
+only that artifact, prepares an `UPDATE` change set for the exact TEST Frontend
+stack, reviews it, and executes its immutable ARN only after the review passes.
+The workflow, assumed role, stack ARN, and change-set ARN are all pinned to AWS
+account `765932874577` in `us-east-1`; the credential-bearing job verifies its
+STS caller identity before it can inspect or mutate CloudFormation.
+
+Activating `admin-test.thehairnarrative.com` requires both manual approvals:
+
+- TEST DNS, TLS, and CloudFront distribution.
+- TEST route association with the shared SSR Lambda.
+
+Both approvals default to false and must be supplied together through a manual
+dispatch. The reviewer rejects production aliases, deletion, replacement,
+unapproved THN admin changes, and collateral SSR changes. The generated
+`CDKMetadata` analytics update is the only nonfunctional bookkeeping exception.
+Rollback requires the recorded source run, artifact ID, source SHA, and manifest
+digest from a successful `Deploy Test` run.
+
+See [changelog/2026-09-04-test-infra-delivery-hardening.md](changelog/2026-09-04-test-infra-delivery-hardening.md).

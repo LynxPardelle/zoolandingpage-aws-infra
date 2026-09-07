@@ -1,98 +1,347 @@
 name: Deploy Test
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - test
+    branches: [test]
+  workflow_dispatch:
+    inputs:
+      approve_thn_admin_dns_tls_distribution:
+        description: Approve only the TEST DNS, TLS, and distribution boundary for admin-test.thehairnarrative.com
+        required: true
+        default: false
+        type: boolean
+      approve_thn_admin_route_association:
+        description: Approve only the TEST route association for the THN admin origin
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: zoolandingpage-aws-infra-test-frontend
+  cancel-in-progress: false
 
 jobs:
-  guard:
+  validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.identity.outputs.name }}
+      manifest_digest: ${{ steps.manifest.outputs.digest }}
+    env:
+      EXPECTED_AWS_ACCOUNT_ID: "765932874577"
+      EXPECTED_AWS_REGION: us-east-1
+      ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
+      ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
+      FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+      FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
+      FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: ${{ vars.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN }}
+      FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: ${{ vars.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID }}
+      FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED || 'false' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
 
-      - name: Require dev merge
+      - name: Verify exact TEST promotion context
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          PUSH_FORCED: ${{ github.event.forced || false }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_NAME}" != "test" ]; then
-            echo "::error::Deploying test requires running from the test branch."
-            exit 1
-          fi
-          git fetch origin dev test
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "release_sha_invalid"; exit 1; }
+          test "$GITHUB_REF" = "refs/heads/test"
+          test "$PUSH_FORCED" != "true"
+          git fetch --no-tags origin refs/heads/dev:refs/remotes/origin/dev
+          read -r commit first_parent second_parent extra < <(git rev-list --parents -n 1 HEAD)
+          test -n "$commit"
+          test -n "$first_parent"
+          test -n "$second_parent"
+          test -z "${extra:-}"
           parent_count="$(git rev-list --parents -n 1 HEAD | awk '{print NF-1}')"
-          if [ "$parent_count" -lt 2 ]; then
-            echo "Deploying test requires a merge commit from dev."
-            exit 1
+          test "$parent_count" = "2"
+          if [ "$EVENT_NAME" = "push" ]; then
+            test "$first_parent" = "$BEFORE_SHA"
           fi
-          second_parent="$(git rev-list --parents -n 1 HEAD | awk '{print $3}')"
-          git merge-base --is-ancestor "$second_parent" origin/dev
+          test "$second_parent" = "$(git rev-parse refs/remotes/origin/dev)"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'refs/remotes/origin/dev^{tree}')"
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: guard
-    if: needs.guard.result == 'success'
-    environment: test
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Validate separate THN admin approvals
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ADMIN_INFRASTRUCTURE_APPROVED" =~ ^(true|false)$ ]]
+          [[ "$ADMIN_ROUTE_ASSOCIATION_APPROVED" =~ ^(true|false)$ ]]
+          test "$ADMIN_INFRASTRUCTURE_APPROVED" = "$ADMIN_ROUTE_ASSOCIATION_APPROVED" || {
+            echo "admin_approval_pair_invalid"
+            exit 1
+          }
+          if [ "$ADMIN_INFRASTRUCTURE_APPROVED" = "true" ]; then
+            test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+            test "$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true"
+            test "$FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED" = "true"
+          fi
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
           cache: npm
 
-      - run: npm ci
-      - run: npm test
-      - run: npm run validate
+      - name: Test and synthesize the exact TEST frontend stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$FRONTEND_TEST_RELEASE_ID" || { echo "frontend_release_id_required"; exit 1; }
+          if [ "$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
+            [[ "$FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN" =~ ^arn:aws:acm:us-east-1:765932874577:certificate/[A-Za-z0-9-]+$ ]]
+            [[ "$FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID" =~ ^Z[A-Z0-9]+$ ]]
+          fi
+          npm ci
+          npm test
+          npx --no-install cdk synth "ZoolandingTest/Zoolandingpage-test-Frontend" \
+            --output .release/cdk.out
 
-      - name: Validate AWS environment variables
+      - name: Assemble immutable TEST infrastructure release
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          SERVICE_ID: zoolandingpage-aws-infra
+        run: |
+          set -euo pipefail
+          mkdir -p .release/release-tools
+          cp tools/review-test-infra-change-set.js .release/release-tools/
+          cp tools/run-test-infra-change-set.sh .release/release-tools/
+          cp tools/smoke-test-infra-stack.sh .release/release-tools/
+          node <<'NODE'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+          const payload = {
+            schema: 'zoolanding-test-infra-release/v1',
+            service: process.env.SERVICE_ID,
+            source_sha: process.env.RELEASE_SHA,
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            expected_aws_account_id: process.env.EXPECTED_AWS_ACCOUNT_ID,
+            expected_aws_region: process.env.EXPECTED_AWS_REGION,
+            frontend_release_id: process.env.FRONTEND_TEST_RELEASE_ID,
+            thn_admin_origin_enabled: process.env.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED,
+            thn_admin_route53_enabled: process.env.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED,
+            thn_admin_certificate_sha256: digest(process.env.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN || ''),
+            thn_admin_hosted_zone_sha256: digest(process.env.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID || ''),
+          };
+          fs.writeFileSync(
+            '.release/release-metadata.json',
+            `${JSON.stringify(payload, Object.keys(payload).sort())}\n`,
+            'utf8'
+          );
+          NODE
+          test -z "$(find .release -type l -print -quit)"
+          (cd .release && LC_ALL=C find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > release-manifest.sha256
+
+      - name: Compute immutable release identity
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(sha256sum release-manifest.sha256 | cut -d ' ' -f 1)"
+          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Define artifact name
+        id: identity
+        shell: bash
+        env:
+          ARTIFACT_NAME: zoolandingpage-aws-infra-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+        run: printf 'name=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact validated CDK assembly
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.identity.outputs.name }}
+          path: |
+            .release/
+            release-manifest.sha256
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: test
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      EXPECTED_AWS_ACCOUNT_ID: "765932874577"
+      EXPECTED_AWS_REGION: us-east-1
+      ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
+      ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
+      FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+      FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
+      FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: ${{ vars.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN }}
+      FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: ${{ vars.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID }}
+      FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED || 'false' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate immutable artifact coordinates
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          EXPECTED_MANIFEST_DIGEST: ${{ needs.validate.outputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test"
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$EXPECTED_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_MANIFEST_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          npm ci
+
+      - name: Download exact artifact by immutable ID
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: .transport
+          merge-multiple: true
+
+      - name: Verify transported CDK assembly and source identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_MANIFEST_DIGEST: ${{ needs.validate.outputs.manifest_digest }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          test -z "$(find .transport -type l -print -quit)"
+          top_level="$(find .transport -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
+          test "$top_level" = $'.release\nrelease-manifest.sha256'
+          (cd .transport/.release && LC_ALL=C find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/recomputed-release-manifest.sha256"
+          cmp --silent .transport/release-manifest.sha256 "$RUNNER_TEMP/recomputed-release-manifest.sha256"
+          printf '%s  %s\n' "$EXPECTED_MANIFEST_DIGEST" .transport/release-manifest.sha256 | sha256sum --check --strict -
+          (cd .transport/.release && sha256sum --check --strict ../release-manifest.sha256)
+          node - "$EXPECTED_SHA" "$EXPECTED_RUN_ID" <<'NODE'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+          const payload = JSON.parse(fs.readFileSync('.transport/.release/release-metadata.json', 'utf8'));
+          if (
+            payload.schema !== 'zoolanding-test-infra-release/v1'
+            || payload.service !== 'zoolandingpage-aws-infra'
+            || payload.source_sha !== process.argv[2]
+            || payload.run_id !== process.argv[3]
+            || payload.expected_aws_account_id !== process.env.EXPECTED_AWS_ACCOUNT_ID
+            || payload.expected_aws_region !== process.env.EXPECTED_AWS_REGION
+            || payload.frontend_release_id !== process.env.FRONTEND_TEST_RELEASE_ID
+            || payload.thn_admin_origin_enabled !== process.env.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED
+            || payload.thn_admin_route53_enabled !== process.env.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED
+            || payload.thn_admin_certificate_sha256 !== digest(process.env.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN || '')
+            || payload.thn_admin_hosted_zone_sha256 !== digest(process.env.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID || '')
+          ) process.exit(1);
+          NODE
+
+      - name: Validate TEST configuration before credentials
+        shell: bash
         env:
           AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
         run: |
           set -euo pipefail
-          if [ -z "$AWS_ROLE_ARN" ]; then
-            echo "::error::AWS_ROLE_ARN environment variable is required for deploy."
+          test -n "$AWS_ROLE_ARN" || { echo "aws_role_arn_required"; exit 1; }
+          [[ "$AWS_ROLE_ARN" =~ ^arn:aws:iam::765932874577:role/[A-Za-z0-9+=,.@_/-]+$ ]] || {
+            echo "aws_role_arn_target_invalid"
             exit 1
+          }
+          test "$ADMIN_INFRASTRUCTURE_APPROVED" = "$ADMIN_ROUTE_ASSOCIATION_APPROVED" || {
+            echo "admin_approval_pair_invalid"
+            exit 1
+          }
+          if [ "$ADMIN_INFRASTRUCTURE_APPROVED" = "true" ]; then
+            test "$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true"
+            test "$FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED" = "true"
           fi
-          if [ -z "$AWS_REGION" ]; then
-            echo "::error::AWS_REGION environment variable is required for deploy."
-            exit 1
+          if [ "$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
+            [[ "$THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET" =~ ^[A-Za-z0-9_-]{43}$ ]]
           fi
 
-      - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d
+      - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: us-east-1
 
-      - name: Confirm AWS caller identity
-        run: aws sts get-caller-identity
-
-      - name: Deploy test frontend stack
-        env:
-          FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
+      - name: Verify exact TEST AWS identity
+        shell: bash
         run: |
           set -euo pipefail
-          if [ -z "$FRONTEND_TEST_RELEASE_ID" ]; then
-            echo "::error::FRONTEND_RELEASE_ID environment variable is required for deploy."
-            exit 1
-          fi
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            DEPLOYED_FRONTEND_RELEASE_ID="$(aws cloudformation describe-stacks \
-              --stack-name "ZoolandingTest-Zoolandingpage-test-Frontend" \
-              --query "Stacks[0].Outputs[?OutputKey=='FrontendReleaseId'].OutputValue | [0]" \
-              --output text)"
-            if [ -z "$DEPLOYED_FRONTEND_RELEASE_ID" ] || [ "$DEPLOYED_FRONTEND_RELEASE_ID" = "None" ]; then
-              echo "::error::The deployed TEST frontend release could not be read."
-              exit 1
-            fi
-            test "$DEPLOYED_FRONTEND_RELEASE_ID" = "$FRONTEND_TEST_RELEASE_ID"
-          fi
-          npx cdk deploy "ZoolandingTest/Zoolandingpage-test-Frontend" --require-approval never --exclusively
+          caller_account="$(aws sts get-caller-identity --query Account --output text)"
+          test "$caller_account" = "$EXPECTED_AWS_ACCOUNT_ID"
+          test "$AWS_REGION" = "$EXPECTED_AWS_REGION"
+          test "$AWS_DEFAULT_REGION" = "$EXPECTED_AWS_REGION"
+
+      - name: Prevent public release drift during THN admin approval
+        if: inputs.approve_thn_admin_dns_tls_distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployed_release="$(aws cloudformation describe-stacks \
+            --stack-name "ZoolandingTest-Zoolandingpage-test-Frontend" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendReleaseId'].OutputValue | [0]" \
+            --output text)"
+          test -n "$deployed_release"
+          test "$deployed_release" != "None"
+          test "$deployed_release" = "$FRONTEND_TEST_RELEASE_ID"
+
+      - name: Prepare, review, and execute exact TEST change set
+        id: apply
+        shell: bash
+        env:
+          STACK_PATH: ZoolandingTest/Zoolandingpage-test-Frontend
+          STACK_NAME: ZoolandingTest-Zoolandingpage-test-Frontend
+          CHANGE_SET_NAME: release-${{ github.run_id }}-${{ github.run_attempt }}
+          RELEASE_ROOT: .transport/.release
+          THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
+          THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
+        run: bash .transport/.release/release-tools/run-test-infra-change-set.sh
+
+      - name: Post-deploy TEST stack smoke
+        shell: bash
+        env:
+          STACK_NAME: ZoolandingTest-Zoolandingpage-test-Frontend
+          THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
+        run: bash .transport/.release/release-tools/smoke-test-infra-stack.sh
+
+      - name: Record immutable TEST release coordinates
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+          MANIFEST_DIGEST: ${{ needs.validate.outputs.manifest_digest }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "### TEST infrastructure release"
+            echo "- source_run_id: $GITHUB_RUN_ID"
+            echo "- source_artifact_id: $ARTIFACT_ID"
+            echo "- source_sha: $RELEASE_SHA"
+            echo "- source_manifest_sha256: $MANIFEST_DIGEST"
+            echo "- thn_admin_dns_tls_distribution_approved: $ADMIN_INFRASTRUCTURE_APPROVED"
+            echo "- thn_admin_route_association_approved: $ADMIN_ROUTE_ASSOCIATION_APPROVED"
+            echo "- change_set_executed: ${{ steps.apply.outputs.executed }}"
+          } >> "$GITHUB_STEP_SUMMARY"
