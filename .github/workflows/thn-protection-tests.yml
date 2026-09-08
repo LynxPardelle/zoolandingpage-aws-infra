@@ -1,0 +1,22 @@
+name: THN protection tool tests
+on:
+  push:
+    branches: ['codex/thn-test-stack-protection']
+  pull_request:
+    paths:
+      - 'tools/thn_test_stack_protection.py'
+      - 'test/test_thn_test_stack_protection.py'
+      - '.github/workflows/thn-protection-tests.yml'
+permissions:
+  contents: read
+jobs:
+  protection-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Verify operator guards without cloud credentials
+        run: sudo -- unshare --net -- env -i PATH="$PATH" HOME=/tmp python3 -m unittest discover -s test -p test_thn_test_stack_protection.py
+
