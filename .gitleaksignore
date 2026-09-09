@@ -2,3 +2,9 @@
 # These public checksums are not API keys or runtime credentials.
 f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:452
 f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:453
+# Exact existing KMS-ARN checksum; not a key or decrypt capability.
+3678fd0c1364e4e933c105e08ebcf41b28f8c386:tools/thn-test-prerequisites.js:generic-api-key:25
+# Fixed CloudFormation idempotency identifiers in negative unit tests, not credentials.
+3678fd0c1364e4e933c105e08ebcf41b28f8c386:test/thn-test-permissions.test.js:generic-api-key:202
+3678fd0c1364e4e933c105e08ebcf41b28f8c386:test/thn-test-permissions.test.js:generic-api-key:205
+3678fd0c1364e4e933c105e08ebcf41b28f8c386:test/thn-test-permissions.test.js:generic-api-key:207

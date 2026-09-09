@@ -63,11 +63,11 @@ test("native pinned scanner detects all three non-secret hashes plus changed and
   assert.deepEqual(extended, { exitCode: 1, rules: ["generic-api-key"] });
 });
 
-test("committed ignore entries must resolve to exact reviewed non-secret hash lines", () => {
+test("committed ignore entries resolve only to reviewed public seals or synthetic idempotency identifiers", () => {
   const file = path.join(root, ".gitleaksignore");
   assert.ok(existsSync(file), "preserve the existing reviewed historical fingerprints");
   const entries = readFileSync(file, "utf8").split(/\r?\n/).filter(line => line && !line.startsWith("#"));
-  assert.ok(entries.length >= 2 && entries.length <= 5);
+  assert.equal(entries.length, 6);
   assert.equal(new Set(entries).size, entries.length);
   assert.deepEqual(entries.slice(0, 2), [
     "f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:452",
@@ -75,14 +75,17 @@ test("committed ignore entries must resolve to exact reviewed non-secret hash li
   ]);
   const verified = [];
   for (const entry of entries) {
-    const match = /^([a-f0-9]{40}):(lib\/stacks\/frontend-stack\.js|tools\/thn-test-prerequisites\.js):generic-api-key:([1-9][0-9]*)$/.exec(entry);
+    const match = /^([a-f0-9]{40}):(lib\/stacks\/frontend-stack\.js|tools\/thn-test-prerequisites\.js|test\/thn-test-permissions\.test\.js):generic-api-key:([1-9][0-9]*)$/.exec(entry);
     assert.ok(match, "only exact commit/path/rule/line fingerprints are permitted");
     const result = spawnSync("git", ["-c", `safe.directory=${root.replaceAll("\\", "/")}`, "show", `${match[1]}:${match[2]}`], { cwd: root, encoding: "utf8", timeout: 10000 });
     assert.equal(result.status, 0);
     const sourceLine = result.stdout.split(/\r?\n/)[Number(match[3]) - 1];
-    const expected = exactNonSecretHashes.find(hash => sourceLine?.includes(hash));
-    assert.ok(expected, "fingerprint must target a reviewed seal, never a credential");
+    const expected = match[2] === "test/thn-test-permissions.test.js"
+      ? (/^\s*Client(?:Request)?Token: "thn-permissions-1234-1"/.test(sourceLine) ? "fixed-idempotency-fixture" : null)
+      : exactNonSecretHashes.find(hash => sourceLine?.includes(hash));
+    assert.ok(expected, "fingerprint must target a reviewed non-secret source line");
     verified.push(expected);
   }
-  assert.ok(exactNonSecretHashes.slice(0, 2).every(hash => verified.includes(hash)));
+  assert.ok(exactNonSecretHashes.every(hash => verified.includes(hash)));
+  assert.equal(verified.filter(value => value === "fixed-idempotency-fixture").length, 3);
 });
