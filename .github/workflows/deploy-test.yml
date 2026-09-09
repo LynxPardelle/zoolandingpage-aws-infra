@@ -26,6 +26,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    environment: test
     permissions:
       contents: read
     outputs:
@@ -39,6 +40,8 @@ jobs:
       ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
       FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
+      FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ vars.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 }}
+      FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ vars.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON }}
       FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: ${{ vars.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN }}
       FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: ${{ vars.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID }}
       FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED || 'false' }}
@@ -104,6 +107,7 @@ jobs:
             [[ "$FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID" =~ ^Z[A-Z0-9]+$ ]]
           fi
           npm ci
+          node tools/thn-admin-release.js prepare .release/thn-admin-selection.json
           npm test
           npx --no-install cdk synth "ZoolandingTest/Zoolandingpage-test-Frontend" \
             --output .release/cdk.out
@@ -117,6 +121,8 @@ jobs:
           set -euo pipefail
           mkdir -p .release/release-tools
           cp tools/review-test-infra-change-set.js .release/release-tools/
+          cp tools/thn-admin-release.js .release/release-tools/
+          cp tools/infra-test-aws.js .release/release-tools/
           cp tools/run-test-infra-change-set.sh .release/release-tools/
           cp tools/smoke-test-infra-stack.sh .release/release-tools/
           node <<'NODE'
@@ -182,12 +188,18 @@ jobs:
       contents: read
       id-token: write
     env:
+      RELEASE_ROOT: .transport/.release
+      EXPECTED_RELEASE_MANIFEST_SHA256: ${{ needs.validate.outputs.manifest_digest }}
+      EXPECTED_RELEASE_SOURCE_SHA: ${{ github.sha }}
+      EXPECTED_RELEASE_RUN_ID: ${{ github.run_id }}
       EXPECTED_AWS_ACCOUNT_ID: "765932874577"
       EXPECTED_AWS_REGION: us-east-1
       ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
       ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
       FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
+      FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ vars.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 }}
+      FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ vars.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON }}
       FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: ${{ vars.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN }}
       FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: ${{ vars.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID }}
       FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED || 'false' }}
@@ -257,6 +269,7 @@ jobs:
             || payload.thn_admin_hosted_zone_sha256 !== digest(process.env.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID || '')
           ) process.exit(1);
           NODE
+          node .transport/.release/release-tools/thn-admin-release.js compare .transport/.release/thn-admin-selection.json
 
       - name: Validate TEST configuration before credentials
         shell: bash
@@ -301,13 +314,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deployed_release="$(aws cloudformation describe-stacks \
-            --stack-name "ZoolandingTest-Zoolandingpage-test-Frontend" \
-            --query "Stacks[0].Outputs[?OutputKey=='FrontendReleaseId'].OutputValue | [0]" \
-            --output text)"
-          test -n "$deployed_release"
-          test "$deployed_release" != "None"
-          test "$deployed_release" = "$FRONTEND_TEST_RELEASE_ID"
+          node .transport/.release/release-tools/infra-test-aws.js verify-public-release .transport/.release
 
       - name: Prepare, review, and execute exact TEST change set
         id: apply

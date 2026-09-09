@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { spawnSync } = require("node:child_process");
 const cdk = require("aws-cdk-lib");
+const { fixture: adminReleaseFixture } = require("./fixtures/thn-admin-selection");
 const { Template } = require("aws-cdk-lib/assertions");
 
 const { FrontendStack } = require("../lib/stacks/frontend-stack");
@@ -33,6 +34,27 @@ function count(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
 
+test("TEST transports safe selection before credentials and verifies published bytes before each mutation", () => {
+  const validate = deploy.slice(deploy.indexOf("  validate:"), deploy.indexOf("  deploy:"));
+  assert.match(validate, /FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: \$\{\{ vars\.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 \}\}/);
+  assert.match(validate, /FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: \$\{\{ vars\.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON \}\}/);
+  assert.match(validate, /thn-admin-release\.js prepare .release\/thn-admin-selection\.json/);
+  assert.ok(validate.indexOf("thn-admin-release.js prepare .release/thn-admin-selection.json") < validate.indexOf("cdk synth"));
+  assert.match(validate, /cp tools\/thn-admin-release\.js .release\/release-tools\//);
+  const deployJob = deploy.slice(deploy.indexOf("  deploy:"));
+  assert.match(deployJob, /thn-admin-release\.js compare .transport\/.release\/thn-admin-selection\.json/);
+  assert.ok(deployJob.indexOf("thn-admin-release.js compare .transport/.release/thn-admin-selection.json") < deployJob.indexOf("aws-actions/configure-aws-credentials"));
+  const preflight = 'node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json"';
+  assert.equal(count(runner, preflight), 2);
+  assert.ok(runner.indexOf(preflight) < runner.indexOf("npx --no-install cdk deploy"));
+  assert.ok(runner.lastIndexOf(preflight) < runner.indexOf('infra-test-aws.js" execute-change-set'));
+  assert.ok(runner.lastIndexOf(preflight) > runner.indexOf('test "$decision" = "execute"'));
+  const rollback = readFileSync(rollbackPath, "utf8");
+  assert.match(rollback, /test -f .transport\/\.release\/thn-admin-selection\.json/);
+  assert.match(rollback, /test -f .transport\/\.release\/release-tools\/thn-admin-release\.js/);
+  assert.doesNotMatch(validate, /id-token: write|configure-aws-credentials|secrets\.|aws s3|curl/);
+});
+
 function changeSet(changes) {
   return {
     StackName: "ZoolandingTest-Zoolandingpage-test-Frontend",
@@ -41,7 +63,6 @@ function changeSet(changes) {
     ChangeSetName: "release-123-1",
     ChangeSetId:
       "arn:aws:cloudformation:us-east-1:765932874577:changeSet/release-123-1/00000000-0000-0000-0000-000000000001",
-    ChangeSetType: "UPDATE",
     Status: "CREATE_COMPLETE",
     ExecutionStatus: "AVAILABLE",
     Changes: changes.map((resource) => ({ Type: "Resource", ResourceChange: resource })),
@@ -60,6 +81,17 @@ const reviewOptions = {
   adminRouteAssociationApproved: true,
 };
 
+test("normal deploy and rollback never add, modify, replace or remove the retained prerequisite certificate", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const approved of [false, true]) for (const action of ["Add", "Modify", "Remove"]) {
+    const options = { ...reviewOptions, adminInfrastructureApproved: approved, adminRouteAssociationApproved: approved };
+    assert.throws(() => reviewChangeSet(changeSet([{ LogicalResourceId: "ThnAdminTestCertificate", ResourceType: "AWS::CertificateManager::Certificate",
+      Action: action, Replacement: "False" }]), options), /certificate_prerequisite|stateful_resource_change/);
+    assert.throws(() => reviewChangeSet(changeSet([{ LogicalResourceId: "ThnAdminTestCertificate", ResourceType: "AWS::CertificateManager::Certificate",
+      Action: "Modify", Replacement: "True" }]), options), /stateful_resource_change/);
+  }
+});
+
 function synthesizeDeliveryTemplate(adminEnabled) {
   const environment = structuredClone(
     environments.find((candidate) => candidate.name === "test")
@@ -77,6 +109,7 @@ function synthesizeDeliveryTemplate(adminEnabled) {
   );
   if (adminEnabled) {
     environment.frontendHosting.frontDoors.push(buildThnAdminTestFrontDoor({
+      ...adminReleaseFixture().inputs,
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true",
       FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN:
         `arn:aws:acm:us-east-1:${environment.account}:certificate/task027-fixture`,
@@ -128,14 +161,58 @@ test("TEST deploy transports and re-verifies one immutable CDK assembly", () => 
   assert.match(deploy, /retention-days: 30/);
 });
 
+test("TEST validation reads TEST Environment variables without credentials or secrets", () => {
+  const validate = deploy.replace(/\r\n/g, "\n").split("  validate:\n")[1]?.split("\n  deploy:")[0];
+  assert.ok(validate, "validate job must exist");
+  assert.match(validate, /\n    environment: test\n/);
+  assert.match(validate, /\n    permissions:\n      contents: read\n/);
+  assert.doesNotMatch(validate, /id-token:|secrets\.|configure-aws-credentials|role-to-assume/);
+});
+
+test("AWS-shaped descriptions allow no type field but reject any explicit mismatch", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const payload = changeSet([{
+    Action: "Add",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: null,
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+  }]);
+  assert.equal(reviewChangeSet(payload, reviewOptions), "execute");
+  assert.equal(reviewChangeSet({ ...payload, ChangeSetType: "UPDATE" }, reviewOptions), "execute");
+  for (const responseType of [null, "", "CREATE", "IMPORT"]) {
+    assert.throws(
+      () => reviewChangeSet({ ...payload, ChangeSetType: responseType }, reviewOptions),
+      /change_set_identity_invalid/
+    );
+  }
+  assert.throws(
+    () => reviewChangeSet(payload, { ...reviewOptions, expectedChangeSetType: "IMPORT" }),
+    /change_set_type_invalid/
+  );
+});
+
+test("AWS-shaped no-op descriptions still require exact status and identity", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const payload = {
+    ...changeSet([]), Status: "FAILED", ExecutionStatus: "UNAVAILABLE",
+    StatusReason: "The submitted information didn't contain changes. Submit different information to create a change set.",
+  };
+  assert.equal(reviewChangeSet(payload, reviewOptions), "noop");
+  assert.throws(() => reviewChangeSet({ ...payload, StatusReason: "unexpected" }, reviewOptions), /change_set_not_available/);
+  for (const key of ["StackName", "ChangeSetName", "ChangeSetId"]) {
+    assert.throws(() => reviewChangeSet({ ...payload, [key]: "unexpected" }, reviewOptions), /change_set_identity_invalid/);
+  }
+});
+
 test("TEST deploy reviews the prepared change set before exact execution", () => {
   const prepare = runner.indexOf("--method prepare-change-set");
   const review = runner.lastIndexOf("review-test-infra-change-set.js");
-  const execute = runner.indexOf("aws cloudformation execute-change-set");
+  const execute = runner.indexOf('infra-test-aws.js" execute-change-set');
   assert.ok(prepare >= 0, "prepare-change-set step missing");
   assert.ok(review > prepare, "review must follow change-set preparation");
   assert.ok(execute > review, "execution must follow review");
-  assert.match(runner, /--include-property-values/);
+  assert.match(readFileSync(path.join(root, "tools", "infra-test-aws.js"), "utf8"), /--include-property-values/);
   assert.match(runner, /npx --no-install cdk deploy/);
   assert.match(deploy, /npx --no-install cdk synth/);
   assert.doesNotMatch(`${deploy}\n${runner}`, /npx cdk/);
@@ -148,6 +225,25 @@ test("TEST deploy reviews the prepared change set before exact execution", () =>
     "a non-noop execution must require successful CDK preparation"
   );
   assert.equal(count(deploy, "id-token: write"), 1);
+});
+
+test("TEST helpers use only sealed artifact-derived CDK roles and preserve the parent CDK identity", () => {
+  const rollback = readFileSync(rollbackPath, "utf8");
+  for (const workflow of [deploy, rollback]) {
+    assert.match(workflow, /EXPECTED_RELEASE_MANIFEST_SHA256:/);
+    assert.match(workflow, /EXPECTED_RELEASE_SOURCE_SHA:/);
+    assert.match(workflow, /EXPECTED_RELEASE_RUN_ID:/);
+    assert.match(workflow, /infra-test-aws\.js verify-public-release/);
+    assert.doesNotMatch(workflow, /aws cloudformation describe-stacks/);
+  }
+  assert.match(deploy, /cp tools\/infra-test-aws\.js .release\/release-tools\//);
+  assert.match(runner, /infra-test-aws\.js" describe-change-set/);
+  assert.match(runner, /infra-test-aws\.js" execute-change-set/);
+  assert.match(runner, /infra-test-aws\.js" wait-stack/);
+  assert.doesNotMatch(runner, /aws cloudformation|export AWS_ACCESS_KEY_ID|GITHUB_ENV/);
+  const smoke = readFileSync(path.join(root, "tools", "smoke-test-infra-stack.sh"), "utf8");
+  assert.match(smoke, /infra-test-aws\.js" smoke/);
+  assert.doesNotMatch(smoke, /aws cloudformation|aws cloudfront/);
 });
 
 test("TEST deploy and rollback bind credentials and change sets to the exact AWS target", () => {

@@ -59,3 +59,19 @@ Rollback requires the recorded source run, artifact ID, source SHA, and manifest
 digest from a successful `Deploy Test` run.
 
 See [changelog/2026-09-04-test-infra-delivery-hardening.md](changelog/2026-09-04-test-infra-delivery-hardening.md).
+The closed APP manifest transport, exact static-origin projection, certificate
+preflight, and publish-versus-select sequence are documented in
+[THN TEST admin release selection](docs/thn-admin-test-release.md).
+
+The [bounded THN TEST resource inventory check](docs/thn-test-resource-inventory.md)
+compares independently sealed local inventories, requires zero QA infrastructure
+delta, and never deletes resources or changes protection.
+
+The separate [THN TEST prerequisite workflow](docs/thn-test-prerequisites.md) is
+local preparation for one retained certificate or permissionless human role in
+its existing owning TEST stack. It cannot apply other service/IAM changes and
+requires independently reviewed source/baseline/private-input seals before use.
+
+The independent [THN TEST supplemental permissions path](docs/thn-test-permissions.md)
+adds three policies to existing deployment identities, preserving original
+roles/trust/policies. It does not activate or deploy the blog.

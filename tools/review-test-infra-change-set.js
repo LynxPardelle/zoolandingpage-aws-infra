@@ -255,7 +255,8 @@ function reviewChangeSet(changeSet, options) {
     changeSet.StackName !== expectedStackName
     || changeSet.ChangeSetName !== expectedChangeSetName
     || changeSet.ChangeSetId !== expectedChangeSetArn
-    || changeSet.ChangeSetType !== expectedChangeSetType
+    // DescribeChangeSet omits the request type; reject it only if explicitly conflicting.
+    || (Object.hasOwn(changeSet, "ChangeSetType") && changeSet.ChangeSetType !== expectedChangeSetType)
   ) {
     throw new ChangeSetReviewError("change_set_identity_invalid");
   }
@@ -295,6 +296,9 @@ function reviewChangeSet(changeSet, options) {
 
     if (!['Add', 'Modify'].includes(action) || ![undefined, null, "False"].includes(replacement)) {
       throw new ChangeSetReviewError("stateful_resource_change_forbidden");
+    }
+    if (logicalId === "ThnAdminTestCertificate" || resourceType === "AWS::CertificateManager::Certificate") {
+      throw new ChangeSetReviewError("thn_certificate_prerequisite_change_forbidden");
     }
     if (/production|prod/i.test(logicalId)) {
       throw new ChangeSetReviewError("production_alias_forbidden");

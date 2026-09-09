@@ -5,6 +5,8 @@ const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const { fixture: adminReleaseFixture } = require("./fixtures/thn-admin-selection");
+const { selectThnAdminRelease } = require("../tools/thn-admin-release");
 const cdk = require("aws-cdk-lib");
 const { Match, Template } = require("aws-cdk-lib/assertions");
 
@@ -15,6 +17,7 @@ const {
   removalPolicyForEnvironment,
 } = require("../lib/project-helpers");
 const {
+  buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
   environments,
   retiredZoolandingpageComMxAliases,
@@ -110,6 +113,7 @@ const testEnvironment = {
 
 const THN_ADMIN_HOST = "admin-test.thehairnarrative.com";
 const THN_ADMIN_INPUTS = {
+  ...adminReleaseFixture().inputs,
   FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true",
   FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN:
     "arn:aws:acm:us-east-1:123456789012:certificate/thn-admin-test",
@@ -1281,11 +1285,31 @@ test("test deploy workflow targets only the frontend stack", () => {
   assert.match(workflow, /FRONTEND_TEST_RELEASE_ID: \$\{\{ vars\.FRONTEND_RELEASE_ID \}\}/);
   assert.match(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);
   assert.match(workflow, /test -n "\$FRONTEND_TEST_RELEASE_ID"/);
-  assert.match(workflow, /aws cloudformation describe-stacks/);
-  assert.match(workflow, /--stack-name "ZoolandingTest-Zoolandingpage-test-Frontend"/);
-  assert.match(workflow, /OutputKey=='FrontendReleaseId'/);
+  assert.match(workflow, /infra-test-aws\.js verify-public-release/);
+  const awsHelper = readFileSync(path.join(__dirname, "..", "tools", "infra-test-aws.js"), "utf8");
+  assert.match(awsHelper, /const STACK = "ZoolandingTest-Zoolandingpage-test-Frontend"/);
+  assert.match(awsHelper, /item.OutputKey === "FrontendReleaseId"/);
   assert.match(workflow, /if \[ "\$EVENT_NAME" = "push" \]; then/);
-  assert.match(workflow, /test "\$deployed_release" = "\$FRONTEND_TEST_RELEASE_ID"/);
+  assert.match(awsHelper, /releases\[0\].OutputValue !== artifact.metadata.frontend_release_id/);
+});
+
+test("TEST synthesis preserves the retained prerequisite certificate even while its front door is off", () => {
+  assert.equal(typeof buildThnAdminTestCertificate, "function");
+  assert.equal(buildThnAdminTestCertificate({}, "123456789012"), null);
+  const source = { FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: "arn:aws:acm:us-east-1:123456789012:certificate/fixture",
+    FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: "ZTHNFIXTURE", FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "false" };
+  const certificate = buildThnAdminTestCertificate(source, "123456789012");
+  assert.throws(() => buildThnAdminTestCertificate({ ...source, FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: "" }, "123456789012"));
+  const app = new cdk.App();
+  const environment = { ...testEnvironment, name: "test", frontendHosting: { ...testEnvironment.frontendHosting, thnAdminCertificate: certificate } };
+  const template = Template.fromStack(new FrontendStack(app, "RetainedCertificateFixture", { env: { account: environment.account, region: environment.region }, environment })).toJSON();
+  const resource = template.Resources.ThnAdminTestCertificate;
+  const { composeTemplate } = require("../tools/thn-test-prerequisites");
+  const expected = composeTemplate({ Resources: {} }, "certificate", { zoneId: "ZTHNFIXTURE", anchors: { zone: require("node:crypto").createHash("sha256").update("ZTHNFIXTURE").digest("hex") } }).Resources.ThnAdminTestCertificate;
+  assert.deepEqual(resource, expected);
+  assert.ok(!Object.values(template.Resources).some(item => item.Type === "AWS::CloudFront::Distribution"));
+  const production = { ...environment, name: "production" };
+  assert.throws(() => new FrontendStack(new cdk.App(), "NoProductionCertificate", { env: { account: environment.account, region: environment.region }, environment: production }), /THN.*TEST/);
 });
 
 test("test deploy workflow injects the THN Auth Admin origin proof without storing it", () => {
@@ -1350,7 +1374,8 @@ test("THN admin front door stays disabled until every explicit TEST input is pre
       domainNames: [THN_ADMIN_HOST],
     },
   ]);
-  assert.deepEqual(frontDoor.staticAssetPaths, []);
+  assert.deepEqual(frontDoor.staticAssetPaths, adminReleaseFixture().manifest.staticAssetPaths);
+  assert.equal(frontDoor.staticOriginPrefix, adminReleaseFixture().prefix);
   assert.equal(frontDoor.route53RecordManagement, "create-only");
 });
 
@@ -1614,13 +1639,15 @@ test("THN admin page and backend route inventories are sealed exactly", () => {
 });
 
 test("THN admin refuses a route inventory that exceeds the CloudFront Function quota", () => {
+  const release = adminReleaseFixture(Array.from({ length: 64 }, (_, index) =>
+    `/browser/${"long-directory-".repeat(10)}${index}/admin.12345678.js`));
+  const selected = selectThnAdminRelease(release.inputs);
   assertThnAdminFrontDoorRejected(
     (frontDoor) => ({
       ...frontDoor,
-      staticAssetPaths: Array.from(
-        { length: 500 },
-        (_, index) => `/assets/admin.${String(index).padStart(8, "0")}.js`
-      ),
+      staticAssetPaths: selected.manifest.staticAssetPaths,
+      staticOriginPrefix: selected.originPrefix,
+      staticRelease: selected,
     }),
     /exceeds the CloudFront Function 10 KiB code limit/
   );
@@ -1668,6 +1695,7 @@ test("THN admin distribution routes only the exact v2 backend inventory", () => 
     (behavior) => behavior.PathPattern
   ).sort();
   assert.deepEqual(patterns, [
+    "browser/main-2ZPUOXRY.js",
     "auth-v2/runtime-config",
     "auth-v2/session/challenge/respond",
     "auth-v2/session/logout",
@@ -1678,6 +1706,32 @@ test("THN admin distribution routes only the exact v2 backend inventory", () => 
     "features/content-hub-v2/action",
     "features/content-hub-v2/read",
   ].sort());
+});
+
+test("THN exact assets use selected release prefix without duplicated browser or public changes", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const config = admin.Properties.DistributionConfig;
+  const asset = config.CacheBehaviors.find(item => item.PathPattern === "browser/main-2ZPUOXRY.js");
+  assert.ok(asset);
+  const origin = config.Origins.find(item => item.Id === asset.TargetOriginId);
+  assert.equal(origin.OriginPath, `/${adminReleaseFixture().prefix}`);
+  assert.equal(`${origin.OriginPath}/${asset.PathPattern}`, `/${adminReleaseFixture().prefix}/browser/main-2ZPUOXRY.js`);
+  const publicConfig = distributionForAlias(template, "dev.zoolandingpage.com.mx").Properties.DistributionConfig;
+  const publicAsset = publicConfig.CacheBehaviors.find(item => item.PathPattern === "assets/*");
+  assert.equal(publicConfig.Origins.find(item => item.Id === publicAsset.TargetOriginId).OriginPath,
+    "/frontend/angular-ssr/test/releases/test-release/browser");
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  assert.equal(handler(cloudFrontRequest({ uri: "/browser/main-2ZPUOXRY.js" })).statusCode, undefined);
+  assert.equal(handler(cloudFrontRequest({ uri: "/browser/other-2ZPUOXRY.js" })).statusCode, 404);
+  assert.equal(handler(cloudFrontRequest({ uri: "/browser/main-2ZPUOXRY.js", method: "POST" })).statusCode, 405);
+  assert.equal(handler(cloudFrontRequest({ uri: "/browser/main-2ZPUOXRY.js", querystring: { arbitrary: { value: "yes" } } })).statusCode, 404);
+});
+
+test("THN manifest selection cannot be overridden by synth-time routes or origin coordinates", () => {
+  assertThnAdminFrontDoorRejected(frontDoor => ({ ...frontDoor, staticRelease: undefined }), /thn_admin_release_invalid/);
+  assertThnAdminFrontDoorRejected(frontDoor => ({ ...frontDoor, staticOriginPrefix: "frontend/angular-ssr/test/releases/other" }), /THN admin static selection mismatch/);
+  assertThnAdminFrontDoorRejected(frontDoor => ({ ...frontDoor, staticAssetPaths: ["/browser/other-2ZPUOXRY.js"] }), /THN admin static selection mismatch/);
 });
 
 test("THN admin Auth Admin origin alone receives a NoEcho proof parameter", () => {

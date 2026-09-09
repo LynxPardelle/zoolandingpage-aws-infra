@@ -27,6 +27,12 @@ test "$ADMIN_INFRASTRUCTURE_APPROVED" = "$ADMIN_ROUTE_ASSOCIATION_APPROVED" || {
 }
 test -d "$RELEASE_ROOT/cdk.out"
 test -f "$RELEASE_ROOT/release-tools/review-test-infra-change-set.js"
+test -f "$RELEASE_ROOT/release-tools/thn-admin-release.js"
+test -f "$RELEASE_ROOT/release-tools/infra-test-aws.js"
+test -f "$RELEASE_ROOT/thn-admin-selection.json"
+
+# CDK preparation can publish assets; attest the selected APP release first.
+node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json"
 
 cdk_parameters=()
 if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
@@ -52,11 +58,8 @@ prepare_exit=$?
 set -e
 
 description="$RUNNER_TEMP/$CHANGE_SET_NAME.json"
-if ! aws cloudformation describe-change-set \
-  --stack-name "$STACK_NAME" \
-  --change-set-name "$CHANGE_SET_NAME" \
-  --include-property-values \
-  --output json > "$description"; then
+if ! node "$RELEASE_ROOT/release-tools/infra-test-aws.js" describe-change-set \
+  "$RELEASE_ROOT" "$CHANGE_SET_NAME" > "$description"; then
   if [ "$prepare_exit" -eq 0 ]; then
     exit 1
   fi
@@ -94,10 +97,11 @@ test "$prepare_exit" -eq 0 || {
   exit "$prepare_exit"
 }
 
-aws cloudformation execute-change-set \
-  --stack-name "$STACK_NAME" \
-  --change-set-name "$change_set_arn"
-aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME"
+# Recheck immutable provenance immediately before the CloudFormation mutation.
+node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json"
+
+node "$RELEASE_ROOT/release-tools/infra-test-aws.js" execute-change-set "$RELEASE_ROOT" "$CHANGE_SET_NAME" "$change_set_arn"
+node "$RELEASE_ROOT/release-tools/infra-test-aws.js" wait-stack "$RELEASE_ROOT"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   printf 'executed=true\n' >> "$GITHUB_OUTPUT"
 fi

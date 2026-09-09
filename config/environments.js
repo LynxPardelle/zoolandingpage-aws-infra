@@ -1,5 +1,7 @@
 "use strict";
 
+const { selectThnAdminRelease } = require("../tools/thn-admin-release");
+
 const expectedAccount = "765932874577";
 const defaultRegion = "us-east-1";
 
@@ -281,6 +283,7 @@ function buildThnAdminTestFrontDoor(
   const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "apiProxy");
   const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "authAdmin");
   const contentHubOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "contentHub");
+  const staticRelease = selectThnAdminRelease(source);
 
   return {
     id: "thehairnarrative-admin-test",
@@ -316,7 +319,9 @@ function buildThnAdminTestFrontDoor(
       { path: "/admin/journal/:articleId/edit", methods: ["GET"] },
       { path: "/admin/journal/:articleId/preview", methods: ["GET"] },
     ],
-    staticAssetPaths: [],
+    staticAssetPaths: [...staticRelease.manifest.staticAssetPaths],
+    staticOriginPrefix: staticRelease.originPrefix,
+    staticRelease,
     backendRoutes: [
       {
         id: "thn-admin-auth-runtime-v2",
@@ -350,6 +355,16 @@ function buildThnAdminTestFrontDoor(
       },
     ],
   };
+}
+
+function buildThnAdminTestCertificate(source = process.env, account = environmentDefaults.account) {
+  const certificateArn = String(source.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN || "").trim();
+  if (!certificateArn) return null;
+  const hostedZoneId = String(source.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID || "").trim();
+  if (!new RegExp(`^arn:aws:acm:us-east-1:${account}:certificate/[A-Za-z0-9-]+$`).test(certificateArn) || !/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
+    throw new Error("THN TEST certificate preservation requires its exact ARN and hosted zone inputs.");
+  }
+  return { certificateArn, hostedZoneId };
 }
 
 function requiredInput(source, name) {
@@ -429,6 +444,7 @@ const environments = [
     serviceRepositoryBootstrap,
     frontendHosting: {
       ...buildFrontendHostingConfig("test"),
+      thnAdminCertificate: buildThnAdminTestCertificate(),
       frontDoors: [
         {
           id: "test",
@@ -561,6 +577,7 @@ function parseBooleanFlag(value) {
 }
 
 module.exports = {
+  buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
   environments,
   expectedAccount,

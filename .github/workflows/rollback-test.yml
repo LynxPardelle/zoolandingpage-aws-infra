@@ -130,6 +130,10 @@ jobs:
       contents: read
       id-token: write
     env:
+      RELEASE_ROOT: .transport/.release
+      EXPECTED_RELEASE_MANIFEST_SHA256: ${{ inputs.source_manifest_sha256 }}
+      EXPECTED_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+      EXPECTED_RELEASE_RUN_ID: ${{ inputs.source_run_id }}
       EXPECTED_AWS_ACCOUNT_ID: "765932874577"
       EXPECTED_AWS_REGION: us-east-1
       ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
@@ -173,6 +177,7 @@ jobs:
           cmp --silent .transport/release-manifest.sha256 "$RUNNER_TEMP/recomputed-release-manifest.sha256"
           printf '%s  %s\n' "$SOURCE_MANIFEST_SHA256" .transport/release-manifest.sha256 | sha256sum --check --strict -
           (cd .transport/.release && sha256sum --check --strict ../release-manifest.sha256)
+          test -f .transport/.release/release-tools/infra-test-aws.js
           node - "$SOURCE_SHA" "$SOURCE_RUN_ID" "$GITHUB_OUTPUT" <<'NODE'
           const fs = require('node:fs');
           const payload = JSON.parse(fs.readFileSync('.transport/.release/release-metadata.json', 'utf8'));
@@ -218,6 +223,8 @@ jobs:
           fi
           if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
             [[ "$THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET" =~ ^[A-Za-z0-9_-]{43}$ ]]
+            test -f .transport/.release/thn-admin-selection.json
+            test -f .transport/.release/release-tools/thn-admin-release.js
           fi
 
       - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
@@ -241,13 +248,7 @@ jobs:
           SOURCE_FRONTEND_RELEASE_ID: ${{ steps.release.outputs.frontend_release_id }}
         run: |
           set -euo pipefail
-          deployed_release="$(aws cloudformation describe-stacks \
-            --stack-name "ZoolandingTest-Zoolandingpage-test-Frontend" \
-            --query "Stacks[0].Outputs[?OutputKey=='FrontendReleaseId'].OutputValue | [0]" \
-            --output text)"
-          test -n "$deployed_release"
-          test "$deployed_release" != "None"
-          test "$deployed_release" = "$SOURCE_FRONTEND_RELEASE_ID"
+          node .transport/.release/release-tools/infra-test-aws.js verify-public-release .transport/.release
 
       - name: Prepare, review, and execute exact rollback change set
         id: apply

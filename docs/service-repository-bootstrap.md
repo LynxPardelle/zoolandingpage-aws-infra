@@ -1,5 +1,12 @@
 # Service repository deployment identities
 
+THN TEST's permissionless human operator role is preserved by this stack's source
+with a NoEcho principal parameter. Its initial creation is restricted to the
+separate [single-Add prerequisite workflow](thn-test-prerequisites.md); future
+reviewed updates must use the existing parameter value and preserve service-owned
+mediator-invoke grants. This is not authority to deploy a full synthesized stack
+or to combine service deployment-policy corrections with that prerequisite Add.
+
 `ServiceRepositoryBootstrapStack` creates retained deployment identities for these repositories:
 
 - `LynxPardelle/zoolanding-data-spaces`
@@ -61,6 +68,10 @@ Operational account, role and bucket identifiers are intentionally omitted from
 this public document.
 
 ## Scope contract
+
+THN TEST also has a separate [three-policy supplemental path](thn-test-permissions.md)
+for existing Hub/Image identities. It preserves original role ownership and is
+not part of the ordinary Frontend or retained-prerequisite dispatch.
 
 GitHub OIDC trust uses three exact `StringEquals` conditions:
 

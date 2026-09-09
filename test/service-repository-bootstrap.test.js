@@ -95,6 +95,16 @@ function resourcesOfType(template, type) {
   return Object.entries(template.Resources).filter(([, resource]) => resource.Type === type);
 }
 
+test("future TEST bootstrap synthesis preserves the permissionless retained human role and private NoEcho parameter", () => {
+  const testTemplate = synthesize("test"), production = synthesize("production");
+  const { composeTemplate } = require("../tools/thn-test-prerequisites");
+  const expected = composeTemplate({ Resources: {} }, "operator-role", {});
+  assert.deepEqual(testTemplate.Resources.ThnTestHumanOperatorRole, expected.Resources.ThnTestHumanOperatorRole);
+  assert.deepEqual(testTemplate.Parameters.ThnTestHumanOperatorPrincipalArn, expected.Parameters.ThnTestHumanOperatorPrincipalArn);
+  assert.equal(production.Resources.ThnTestHumanOperatorRole, undefined);
+  assert.equal(production.Parameters.ThnTestHumanOperatorPrincipalArn, undefined);
+});
+
 function findRole(template, roleName) {
   const entry = resourcesOfType(template, "AWS::IAM::Role")
     .find(([, role]) => role.Properties.RoleName === roleName);
@@ -142,7 +152,7 @@ for (const [environmentName, branch] of [["test", "test"], ["production", "main"
       .flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement);
 
     assert.doesNotMatch(JSON.stringify(template), /AdministratorAccess|secretsmanager:/);
-    assert.equal(resourcesOfType(template, "AWS::IAM::Role").length, environmentName === "test" ? 12 : 8);
+    assert.equal(resourcesOfType(template, "AWS::IAM::Role").length, environmentName === "test" ? 13 : 8);
     assert.equal(Object.keys(template.Outputs).length, environmentName === "test" ? 12 : 8);
 
     for (const [repository, expected] of Object.entries(services)) {
