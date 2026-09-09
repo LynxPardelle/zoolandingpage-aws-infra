@@ -67,7 +67,7 @@ test("committed ignore entries resolve only to reviewed public seals or syntheti
   const file = path.join(root, ".gitleaksignore");
   assert.ok(existsSync(file), "preserve the existing reviewed historical fingerprints");
   const entries = readFileSync(file, "utf8").split(/\r?\n/).filter(line => line && !line.startsWith("#"));
-  assert.equal(entries.length, 6);
+  assert.equal(entries.length, 7);
   assert.equal(new Set(entries).size, entries.length);
   assert.deepEqual(entries.slice(0, 2), [
     "f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:452",
@@ -75,12 +75,14 @@ test("committed ignore entries resolve only to reviewed public seals or syntheti
   ]);
   const verified = [];
   for (const entry of entries) {
-    const match = /^([a-f0-9]{40}):(lib\/stacks\/frontend-stack\.js|tools\/thn-test-prerequisites\.js|test\/thn-test-permissions\.test\.js):generic-api-key:([1-9][0-9]*)$/.exec(entry);
+    const match = /^([a-f0-9]{40}):(lib\/stacks\/frontend-stack\.js|tools\/thn-test-prerequisites\.js|test\/(?:thn-test-permissions|gitleaks-config)\.test\.js):generic-api-key:([1-9][0-9]*)$/.exec(entry);
     assert.ok(match, "only exact commit/path/rule/line fingerprints are permitted");
     const result = spawnSync("git", ["-c", `safe.directory=${root.replaceAll("\\", "/")}`, "show", `${match[1]}:${match[2]}`], { cwd: root, encoding: "utf8", timeout: 10000 });
     assert.equal(result.status, 0);
     const sourceLine = result.stdout.split(/\r?\n/)[Number(match[3]) - 1];
-    const expected = match[2] === "test/thn-test-permissions.test.js"
+    const expected = match[2] === "test/gitleaks-config.test.js"
+      ? (createHash("sha256").update(sourceLine).digest("hex") === "5ba4ebbca3b976a96c3fdf0265a440a94ad3bdced380a18e045bdadd7db22e97" ? "fixed-fixture-matcher" : null)
+      : match[2] === "test/thn-test-permissions.test.js"
       ? (/^\s*Client(?:Request)?Token: "thn-permissions-1234-1"/.test(sourceLine) ? "fixed-idempotency-fixture" : null)
       : exactNonSecretHashes.find(hash => sourceLine?.includes(hash));
     assert.ok(expected, "fingerprint must target a reviewed non-secret source line");
