@@ -73,6 +73,14 @@ GetObject streaming variant keeps its parameters in separate memory descriptors;
 the fixed launcher and native offline
 regression are described in [the prerequisite transport](thn-test-prerequisites.md).
 
+After execution, a bounded poll treats an initially stale `AVAILABLE` response
+as pending. Every
+poll stays bound to the exact stack/change-set IDs; only `EXECUTE_COMPLETE`
+can advance to final stack/template/role verification. Failed, unknown or
+mismatched responses fail closed. An exhausted wait requires read-only state
+reconciliation, not another execution. This path remains initial-application
+only: never redispatch it after the three policies have already been applied.
+
 Before each mutation, artifact authentication, live Original/Processed templates,
 parameters and all three role baselines must still match. The exact stable stack
 must retain its existing CFN RoleARN. Protection is enabled if absent and read
