@@ -1,11 +1,13 @@
 # Zoolandingpage AWS Infra Codex Memory
 
-This repo owns only the serverless frontend infrastructure for `LynxPardelle/zoolandingpage`.
+This repo owns the serverless frontend infrastructure for `LynxPardelle/zoolandingpage` and bounded deployment identities for approved Zoolanding service repositories.
 
 ## Durable Rules
 
 - Keep the app source and artifact packaging in `Z:\GitHub\zoolandingpage`.
 - Keep CDK infrastructure here.
+- Keep Data Spaces, Commerce, Integrations, and Notifications application templates in their own repositories; this repo owns only their retained GitHub OIDC and CloudFormation execution identities.
+- Keep service deployment identities in a stack separate from the frontend stack. Never grant those identities application data-plane or Secrets Manager access.
 - Follow `dev -> test -> main` promotion.
 - Do not touch EC2 or Dokploy from this repo.
 - Keep Route53 cutover disabled until a live CloudFront audit passes for the app and required drafts.
