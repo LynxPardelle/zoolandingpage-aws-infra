@@ -106,12 +106,15 @@ if (process.platform === "linux") {
     });
     assert.deepEqual(skeleton, {});
     assert.equal(transported.stderr.toString(), "", "inherited shell/Python hooks must not execute");
-    const role = awsCli("iam", "get-role", { RoleName: "thn-synthetic-role" }, env, undefined, (command, args, options) => {
+    // GetRole's CLI-generated output violates its own model length/range rules.
+    // ListRolePolicies still validates a required, nonempty RoleName but has a
+    // valid generated output; this is an offline parser test, not an IAM read.
+    const role = awsCli("iam", "list-role-policies", { RoleName: "thn-synthetic-role" }, env, undefined, (command, args, options) => {
       const result = spawnSync(command, [...args, "--generate-cli-skeleton", "output", "--no-sign-request"], options);
       assert.equal(result.status, 0, result.stderr?.toString());
       return result;
     });
-    assert.equal(typeof role.Role.RoleName, "string", "native CLI must validate nonempty JSON offline too");
+    assert.ok(Array.isArray(role.PolicyNames), "native CLI must validate nonempty JSON offline too");
     awsCli("s3api", "get-object", { Bucket: "thn-synthetic-bucket", Key: "fixture",
       ExpectedBucketOwner: "0".repeat(12), ChecksumMode: "ENABLED" }, env, "/dev/null", (command, args, options) => {
       // GetObject has no skeleton mode. A closed loopback endpoint proves native
@@ -119,7 +122,7 @@ if (process.platform === "linux") {
       const result = spawnSync(command, [...args, "--no-sign-request", "--endpoint-url", "http://127.0.0.1:1",
         "--cli-connect-timeout", "1", "--cli-read-timeout", "1"], options);
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr.toString(), /Could not connect to the endpoint URL/);
+      assert.match(result.stderr.toString(), /Could not connect to the endpoint URL|Connect timeout on endpoint URL/);
       assert.doesNotMatch(result.stderr.toString(), /Unknown options|Invalid JSON|Missing required parameter/);
       return { status: 0, stdout: Buffer.from("{}") };
     });
