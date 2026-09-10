@@ -122,15 +122,74 @@ function assertOnlyCdkAnalyticsChanged(resource) {
   }
   const before = parseContext(resource.BeforeContext);
   const after = parseContext(resource.AfterContext);
+  const native = Object.hasOwn(before, "Properties") || Object.hasOwn(after, "Properties");
+  const beforeProperties = native ? parseContext(before.Properties) : before;
+  const afterProperties = native ? parseContext(after.Properties) : after;
   if (
-    JSON.stringify(Object.keys(before).sort()) !== JSON.stringify(["Analytics"])
-    || JSON.stringify(Object.keys(after).sort()) !== JSON.stringify(["Analytics"])
-    || typeof before.Analytics !== "string"
-    || typeof after.Analytics !== "string"
-    || before.Analytics.length === 0
-    || after.Analytics.length === 0
-    || before.Analytics === after.Analytics
+    JSON.stringify(Object.keys(beforeProperties).sort()) !== JSON.stringify(["Analytics"])
+    || JSON.stringify(Object.keys(afterProperties).sort()) !== JSON.stringify(["Analytics"])
+    || typeof beforeProperties.Analytics !== "string"
+    || typeof afterProperties.Analytics !== "string"
+    || beforeProperties.Analytics.length === 0
+    || afterProperties.Analytics.length === 0
+    || beforeProperties.Analytics === afterProperties.Analytics
   ) {
+    throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
+  }
+  if (native) {
+    assertMetadataDetail(resource, "Properties", "Analytics", "/Properties/Analytics",
+      "Conditionally", beforeProperties.Analytics, afterProperties.Analytics);
+    const strippedBefore = structuredClone(before), strippedAfter = structuredClone(after);
+    delete strippedBefore.Properties.Analytics;
+    delete strippedAfter.Properties.Analytics;
+    if (JSON.stringify(canonicalize(strippedBefore)) !== JSON.stringify(canonicalize(strippedAfter))) {
+      throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
+    }
+  } else if (resource.Replacement === "Conditional") {
+    // Conditional is accepted only with the complete native Analytics proof.
+    throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
+  }
+}
+
+function assertMetadataDetail(resource, attribute, name, targetPath, recreation, before, after) {
+  const detail = resource.Details?.[0], target = detail?.Target;
+  if (JSON.stringify(resource.Scope) !== JSON.stringify([attribute])
+    || !Array.isArray(resource.Details) || resource.Details.length !== 1 || detail.Evaluation !== "Static"
+    || detail.ChangeSource !== "DirectModification" || target?.Attribute !== attribute
+    || (name ? target.Name !== name : target.Name != null)
+    || target.Path !== targetPath || target.RequiresRecreation !== recreation
+    || target.AttributeChangeType !== "Modify" || target.BeforeValue !== before || target.AfterValue !== after) {
+    throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
+  }
+}
+
+function isAssetPathMetadata(resource) {
+  return resource.ResourceType === "AWS::Lambda::Function" && (
+    JSON.stringify(resource.Scope) === JSON.stringify(["Metadata"])
+    || resource.Details?.length === 1 && resource.Details[0].Target?.Path === "/Metadata/aws:asset:path"
+  );
+}
+
+function assertOnlyAssetPathMetadataChanged(resource) {
+  if (resource.Action !== "Modify" || resource.Replacement !== "False") {
+    throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
+  }
+  const before = structuredClone(parseContext(resource.BeforeContext));
+  const after = structuredClone(parseContext(resource.AfterContext));
+  for (const value of [before, after]) {
+    if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["Metadata", "Properties"])
+      || !value.Properties || typeof value.Properties !== "object" || Array.isArray(value.Properties)
+      || Object.keys(value.Properties).length === 0 || !value.Metadata || typeof value.Metadata !== "object"
+      || Array.isArray(value.Metadata) || typeof value.Metadata["aws:asset:path"] !== "string"
+      || value.Metadata["aws:asset:path"].length === 0 || value.Metadata["aws:asset:property"] !== "Code") {
+      throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
+    }
+  }
+  const beforePath = before.Metadata["aws:asset:path"], afterPath = after.Metadata["aws:asset:path"];
+  assertMetadataDetail(resource, "Metadata", null, "/Metadata/aws:asset:path", "Never", beforePath, afterPath);
+  delete before.Metadata["aws:asset:path"];
+  delete after.Metadata["aws:asset:path"];
+  if (beforePath === afterPath || JSON.stringify(canonicalize(before)) !== JSON.stringify(canonicalize(after))) {
     throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
   }
 }
@@ -283,6 +342,7 @@ function reviewChangeSet(changeSet, options) {
   }
 
   let adminSurfaceChanges = 0;
+  let metadataOnlyChanges = 0;
   let exactHostEvidence = false;
   for (const change of changes) {
     if (!change || change.Type !== "Resource" || !change.ResourceChange) {
@@ -293,8 +353,11 @@ function reviewChangeSet(changeSet, options) {
     const logicalId = requireString(resource.LogicalResourceId, "logical_resource_id_invalid");
     const resourceType = requireString(resource.ResourceType, "resource_type_invalid");
     const replacement = resource.Replacement;
+    const isCdkAnalyticsMetadata = logicalId === "CDKMetadata"
+      && resourceType === "AWS::CDK::Metadata";
 
-    if (!['Add', 'Modify'].includes(action) || ![undefined, null, "False"].includes(replacement)) {
+    if (!['Add', 'Modify'].includes(action) || (![undefined, null, "False"].includes(replacement)
+      && !(isCdkAnalyticsMetadata && replacement === "Conditional"))) {
       throw new ChangeSetReviewError("stateful_resource_change_forbidden");
     }
     if (logicalId === "ThnAdminTestCertificate" || resourceType === "AWS::CertificateManager::Certificate") {
@@ -307,13 +370,18 @@ function reviewChangeSet(changeSet, options) {
 
     const isInfrastructure = matchesRule(logicalId, resourceType, ADMIN_INFRASTRUCTURE_RULES);
     const isRouteAssociation = matchesRule(logicalId, resourceType, ADMIN_ROUTE_RULES);
-    const isCdkAnalyticsMetadata = logicalId === "CDKMetadata"
-      && resourceType === "AWS::CDK::Metadata";
     if (logicalId === "CDKMetadata" || resourceType === "AWS::CDK::Metadata") {
       if (!isCdkAnalyticsMetadata) {
         throw new ChangeSetReviewError("cdk_metadata_change_forbidden");
       }
       assertOnlyCdkAnalyticsChanged(resource);
+      metadataOnlyChanges += 1;
+      continue;
+    }
+    if (isAssetPathMetadata(resource)) {
+      assertOnlyAssetPathMetadataChanged(resource);
+      metadataOnlyChanges += 1;
+      continue;
     }
     const contextText = JSON.stringify({
       before: resource.BeforeContext,
@@ -326,11 +394,8 @@ function reviewChangeSet(changeSet, options) {
       && hostMembershipChanged(resource, EXACT_ADMIN_HOST);
 
     if (adminMode) {
-      if (!isInfrastructure && !isRouteAssociation && !isCdkAnalyticsMetadata) {
+      if (!isInfrastructure && !isRouteAssociation) {
         throw new ChangeSetReviewError("non_admin_resource_change_forbidden");
-      }
-      if (isCdkAnalyticsMetadata) {
-        continue;
       }
       if (isSharedSsrFunction) {
         if (action !== "Modify") {
@@ -353,6 +418,9 @@ function reviewChangeSet(changeSet, options) {
   if (adminMode && (adminSurfaceChanges === 0 || !exactHostEvidence)) {
     throw new ChangeSetReviewError("admin_change_evidence_missing");
   }
+  // Do not execute a stack update solely for CDK bookkeeping. Every entry has
+  // still passed identity, production, context, scope and replacement checks.
+  if (metadataOnlyChanges === changes.length) return "noop";
   return "execute";
 }
 

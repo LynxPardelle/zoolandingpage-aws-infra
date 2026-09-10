@@ -53,12 +53,20 @@ Activating `admin-test.thehairnarrative.com` requires both manual approvals:
 
 Both approvals default to false and must be supplied together through a manual
 dispatch. The reviewer rejects production aliases, deletion, replacement,
-unapproved THN admin changes, and collateral SSR changes. The generated
-`CDKMetadata` analytics update is the only nonfunctional bookkeeping exception.
+unapproved THN admin changes, and collateral SSR changes. Two narrowly verified
+CDK bookkeeping differences are nonfunctional: native `CDKMetadata` Analytics
+and Lambda `Metadata/aws:asset:path` with identical remaining properties and
+metadata. Complete static detail/context evidence is required. CloudFormation's
+`Conditional` classification is accepted only for that exact native Analytics
+update, never for a stateful/application resource. An ordinary change set made
+only of this bookkeeping returns `noop` without executing an update; metadata
+alone cannot satisfy admin-activation evidence.
 Rollback requires the recorded source run, artifact ID, source SHA, and manifest
 digest from a successful `Deploy Test` run.
 
 See [changelog/2026-09-04-test-infra-delivery-hardening.md](changelog/2026-09-04-test-infra-delivery-hardening.md).
+The native metadata reconciliation is recorded in
+[the TEST metadata review correction](changelog/2026-09-09-test-metadata-review.md).
 The closed APP manifest transport, exact static-origin projection, certificate
 preflight, and publish-versus-select sequence are documented in
 [THN TEST admin release selection](docs/thn-admin-test-release.md).
