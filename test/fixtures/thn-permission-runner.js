@@ -19,7 +19,7 @@ function runnerFixture(data, api, scenario) {
   const bucketPolicy = { Version: "2012-10-17", Statement: [] };
   data.config.anchors.kmsKey = sha(keyArn);
   data.config.anchors.bucketPolicy = sha(canonical(bucketPolicy));
-  let executed = false, protectedStack = false, body;
+  let executed = false, protectedStack = false, body, executionPolls = 0;
   const resolve = value => Array.isArray(value) ? value.map(resolve) : value && typeof value === "object"
     ? (value["Fn::Sub"] ? value["Fn::Sub"].replaceAll("${AWS::Partition}", "aws").replaceAll("${AWS::Region}", "us-east-1").replaceAll("${AWS::AccountId}", account)
       : Object.fromEntries(Object.entries(value).map(([key, child]) => [key, resolve(child)]))) : value;
@@ -59,7 +59,14 @@ function runnerFixture(data, api, scenario) {
         const result = structuredClone(data.description);
         if (scenario === "extra-add") result.Changes.push(structuredClone(result.Changes[0]));
         if (scenario === "role-drift") roles[Object.values(TARGETS)[0]].Role.AssumeRolePolicyDocument.Statement.push({ Effect: "Allow", Action: "unapproved" });
-        if (executed) result.ExecutionStatus = "EXECUTE_COMPLETE";
+        if (executed) {
+          executionPolls++;
+          result.ExecutionStatus = "EXECUTE_COMPLETE";
+          if (scenario === "stuck-available" || scenario === "stale-available" && executionPolls === 1) result.ExecutionStatus = "AVAILABLE";
+          if (scenario?.startsWith("execution-")) result.ExecutionStatus = scenario.slice("execution-".length);
+          if (scenario === "change-set-failed") result.Status = "FAILED";
+          if (scenario === "execution-identity") { result.ExecutionStatus = "EXECUTE_COMPLETE"; result.ChangeSetId = "unexpected"; }
+        }
         return result;
       }
       if (action === "execute-change-set") {

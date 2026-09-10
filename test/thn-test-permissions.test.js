@@ -251,6 +251,37 @@ test("runner recognizes a completed native rollback immediately instead of polli
   assert.equal(afterExecute.filter(call => call.action === "describe-stacks").length, 1);
 });
 
+test("runner waits through stale AVAILABLE after execution without issuing another execution", async () => {
+  const { runnerFixture } = require("./fixtures/thn-permission-runner");
+  const data = runnerFixture(authorityFixture(), api(), "stale-available");
+  const result = await api().runPermissions(data.ledger, data.authority, data.config);
+  assert.equal(result.status, "verified");
+  const afterExecute = data.calls.slice(data.calls.findIndex(call => call.action === "execute-change-set") + 1);
+  assert.equal(afterExecute.filter(call => call.action === "describe-change-set").length, 2);
+  assert.equal(data.calls.filter(call => call.action === "execute-change-set").length, 1);
+  assert.equal(result.originalRolesPreserved, true);
+});
+
+test("runner never treats permanently AVAILABLE as completed and stops at the poll bound", async () => {
+  const { runnerFixture } = require("./fixtures/thn-permission-runner");
+  const data = runnerFixture(authorityFixture(), api(), "stuck-available");
+  await assert.rejects(api().runPermissions(data.ledger, data.authority, data.config), /thn_permission_guard_failed/);
+  const afterExecute = data.calls.slice(data.calls.findIndex(call => call.action === "execute-change-set") + 1);
+  assert.equal(afterExecute.filter(call => call.action === "describe-change-set").length, data.config.maxPolls);
+  assert.equal(data.calls.filter(call => call.action === "execute-change-set").length, 1);
+});
+
+for (const scenario of ["execution-EXECUTE_FAILED", "execution-OBSOLETE", "execution-UNAVAILABLE", "execution-UNKNOWN", "change-set-failed", "execution-identity"]) {
+  test(`execution polling fails closed immediately on ${scenario}`, async () => {
+    const { runnerFixture } = require("./fixtures/thn-permission-runner");
+    const data = runnerFixture(authorityFixture(), api(), scenario);
+    await assert.rejects(api().runPermissions(data.ledger, data.authority, data.config), /thn_permission_guard_failed/);
+    const afterExecute = data.calls.slice(data.calls.findIndex(call => call.action === "execute-change-set") + 1);
+    assert.equal(afterExecute.filter(call => call.action === "describe-change-set").length, 1);
+    assert.equal(data.calls.filter(call => call.action === "execute-change-set").length, 1);
+  });
+}
+
 test("permissions workflow is separate, TEST-only and authenticates artifact before OIDC", () => {
   const file = path.join(__dirname, "../.github/workflows/thn-test-permissions.yml");
   assert.ok(fs.existsSync(file), "missing separate TEST permissions workflow");
