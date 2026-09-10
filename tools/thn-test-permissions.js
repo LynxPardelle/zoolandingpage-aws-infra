@@ -360,7 +360,11 @@ async function executePermissions(ledger, authority, config) {
     if (checkBaseline().EnableTerminationProtection !== true) fail();
     client("deploy", "cloudformation", "execute-change-set", { StackName: stackId, ChangeSetName: created.Id, ClientRequestToken: name });
     await waitFor(() => client("deploy", "cloudformation", "describe-change-set", changeInput), value => {
-      if (!["EXECUTE_IN_PROGRESS", "EXECUTE_COMPLETE"].includes(value.ExecutionStatus) || value.Status === "FAILED") fail();
+      // Execution is asynchronous: a stale AVAILABLE read is pending, never
+      // success and never a reason to submit ExecuteChangeSet again.
+      if (value.StackId !== stackId || value.ChangeSetId !== created.Id || value.ChangeSetName !== name
+        || value.Status !== "CREATE_COMPLETE"
+        || !["AVAILABLE", "EXECUTE_IN_PROGRESS", "EXECUTE_COMPLETE"].includes(value.ExecutionStatus)) fail();
       return value.ExecutionStatus === "EXECUTE_COMPLETE";
     });
     const finalStack = await waitFor(() => readStack(true), value => value.StackStatus === "UPDATE_COMPLETE");
