@@ -6,6 +6,9 @@ The shared prerequisite/permissions CLI adapter must not ask AWS CLI to reopen
 Node's socket-based stdin directly as `/dev/stdin` on Linux. A fixed Bash
 process-substitution pipe preserves the private-JSON stdin boundary and replaces
 the shell with AWS CLI so the existing timeout still targets the command.
+The producer reads from an explicitly preserved input descriptor, which is
+closed for AWS CLI. Native coverage also checks exact synthetic input bytes
+larger than a pipe buffer, independently of the AWS JSON parser.
 Inherited Bash startup files, functions and tracing are ignored; argument data
 is never interpolated into shell source. There is no new IAM permission, role,
 workflow approval, artifact input, dependency or AWS resource.

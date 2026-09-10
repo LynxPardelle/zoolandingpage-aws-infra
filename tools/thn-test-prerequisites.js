@@ -171,9 +171,11 @@ function awsCli(service, operation, input, env, outputFile, spawn = spawnSync) {
     ...(service === "route53" && operation === "list-resource-record-sets" ? ["--no-paginate"] : [])];
   // Node's stdin socket cannot be reopened as /dev/stdin on Linux. Bash supplies
   // a real anonymous pipe; exec keeps the AWS process under spawnSync's timeout.
+  // Preserve the input on fd 3 before asynchronous process substitution and
+  // redirect cat explicitly from it. Close that extra descriptor for AWS.
   // -p ignores inherited startup files/functions/tracing, not an elevation.
   // JSON stays on stdin; the fixed script never interpolates argument contents.
-  const result = spawn("bash", ["--noprofile", "--norc", "-p", "-c", 'exec aws "$@" < <(cat)', "thn-aws-cli", ...args],
+  const result = spawn("bash", ["--noprofile", "--norc", "-p", "-c", 'exec 3<&0; exec aws "$@" < <(cat <&3) 3<&-', "thn-aws-cli", ...args],
     { input: JSON.stringify(parameters), env: { ...env, AWS_PAGER: "", AWS_MAX_ATTEMPTS: "1" },
     timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
   if (result.error || result.status !== 0) fail();

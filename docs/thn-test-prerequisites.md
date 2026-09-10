@@ -100,7 +100,10 @@ anchored in the authenticated request and exact final IAM trust readback.
 The human value is passed to AWS CLI through stdin JSON, never command arguments,
 files or logs. Only `Ref` to its NoEcho parameter appears in the private template.
 On Linux, the shared CLI adapter uses a fixed Bash process-substitution pipe:
-Node's stdin socket cannot be reopened through `/dev/stdin`. `exec` preserves
+Node's stdin socket cannot be reopened through `/dev/stdin`. The launcher saves
+that input on a separate descriptor before starting the asynchronous producer,
+explicitly redirects the producer from it, and closes the extra descriptor for
+AWS CLI. `exec` preserves
 the child timeout target; privileged-shell mode ignores inherited shell startup
 files, functions and tracing without acquiring privileges. All arguments remain
 quoted positional values and private JSON remains stdin-only. Linux CI reproduces

@@ -15,7 +15,7 @@ test("AWS CLI receives a real shell pipe without interpolating private JSON or a
   assert.deepEqual(result, {});
   assert.equal(observed.command, "bash");
   assert.deepEqual(observed.args.slice(0, 4), ["--noprofile", "--norc", "-p", "-c"]);
-  assert.equal(observed.args[4], 'exec aws "$@" < <(cat)');
+  assert.equal(observed.args[4], 'exec 3<&0; exec aws "$@" < <(cat <&3) 3<&-');
   assert.equal(observed.args[5], "thn-aws-cli");
   assert.deepEqual(observed.args.slice(6, 9), ["s3api", "get-object", outputFile]);
   assert.ok(!JSON.stringify(observed.args).includes(input.Example));
@@ -45,6 +45,18 @@ if (process.platform === "linux") {
     assert.equal(legacy.error, undefined, "the CI runner must provide AWS CLI");
     assert.notEqual(legacy.status, 0, "the original direct Node pipe must reproduce the defect");
     assert.match(legacy.stderr, /No such device or address|Errno 6/, "fail specifically when reopening the Node descriptor");
+    // Check the byte boundary independently of AWS parsing, including a payload
+    // larger than a typical pipe buffer. Only synthetic data enters this probe.
+    const fixture = { Example: "synthetic á $(printf unexpected) ' \" \\ end".repeat(4096) };
+    awsCli("sts", "get-caller-identity", fixture, env, undefined, (command, args, options) => {
+      const probeArgs = args.slice(0, 6);
+      probeArgs[4] = probeArgs[4].replace('exec aws "$@"', 'exec cat "$@"');
+      const probe = spawnSync(command, [...probeArgs, "/dev/stdin"], options);
+      assert.equal(probe.status, 0, probe.stderr?.toString());
+      assert.deepEqual(probe.stdout, Buffer.from(JSON.stringify(fixture)), "stdin bytes must survive shell redirection");
+      assert.equal(probe.stderr.toString(), "");
+      return { status: 0, stdout: Buffer.from("{}") };
+    });
     let transported;
     const skeleton = awsCli("sts", "get-caller-identity", {}, env, undefined, (command, args, options) => {
       transported = spawnSync(command, [...args, "--generate-cli-skeleton", "input", "--no-sign-request"], options);
