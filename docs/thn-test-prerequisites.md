@@ -97,18 +97,23 @@ the baseline (or explicitly reflect previous-value use); new NoEcho must return
 the native `****` mask. That mask does not prove the hidden value: equality is
 anchored in the authenticated request and exact final IAM trust readback.
 
-The human value is passed to AWS CLI through stdin JSON, never command arguments,
-files or logs. Only `Ref` to its NoEcho parameter appears in the private template.
-On Linux, the shared CLI adapter uses a fixed Bash process-substitution pipe:
-Node's stdin socket cannot be reopened through `/dev/stdin`. The launcher saves
-that input on a separate descriptor before starting the asynchronous producer,
-explicitly redirects the producer from it, and closes the extra descriptor for
-AWS CLI. `exec` preserves
-the child timeout target; privileged-shell mode ignores inherited shell startup
-files, functions and tracing without acquiring privileges. All arguments remain
-quoted positional values and private JSON remains stdin-only. Linux CI reproduces
-the original descriptor error and verifies the native CLI with offline skeleton
-generation, without credentials or cloud access.
+The human value enters the CLI adapter through stdin JSON, never command
+arguments, filesystem paths or logs. Only `Ref` to its NoEcho parameter appears
+in the private template. On Linux, Node's stdin socket cannot be reopened through
+`/dev/stdin`; an ordinary pipe also fails when the CLI's argument loader and JSON
+loader each reopen the reference. The fixed isolated Python launcher uses a
+sealed anonymous `memfd` so each open returns the complete input. It creates no
+named filesystem entry, installs no package and calls `exec` to preserve the
+existing timeout target. The runner requires Linux `memfd_create` and its existing
+Python 3; unsupported runtimes fail closed without an on-disk fallback.
+
+S3 GetObject does not support `--cli-input-json`. Its four closed string fields
+use separate sealed memory descriptors and `file://` argument references, never
+their raw values. The CLI's streaming outfile is still the existing reviewed
+local template readback; the transport does not substitute a metadata-only check.
+Linux CI verifies repeated exact reads, immutability and native empty/nonempty
+JSON skeletons. GetObject argument loading is checked against a closed loopback
+endpoint with no signing, credentials or connection to AWS.
 The S3 body uses the CLI's streaming-file argument, not a JSON path interpreted as
 object content. [AWS CLI PutObject contract](https://docs.aws.amazon.com/cli/latest/reference/s3api/put-object.html).
 

@@ -160,23 +160,49 @@ function validateAuthority(authority, operation, config) {
 
 function awsCli(service, operation, input, env, outputFile, spawn = spawnSync) {
   const parameters = { ...input };
+  const getObject = service === "s3api" && operation === "get-object";
+  if (getObject && (!path.isAbsolute(outputFile || "")
+    || JSON.stringify(Object.keys(parameters).sort()) !== JSON.stringify(["Bucket", "ChecksumMode", "ExpectedBucketOwner", "Key"])
+    || Object.values(parameters).some(value => typeof value !== "string" || !value))) fail();
   const bodyArgs = service === "s3api" && operation === "put-object" ? ["--body", parameters.Body] : [];
   if (bodyArgs.length) {
     if (typeof parameters.Body !== "string" || !path.isAbsolute(parameters.Body)) fail();
     delete parameters.Body;
   }
-  const args = [service, operation, ...(outputFile ? [outputFile] : []), "--cli-input-json", "file:///dev/stdin",
+  const args = [service, operation, ...(outputFile ? [outputFile] : []),
+    ...(getObject ? [] : ["--cli-input-json", "file:///dev/stdin"]),
     ...bodyArgs,
     "--region", REGION, "--output", "json", "--no-cli-pager",
     ...(service === "route53" && operation === "list-resource-record-sets" ? ["--no-paginate"] : [])];
-  // Node's stdin socket cannot be reopened as /dev/stdin on Linux. Bash supplies
-  // a real anonymous pipe; exec keeps the AWS process under spawnSync's timeout.
-  // Preserve the input on fd 3 before asynchronous process substitution and
-  // redirect cat explicitly from it. Close that extra descriptor for AWS.
-  // -p ignores inherited startup files/functions/tracing, not an elevation.
-  // JSON stays on stdin; the fixed script never interpolates argument contents.
-  const result = spawn("bash", ["--noprofile", "--norc", "-p", "-c", 'exec 3<&0; exec aws "$@" < <(cat <&3) 3<&-', "thn-aws-cli", ...args],
-    { input: JSON.stringify(parameters), env: { ...env, AWS_PAGER: "", AWS_MAX_ATTEMPTS: "1" },
+  // Linux CLI input must be reopenable: Node sockets fail /dev/stdin, and the
+  // CLI can load the JSON reference twice, exhausting a regular pipe. A sealed
+  // anonymous memfd permits both reads without a private file on disk or argv.
+  // Isolated Python ignores startup hooks; exec keeps the existing timeout PID.
+  const launcher = [
+    "import fcntl, json, os, sys",
+    "def sealed_input(value):",
+    '    fd = os.memfd_create("thn-cli-input", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)',
+    '    with os.fdopen(fd, "wb", closefd=False) as target:',
+    "        target.write(value)",
+    "    fcntl.fcntl(fd, fcntl.F_ADD_SEALS, fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)",
+    "    os.lseek(fd, 0, os.SEEK_SET)",
+    "    return fd",
+    "data = sys.stdin.buffer.read()",
+    "arguments = sys.argv[1:]",
+    'if arguments[:2] == ["s3api", "get-object"]:',
+    "    values = json.loads(data)",
+    '    for key, option in [("Bucket", "--bucket"), ("Key", "--key"), ("ExpectedBucketOwner", "--expected-bucket-owner"), ("ChecksumMode", "--checksum-mode")]:',
+    '        fd = sealed_input(values[key].encode("utf-8"))',
+    "        os.set_inheritable(fd, True)",
+    '        arguments.extend([option, "file:///proc/self/fd/" + str(fd)])',
+    "else:",
+    "    fd = sealed_input(data)",
+    "    os.dup2(fd, 0)",
+    "    os.close(fd)",
+    'os.execvp("aws", ["aws", *arguments])',
+  ].join("\n");
+  const result = spawn("python3", ["-I", "-S", "-c", launcher, ...args],
+    { input: JSON.stringify(parameters), env: { ...env, AWS_PAGER: "", AWS_MAX_ATTEMPTS: "1", AWS_CLI_FILE_ENCODING: "UTF-8" },
     timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
   if (result.error || result.status !== 0) fail();
   try { return result.stdout.length ? JSON.parse(result.stdout) : {}; } catch { fail(); }
