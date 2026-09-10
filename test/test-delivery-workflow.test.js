@@ -81,6 +81,113 @@ const reviewOptions = {
   adminRouteAssociationApproved: true,
 };
 
+function metadataOnlyFixture() {
+  const lambda = {
+    Properties: { Runtime: "nodejs22.x", Handler: "index.handler", Code: { S3Key: "unchanged.zip" } },
+    Metadata: { "aws:asset:path": "../asset-before", "aws:asset:property": "Code", "aws:cdk:path": "fixture/provider" },
+  };
+  const analytics = { Properties: { Analytics: "v2:deflate64:before" }, Metadata: { "aws:cdk:path": "fixture/CDKMetadata" } };
+  return [
+    {
+      Action: "Modify", LogicalResourceId: "FixtureProviderAABBCCDD", ResourceType: "AWS::Lambda::Function", Replacement: "False", Scope: ["Metadata"],
+      BeforeContext: JSON.stringify(lambda), AfterContext: JSON.stringify({ ...lambda, Metadata: { ...lambda.Metadata, "aws:asset:path": "asset-after" } }),
+      Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: { Attribute: "Metadata", Path: "/Metadata/aws:asset:path", RequiresRecreation: "Never", AttributeChangeType: "Modify", BeforeValue: "../asset-before", AfterValue: "asset-after" } }],
+    },
+    {
+      Action: "Modify", LogicalResourceId: "CDKMetadata", ResourceType: "AWS::CDK::Metadata", Replacement: "Conditional", Scope: ["Properties"],
+      BeforeContext: JSON.stringify(analytics), AfterContext: JSON.stringify({ ...analytics, Properties: { Analytics: "v2:deflate64:after" } }),
+      Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: { Attribute: "Properties", Name: "Analytics", Path: "/Properties/Analytics", RequiresRecreation: "Conditionally", AttributeChangeType: "Modify", BeforeValue: "v2:deflate64:before", AfterValue: "v2:deflate64:after" } }],
+    },
+  ];
+}
+
+const ordinaryReview = { ...reviewOptions, adminInfrastructureApproved: false, adminRouteAssociationApproved: false };
+
+test("native CDK-only metadata drift is a non-executing ordinary TEST no-op", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const fixture = metadataOnlyFixture();
+  for (const resources of [fixture, [fixture[0]], [fixture[1]]]) {
+    assert.equal(reviewChangeSet(changeSet(resources), ordinaryReview), "noop");
+  }
+});
+
+test("metadata review preserves object contexts across repeated reviews", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const resources = metadataOnlyFixture().map(value => ({ ...value,
+    BeforeContext: JSON.parse(value.BeforeContext), AfterContext: JSON.parse(value.AfterContext) }));
+  const payload = changeSet(resources), snapshot = JSON.stringify(payload);
+  assert.equal(reviewChangeSet(payload, ordinaryReview), "noop");
+  assert.equal(JSON.stringify(payload), snapshot);
+  assert.equal(reviewChangeSet(payload, ordinaryReview), "noop");
+});
+
+test("metadata is not evidence of an approved admin activation", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  assert.throws(() => reviewChangeSet(changeSet(metadataOnlyFixture()), reviewOptions), /admin_change_evidence_missing/);
+});
+
+test("native metadata may accompany a genuine separately approved admin addition", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const addition = { Action: "Add", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestAABBCCDD", ResourceType: "AWS::CloudFront::Distribution", AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }) };
+  assert.equal(reviewChangeSet(changeSet([...metadataOnlyFixture(), addition]), reviewOptions), "execute");
+  assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), addition]), ordinaryReview), /admin_change_requires_approvals/);
+});
+
+test("metadata classification cannot hide runtime, unknown-context or extra-property changes", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const [index, mutate] of [
+    [0, value => { value.Properties.Code.S3Key = "changed.zip"; }],
+    [0, value => { value.Metadata["aws:asset:property"] = "Role"; }],
+    [0, value => { value.Extra = "unexpected"; }],
+    [1, value => { value.Properties.Unexpected = true; }],
+    [1, value => { value.Metadata["aws:cdk:path"] = "changed"; }],
+  ]) {
+    const resources = metadataOnlyFixture();
+    const after = JSON.parse(resources[index].AfterContext); mutate(after);
+    resources[index].AfterContext = JSON.stringify(after);
+    assert.throws(() => reviewChangeSet(changeSet(resources), ordinaryReview), /metadata_change_forbidden/);
+  }
+});
+
+test("native metadata requires matching complete static detail and scope", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const index of [0, 1]) for (const mutate of [
+    value => { delete value.BeforeContext; },
+    value => { delete value.Details; },
+    value => { value.Details[0].Evaluation = "Dynamic"; },
+    value => { value.Details[0].Target.AfterValue = "mismatch"; },
+    value => { value.Details[0].Target.Path = "/Properties/Code"; },
+    value => { value.Details[0].Target.RequiresRecreation = "Always"; },
+    value => { value.Scope.push("Properties", "Metadata"); },
+  ]) {
+    const resources = metadataOnlyFixture(); mutate(resources[index]);
+    assert.throws(() => reviewChangeSet(changeSet(resources), ordinaryReview), /metadata_change_forbidden|context_invalid/);
+  }
+});
+
+test("metadata no-op never skips stateful, production, deletion, replacement or unknown entries", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const resource of [
+    { LogicalResourceId: "RetainedTable", ResourceType: "AWS::DynamoDB::Table", Action: "Modify", Replacement: "Conditional" },
+    { LogicalResourceId: "RetainedBucket", ResourceType: "AWS::S3::Bucket", Action: "Remove" },
+    { LogicalResourceId: "OtherFunction", ResourceType: "AWS::Lambda::Function", Action: "Modify", Replacement: "True" },
+    { ...metadataOnlyFixture()[0], LogicalResourceId: "ProductionProvider" },
+    { ...metadataOnlyFixture()[1], LogicalResourceId: "OtherMetadata" },
+    { ...metadataOnlyFixture()[1], Action: "Add" },
+    { ...metadataOnlyFixture()[1], Replacement: "True" },
+  ]) assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), resource]), ordinaryReview));
+  const payload = changeSet(metadataOnlyFixture());
+  payload.Changes.push({ Type: "Unknown" });
+  assert.throws(() => reviewChangeSet(payload, ordinaryReview), /change_set_entry_invalid/);
+});
+
+test("functional ordinary changes never become metadata no-ops", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const functionChange = { Action: "Modify", LogicalResourceId: "FrontendSsrFunction47B61DD8", ResourceType: "AWS::Lambda::Function", Replacement: "False", Scope: ["Properties"], BeforeContext: JSON.stringify({ Code: { S3Key: "before.zip" }, Environment: { Variables: { NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx" } } }), AfterContext: JSON.stringify({ Code: { S3Key: "after.zip" }, Environment: { Variables: { NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx" } } }) };
+  assert.equal(reviewChangeSet(changeSet([...metadataOnlyFixture(), functionChange]), ordinaryReview), "execute");
+  assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), functionChange]), reviewOptions), /shared_ssr_change_forbidden/);
+});
+
 test("normal deploy and rollback never add, modify, replace or remove the retained prerequisite certificate", () => {
   const { reviewChangeSet } = require(reviewerPath);
   for (const approved of [false, true]) for (const action of ["Add", "Modify", "Remove"]) {
