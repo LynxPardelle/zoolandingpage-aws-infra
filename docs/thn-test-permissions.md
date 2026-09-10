@@ -67,6 +67,11 @@ coordinates, not just hashes. Execution downloads by artifact ID, verifies the
 external manifest and exact inventory before OIDC, and has no checkout, install
 or synthesis. Existing sealed lookup/publisher/deploy/CFN identities are reused;
 temporary sessions stay isolated in process memory.
+The shared Linux CLI adapter supplies sealed, replayable anonymous memory input
+without writing private values to filesystem paths, arguments or logs. The
+GetObject streaming variant keeps its parameters in separate memory descriptors;
+the fixed launcher and native offline
+regression are described in [the prerequisite transport](thn-test-prerequisites.md).
 
 Before each mutation, artifact authentication, live Original/Processed templates,
 parameters and all three role baselines must still match. The exact stable stack
