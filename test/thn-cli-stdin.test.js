@@ -48,6 +48,9 @@ if (process.platform === "linux") {
     let transported;
     const skeleton = awsCli("sts", "get-caller-identity", {}, env, undefined, (command, args, options) => {
       transported = spawnSync(command, [...args, "--generate-cli-skeleton", "input", "--no-sign-request"], options);
+      // This subprocess has only synthetic input, no credentials and no network.
+      // Keep its native error visible here; deployment errors stay sanitized.
+      assert.equal(transported.status, 0, transported.stderr?.toString());
       return transported;
     });
     assert.deepEqual(skeleton, {});
