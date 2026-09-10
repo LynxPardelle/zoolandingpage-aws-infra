@@ -99,6 +99,13 @@ anchored in the authenticated request and exact final IAM trust readback.
 
 The human value is passed to AWS CLI through stdin JSON, never command arguments,
 files or logs. Only `Ref` to its NoEcho parameter appears in the private template.
+On Linux, the shared CLI adapter uses a fixed Bash process-substitution pipe:
+Node's stdin socket cannot be reopened through `/dev/stdin`. `exec` preserves
+the child timeout target; privileged-shell mode ignores inherited shell startup
+files, functions and tracing without acquiring privileges. All arguments remain
+quoted positional values and private JSON remains stdin-only. Linux CI reproduces
+the original descriptor error and verifies the native CLI with offline skeleton
+generation, without credentials or cloud access.
 The S3 body uses the CLI's streaming-file argument, not a JSON path interpreted as
 object content. [AWS CLI PutObject contract](https://docs.aws.amazon.com/cli/latest/reference/s3api/put-object.html).
 
