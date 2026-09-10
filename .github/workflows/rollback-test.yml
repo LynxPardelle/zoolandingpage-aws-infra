@@ -1,0 +1,284 @@
+name: Rollback Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful Deploy Test run ID
+        required: true
+        type: string
+      source_artifact_id:
+        description: Immutable artifact ID recorded by that run
+        required: true
+        type: string
+      source_sha:
+        description: Full 40-character source commit SHA
+        required: true
+        type: string
+      source_manifest_sha256:
+        description: Recorded SHA-256 of the artifact manifest
+        required: true
+        type: string
+      approve_thn_admin_dns_tls_distribution:
+        description: Approve rollback changes limited to the THN TEST DNS, TLS, and distribution boundary
+        required: true
+        default: false
+        type: boolean
+      approve_thn_admin_route_association:
+        description: Approve rollback changes limited to the THN TEST route association
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: zoolandingpage-aws-infra-test-frontend
+  cancel-in-progress: false
+
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Validate immutable rollback coordinates
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_ARTIFACT_ID: ${{ inputs.source_artifact_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_MANIFEST_SHA256: ${{ inputs.source_manifest_sha256 }}
+          ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
+          ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test"
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$SOURCE_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$ADMIN_INFRASTRUCTURE_APPROVED" = "$ADMIN_ROUTE_ASSOCIATION_APPROVED" || {
+            echo "admin_approval_pair_invalid"
+            exit 1
+          }
+
+      - name: Verify source Deploy Test run
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_ARTIFACT_ID: ${{ inputs.source_artifact_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fail = code => { throw new Error(code); };
+            if (process.env.GITHUB_REF !== 'refs/heads/test') fail('rollback_ref_invalid');
+            const runId = Number(process.env.SOURCE_RUN_ID);
+            const artifactId = Number(process.env.SOURCE_ARTIFACT_ID);
+            if (!Number.isSafeInteger(runId) || runId <= 0) fail('source_run_id_invalid');
+            if (!Number.isSafeInteger(artifactId) || artifactId <= 0) fail('source_artifact_id_invalid');
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (
+              run.path !== '.github/workflows/deploy-test.yml'
+              || !['push', 'workflow_dispatch'].includes(run.event)
+              || run.head_branch !== 'test'
+              || run.head_sha !== process.env.SOURCE_SHA
+              || run.status !== 'completed'
+              || run.conclusion !== 'success'
+            ) {
+              fail('source_deploy_run_invalid');
+            }
+            if (!Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0) {
+              fail('source_run_attempt_invalid');
+            }
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+                per_page: 100,
+              },
+              response => response.data.artifacts
+            );
+            const artifact = artifacts.find(candidate => candidate.id === artifactId);
+            const expectedArtifactName =
+              `zoolandingpage-aws-infra-test-${runId}-${run.run_attempt}-${process.env.SOURCE_SHA}`;
+            if (
+              !artifact
+              || artifact.id !== artifactId
+              || artifact.expired
+              || artifact.name !== expectedArtifactName
+            ) {
+              fail('source_artifact_invalid');
+            }
+
+  rollback:
+    runs-on: ubuntu-latest
+    needs: verify-source
+    environment: test
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      RELEASE_ROOT: .transport/.release
+      EXPECTED_RELEASE_MANIFEST_SHA256: ${{ inputs.source_manifest_sha256 }}
+      EXPECTED_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+      EXPECTED_RELEASE_RUN_ID: ${{ inputs.source_run_id }}
+      EXPECTED_AWS_ACCOUNT_ID: "765932874577"
+      EXPECTED_AWS_REGION: us-east-1
+      ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
+      ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact rollback tooling without credentials
+        run: npm ci
+
+      - name: Download recorded immutable CDK assembly
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          artifact-ids: ${{ inputs.source_artifact_id }}
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          path: .transport
+          merge-multiple: true
+
+      - name: Verify recorded artifact, digest, and source
+        id: release
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_MANIFEST_SHA256: ${{ inputs.source_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          test -z "$(find .transport -type l -print -quit)"
+          top_level="$(find .transport -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)"
+          test "$top_level" = $'.release\nrelease-manifest.sha256'
+          (cd .transport/.release && LC_ALL=C find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/recomputed-release-manifest.sha256"
+          cmp --silent .transport/release-manifest.sha256 "$RUNNER_TEMP/recomputed-release-manifest.sha256"
+          printf '%s  %s\n' "$SOURCE_MANIFEST_SHA256" .transport/release-manifest.sha256 | sha256sum --check --strict -
+          (cd .transport/.release && sha256sum --check --strict ../release-manifest.sha256)
+          test -f .transport/.release/release-tools/infra-test-aws.js
+          node - "$SOURCE_SHA" "$SOURCE_RUN_ID" "$GITHUB_OUTPUT" <<'NODE'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync('.transport/.release/release-metadata.json', 'utf8'));
+          if (
+            payload.schema !== 'zoolanding-test-infra-release/v1'
+            || payload.service !== 'zoolandingpage-aws-infra'
+            || payload.source_sha !== process.argv[2]
+            || payload.run_id !== process.argv[3]
+            || payload.expected_aws_account_id !== process.env.EXPECTED_AWS_ACCOUNT_ID
+            || payload.expected_aws_region !== process.env.EXPECTED_AWS_REGION
+            || !['true', 'false'].includes(payload.thn_admin_origin_enabled)
+            || !['true', 'false'].includes(payload.thn_admin_route53_enabled)
+            || typeof payload.frontend_release_id !== 'string'
+            || payload.frontend_release_id.length === 0
+            || !/^[a-f0-9]{64}$/.test(payload.thn_admin_certificate_sha256)
+            || !/^[a-f0-9]{64}$/.test(payload.thn_admin_hosted_zone_sha256)
+          ) process.exit(1);
+          fs.appendFileSync(process.argv[4], `frontend_release_id=${payload.frontend_release_id}\n`);
+          fs.appendFileSync(process.argv[4], `thn_admin_origin_enabled=${payload.thn_admin_origin_enabled}\n`);
+          fs.appendFileSync(process.argv[4], `thn_admin_route53_enabled=${payload.thn_admin_route53_enabled}\n`);
+          NODE
+
+      - name: Validate rollback configuration before credentials
+        shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          THN_ADMIN_ORIGIN_ENABLED: ${{ steps.release.outputs.thn_admin_origin_enabled }}
+          THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$AWS_ROLE_ARN" || { echo "aws_role_arn_required"; exit 1; }
+          [[ "$AWS_ROLE_ARN" =~ ^arn:aws:iam::765932874577:role/[A-Za-z0-9+=,.@_/-]+$ ]] || {
+            echo "aws_role_arn_target_invalid"
+            exit 1
+          }
+          test "$ADMIN_INFRASTRUCTURE_APPROVED" = "$ADMIN_ROUTE_ASSOCIATION_APPROVED" || {
+            echo "admin_approval_pair_invalid"
+            exit 1
+          }
+          if [ "$ADMIN_INFRASTRUCTURE_APPROVED" = "true" ]; then
+            test "$THN_ADMIN_ORIGIN_ENABLED" = "true"
+            test "${{ steps.release.outputs.thn_admin_route53_enabled }}" = "true"
+          fi
+          if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
+            [[ "$THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET" =~ ^[A-Za-z0-9_-]{43}$ ]]
+            test -f .transport/.release/thn-admin-selection.json
+            test -f .transport/.release/release-tools/thn-admin-release.js
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Verify exact TEST AWS identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          caller_account="$(aws sts get-caller-identity --query Account --output text)"
+          test "$caller_account" = "$EXPECTED_AWS_ACCOUNT_ID"
+          test "$AWS_REGION" = "$EXPECTED_AWS_REGION"
+          test "$AWS_DEFAULT_REGION" = "$EXPECTED_AWS_REGION"
+
+      - name: Prevent public release drift during THN admin rollback
+        if: inputs.approve_thn_admin_dns_tls_distribution
+        shell: bash
+        env:
+          SOURCE_FRONTEND_RELEASE_ID: ${{ steps.release.outputs.frontend_release_id }}
+        run: |
+          set -euo pipefail
+          node .transport/.release/release-tools/infra-test-aws.js verify-public-release .transport/.release
+
+      - name: Prepare, review, and execute exact rollback change set
+        id: apply
+        shell: bash
+        env:
+          STACK_PATH: ZoolandingTest/Zoolandingpage-test-Frontend
+          STACK_NAME: ZoolandingTest-Zoolandingpage-test-Frontend
+          CHANGE_SET_NAME: rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          RELEASE_ROOT: .transport/.release
+          THN_ADMIN_ORIGIN_ENABLED: ${{ steps.release.outputs.thn_admin_origin_enabled }}
+          THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
+        run: bash .transport/.release/release-tools/run-test-infra-change-set.sh
+
+      - name: Post-rollback TEST stack smoke
+        shell: bash
+        env:
+          STACK_NAME: ZoolandingTest-Zoolandingpage-test-Frontend
+          THN_ADMIN_ORIGIN_ENABLED: ${{ steps.release.outputs.thn_admin_origin_enabled }}
+        run: bash .transport/.release/release-tools/smoke-test-infra-stack.sh
+
+      - name: Record rollback result
+        shell: bash
+        run: |
+          {
+            echo "### TEST infrastructure rollback"
+            echo "- source_run_id: ${{ inputs.source_run_id }}"
+            echo "- source_artifact_id: ${{ inputs.source_artifact_id }}"
+            echo "- source_sha: ${{ inputs.source_sha }}"
+            echo "- source_manifest_sha256: ${{ inputs.source_manifest_sha256 }}"
+            echo "- thn_admin_dns_tls_distribution_approved: $ADMIN_INFRASTRUCTURE_APPROVED"
+            echo "- thn_admin_route_association_approved: $ADMIN_ROUTE_ASSOCIATION_APPROVED"
+            echo "- change_set_executed: ${{ steps.apply.outputs.executed }}"
+          } >> "$GITHUB_STEP_SUMMARY"
