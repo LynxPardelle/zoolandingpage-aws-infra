@@ -25,13 +25,15 @@ test("TEST adds only three separate policies and preserves every pre-existing sy
   const recoveryRole = Object.entries(template.Resources).filter(([, r]) =>
     r.Type === "AWS::IAM::Role" && r.Properties?.RoleName === recovery.TARGETS.api.role);
   assert.equal(recoveryRole.length, 1);
-  assert.deepEqual(template.Resources[recovery.TARGETS.api.logical], {
-    ...recovery.policyResource("api"), DependsOn: [recoveryRole[0][0]],
-  });
-  delete template.Resources[recovery.TARGETS.api.logical];
-  for (const [name, definition] of Object.entries(recovery.parameterDefinitions("api"))) {
-    assert.deepEqual(template.Parameters[name], definition);
-    delete template.Parameters[name];
+  for (const selection of ["api", "api-runtime"]) {
+    assert.deepEqual(template.Resources[recovery.TARGETS[selection].logical], {
+      ...recovery.policyResource(selection), DependsOn: [recoveryRole[0][0]],
+    });
+    delete template.Resources[recovery.TARGETS[selection].logical];
+    for (const [name, definition] of Object.entries(recovery.parameterDefinitions(selection))) {
+      assert.deepEqual(template.Parameters[name], definition);
+      delete template.Parameters[name];
+    }
   }
   assert.equal(Object.values(template.Resources).filter(r => r.Type === "AWS::IAM::RolePolicy").length, 3);
   for (let i = 0; i < ids.length; i++) {

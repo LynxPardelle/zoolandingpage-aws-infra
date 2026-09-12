@@ -78,7 +78,7 @@ function reviewChangeSet(description, original, processed, expected) {
 }
 
 const FILES = ["authority.json", "coordinates.json", "ledger.json", "thn-test-recovery-permissions.js",
-  "thn-test-recovery-permission-policy.js", "thn-test-prerequisites.js"];
+  "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-prerequisites.js"];
 const bytes = value => Buffer.from(canonical(value));
 const authorityConfig = config => ({ ...config, anchors: config.authorityAnchors || ANCHORS });
 function validateAuthority(authority, config) {
@@ -156,7 +156,7 @@ function createClients(authority, binding, ledger, config) {
         if (input.ChangeSetName !== undefined && input.ChangeSetName !== name && !changeArn(input.ChangeSetName)) fail();
         if (action === "get-template" && !["Original", "Processed"].includes(input.TemplateStage)) fail();
         if (action === "describe-change-set" && input.IncludePropertyValues !== true) fail();
-        if (action === "describe-stack-resource" && !(serviceRead ? policy.FUNCTIONS : [selected.logical]).includes(input.LogicalResourceId)) fail();
+        if (action === "describe-stack-resource" && !(serviceRead ? (config.service === "api-runtime" ? ["ApiProxyApi"] : policy.FUNCTIONS) : [selected.logical]).includes(input.LogicalResourceId)) fail();
         if (action === "create-change-set") {
           if (sha(input.StackName) !== ledger.ownerStackSha256 || input.RoleARN !== authority.cfn || input.ChangeSetType !== "UPDATE"
             || input.ChangeSetName !== name || input.ClientToken !== name || input.IncludeNestedStacks !== false
@@ -246,7 +246,7 @@ async function executeRevision(ledger, binding, authority, config) {
     const RoleName = selected.role, request = { RoleName }, Role = client("lookup", "iam", "get-role", request).Role;
     const names = client("lookup", "iam", "list-role-policies", request), attached = client("lookup", "iam", "list-attached-role-policies", request);
     if (names.IsTruncated || attached.IsTruncated || !Array.isArray(names.PolicyNames)
-      || new Set(names.PolicyNames).size !== names.PolicyNames.length || names.PolicyNames.includes(policy.POLICY_NAME) !== final
+      || new Set(names.PolicyNames).size !== names.PolicyNames.length || names.PolicyNames.includes(policy.policyName(config.service)) !== final
       || !Array.isArray(attached.AttachedPolicies)) fail();
     const inline = {};
     for (const PolicyName of names.PolicyNames) {
@@ -255,8 +255,8 @@ async function executeRevision(ledger, binding, authority, config) {
       inline[PolicyName] = result.PolicyDocument;
     }
     if (final) {
-      if (!same(inline[policy.POLICY_NAME], prepared.document)) fail();
-      delete inline[policy.POLICY_NAME];
+      if (!same(inline[policy.policyName(config.service)], prepared.document)) fail();
+      delete inline[policy.policyName(config.service)];
     }
     if (hash(policy.roleSnapshot({ Role, inline, attached: attached.AttachedPolicies }, config.service, config.account, prepared.document)) !== ledger.roleSha256) fail();
   };
@@ -269,6 +269,11 @@ async function executeRevision(ledger, binding, authority, config) {
       if (r?.StackId !== binding.stackId || r.StackName !== selected.service || r.LogicalResourceId !== logical
         || r.ResourceType !== "AWS::Lambda::Function" || !stable.includes(r.ResourceStatus)
         || `arn:aws:lambda:us-east-1:${config.account}:function:${r.PhysicalResourceId}` !== binding.functions[logical]) fail();
+    }
+    if (config.service === "api-runtime") {
+      const r = client("lookup", "cloudformation", "describe-stack-resource", {StackName: binding.stackId, LogicalResourceId: "ApiProxyApi"}).StackResourceDetail;
+      if (r?.StackId !== binding.stackId || r.StackName !== selected.service || r.LogicalResourceId !== "ApiProxyApi"
+        || r.ResourceType !== "AWS::ApiGateway::RestApi" || !stable.includes(r.ResourceStatus) || r.PhysicalResourceId !== binding.runtime.apiId) fail();
     }
     // The immutable original selector/version is anchored by the service's
     // byte-verified recovery receipt. This read checks existence/ownership only;

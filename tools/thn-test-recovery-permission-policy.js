@@ -1,6 +1,8 @@
 "use strict";
 const { canonical, sha } = require("./thn-test-prerequisites");
+const runtime = require("./thn-test-api-runtime-permission-policy");
 const TARGETS = Object.freeze({
+  "api-runtime": runtime.TARGET,
   config: { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigTestRecoveryPolicy",
     prefix: "ThnConfigRecovery", service: "zoolanding-config-authoring-test", owner: "certificate" },
   api: { role: "zoolanding-deployer-api-proxy-test-github-deploy", logical: "ThnApiTestRecoveryPolicy",
@@ -22,8 +24,10 @@ const keys = (v, expected) => object(v) && same(Object.keys(v).sort(), [...expec
 const hash = v => sha(canonical(v));
 const ref = name => ({ Ref: name });
 function target(service) { if (!Object.hasOwn(TARGETS, service)) fail(); return TARGETS[service]; }
+function policyName(service) { return target(service).policyName || POLICY_NAME; }
 
 function parameterDefinitions(service) {
+  if (service === "api-runtime") return runtime.parameterDefinitions();
   const { prefix } = target(service);
   return Object.fromEntries(["StackArn", "PackageObjectArn", "PackageVersionId", "RecordObjectArn", "RecordVersionId",
     ...(service === "api" ? FUNCTIONS.map(n => n + "Arn") : [])].map(name => [prefix + name,
@@ -31,17 +35,18 @@ function parameterDefinitions(service) {
 }
 
 function policyResource(service) {
+  if (service === "api-runtime") return runtime.policyResource();
   const { role, prefix } = target(service);
   const statement = (Action, Resource, Condition) => ({ Effect: "Allow", Action, Resource, ...(Condition ? { Condition } : {}) });
   const read = name => statement(["s3:GetObjectVersion"], [ref(prefix + name + "ObjectArn")],
     { StringEquals: { "s3:VersionId": ref(prefix + name + "VersionId") } });
   const statements = [read("Package"), read("Record"),
-    statement(["cloudformation:GetTemplate", ...(service === "config" ? ["cloudformation:ListStackResources"] : [])], [ref(prefix + "StackArn")])];
+    statement(["cloudformation:GetTemplate", "cloudformation:ListStackResources"], [ref(prefix + "StackArn")])];
   if (service === "api") {
     const functions = FUNCTIONS.map(n => ref(prefix + n + "Arn"));
     statements.push(statement(["cloudformation:CreateChangeSet"], [ref(prefix + "StackArn")], {
       Null: { "cloudformation:RoleArn": "true" }, StringLike: { "cloudformation:ChangeSetName": "aws-recovery-*" } }),
-    statement(["lambda:GetFunction"], functions),
+    statement(["lambda:GetFunction", "lambda:ListTags", "lambda:GetFunctionConfiguration"], functions),
     statement(["lambda:UpdateFunctionCode"], functions, { StringEquals: { "aws:CalledViaFirst": "cloudformation.amazonaws.com" } }));
   }
   return { Type: "AWS::IAM::RolePolicy", Properties: { RoleName: role, PolicyName: POLICY_NAME,
@@ -49,6 +54,7 @@ function policyResource(service) {
 }
 
 function validateBindings(binding, config) {
+  if (config.service === "api-runtime") return runtime.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   try {
     const service = config.service, selected = target(service), anchors = config.anchors || BINDING_ANCHORS;
     if (!keys(binding, ["schemaVersion", "service", "environment", "account", "stackId", "package", "record", "functions"])
@@ -87,7 +93,7 @@ function composeTemplate(original, service) {
   const selected = target(service), definitions = parameterDefinitions(service);
   if (!object(original) || !object(original.Resources) || original.Transform || original.Resources[selected.logical]
     || Object.keys(definitions).some(name => Object.hasOwn(original.Parameters || {}, name))
-    || Object.values(original.Resources).some(r => r.Properties?.PolicyName === POLICY_NAME)) fail();
+    || Object.values(original.Resources).some(r => r.Properties?.PolicyName === policyName(service))) fail();
   const roles = Object.entries(original.Resources).filter(([, r]) => r.Type === "AWS::IAM::Role" && r.Properties?.RoleName === selected.role);
   if (roles.length !== 1) fail();
   const result = structuredClone(original);
@@ -113,7 +119,7 @@ function roleSnapshot(input, service, account, newDocument) {
   if (!keys(input, ["Role", "inline", "attached"]) || role?.RoleName !== selected.role
     || role.Arn !== `arn:aws:iam::${account}:role/${selected.role}` || role.Path !== "/"
     || !/^AROA[A-Z0-9]{16,}$/.test(role.RoleId) || !object(role.AssumeRolePolicyDocument)
-    || !object(input.inline) || !Object.keys(input.inline).length || Object.hasOwn(input.inline, POLICY_NAME)
+    || !object(input.inline) || !Object.keys(input.inline).length || Object.hasOwn(input.inline, policyName(service))
     || !Array.isArray(input.attached) || input.attached.length
     || Object.values(input.inline).some(p => !object(p) || !Array.isArray(p.Statement))
     || [...Object.values(input.inline), newDocument].reduce((n, p) => n + JSON.stringify(p).length, 0) > 10240) fail();
@@ -137,5 +143,5 @@ function addCanonicalPolicy(scope, environment, service, role) {
   policy.addResourceDependency(role);
 }
 
-module.exports = { TARGETS, POLICY_NAME, FUNCTIONS, BINDING_ANCHORS, parameterDefinitions, policyResource,
+module.exports = { TARGETS, POLICY_NAME, FUNCTIONS, BINDING_ANCHORS, parameterDefinitions, policyResource, policyName,
   validateBindings, composeTemplate, resolve, roleSnapshot, addCanonicalPolicy };

@@ -27,4 +27,15 @@ function original(service) {
       OriginalPolicy: { Type: "AWS::IAM::Policy", Properties: { PolicyName: "preserve", PolicyDocument: { Statement: [] } } } } };
 }
 
-module.exports = { fixture, original, account };
+function runtimeFixture() {
+  const binding = { schemaVersion: 1, service: "api-runtime", environment: "test", account,
+    stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-api-proxy-test/synthetic`,
+    package: { bucket: "synthetic-channel", key: "zoolanding-api-proxy-test/thn-runtime/reviewed.zip", versionId: "package-version" },
+    record: { bucket: "synthetic-channel", key: "zoolanding-api-proxy-test/first-provisioning/plan.json", versionId: "plan-version" },
+    runtime: { apiId: "abc123test", authStackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-auth-admin-test/synthetic`,
+      routesRecord: { bucket: "synthetic-channel", key: "zoolanding-api-proxy-test/retained-routes/reviewed.json" } } };
+  return { binding, config: { service: "api-runtime", account, channelBucket: "synthetic-channel", anchors: { account: sha(account) },
+    expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId) } };
+}
+
+module.exports = { fixture, original, account, runtimeFixture };

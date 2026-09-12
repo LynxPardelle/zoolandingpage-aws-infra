@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      promotion_mode: ${{ steps.promotion.outputs.mode }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_name: ${{ steps.identity.outputs.name }}
       manifest_digest: ${{ steps.manifest.outputs.digest }}
@@ -49,6 +50,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify exact TEST promotion context
         shell: bash
@@ -76,6 +78,29 @@ jobs:
           test "$second_parent" = "$(git rev-parse refs/remotes/origin/dev)"
           test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'refs/remotes/origin/dev^{tree}')"
 
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Classify exact reviewed TEST promotion
+        id: promotion
+        shell: bash
+        env:
+          INFRA_TEST_PROMOTION_SELECTION_JSON: ${{ vars.INFRA_TEST_PROMOTION_SELECTION_JSON }}
+        run: |
+          set -euo pipefail
+          PROMOTED_DEV_SHA="$(git rev-parse refs/remotes/origin/dev)"
+          PROMOTED_DEV_TREE="$(git rev-parse 'refs/remotes/origin/dev^{tree}')"
+          PROMOTED_TEST_BASE_SHA="$(git rev-parse HEAD^1)"
+          export PROMOTED_DEV_SHA PROMOTED_DEV_TREE PROMOTED_TEST_BASE_SHA
+          mode="$(node tools/classify-test-promotion.js)"
+          case "$mode" in
+            legacy|thn-source-only) ;;
+            *) echo "promotion_mode_invalid"; exit 1 ;;
+          esac
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+
       - name: Validate separate THN admin approvals
         shell: bash
         run: |
@@ -91,11 +116,6 @@ jobs:
             test "$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true"
             test "$FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED" = "true"
           fi
-
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: 22
-          cache: npm
 
       - name: Test and synthesize the exact TEST frontend stack
         shell: bash
@@ -113,6 +133,7 @@ jobs:
             --output .release/cdk.out
 
       - name: Assemble immutable TEST infrastructure release
+        if: steps.promotion.outputs.mode == 'legacy'
         shell: bash
         env:
           RELEASE_SHA: ${{ github.sha }}
@@ -153,6 +174,7 @@ jobs:
           (cd .release && LC_ALL=C find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > release-manifest.sha256
 
       - name: Compute immutable release identity
+        if: steps.promotion.outputs.mode == 'legacy'
         id: manifest
         shell: bash
         run: |
@@ -162,6 +184,7 @@ jobs:
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
       - name: Define artifact name
+        if: steps.promotion.outputs.mode == 'legacy'
         id: identity
         shell: bash
         env:
@@ -169,6 +192,7 @@ jobs:
         run: printf 'name=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload exact validated CDK assembly
+        if: steps.promotion.outputs.mode == 'legacy'
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -183,6 +207,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: validate
+    if: needs.validate.outputs.promotion_mode == 'legacy'
     environment: test
     permissions:
       contents: read

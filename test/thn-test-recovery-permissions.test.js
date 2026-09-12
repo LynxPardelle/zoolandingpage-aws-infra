@@ -2,12 +2,12 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path");
 const { sha, canonical } = require("../tools/thn-test-prerequisites");
 const policy = require("../tools/thn-test-recovery-permission-policy");
-const { fixture, original } = require("./fixtures/thn-recovery-bindings");
+const { fixture, original, runtimeFixture } = require("./fixtures/thn-recovery-bindings");
 const file = path.join(__dirname, "../tools/thn-test-recovery-permissions.js");
 const api = () => { assert.ok(fs.existsSync(file), "missing exact recovery permission revision runner"); return require(file); };
 const hash = value => sha(canonical(value));
 function setup(service = "config") {
-  const { binding, config } = fixture(service), p = policy.TARGETS[service];
+  const { binding, config } = service === "api-runtime" ? runtimeFixture() : fixture(service), p = policy.TARGETS[service];
   config.sourceSha = "1".repeat(40); config.runId = "123"; config.runAttempt = "1";
   const stackName = "ZoolandingTest-Zoolandingpage-test-" + (service === "config" ? "Frontend" : "ServiceRepositoryBootstrap");
   const stackId = `arn:aws:cloudformation:us-east-1:${config.account}:stack/${stackName}/synthetic`;
@@ -18,7 +18,13 @@ function setup(service = "config") {
     ...Object.fromEntries(["bucket", "lookup", "deploy", "publisher", "cfn"].map(k => [k, sha(authority[k])])) };
   const role = { Role: { RoleName: p.role, Arn: `arn:aws:iam::${config.account}:role/${p.role}`, Path: "/",
     RoleId: "AROA" + "Q".repeat(16), AssumeRolePolicyDocument: { Statement: [] } }, inline: { Existing: { Statement: [] } }, attached: [] };
-  const before = original(service), after = policy.composeTemplate(before, service);
+  const before = original(service);
+  if (service === "api-runtime") {
+    before.Resources.PriorRecovery = { Type: "AWS::IAM::RolePolicy", Properties: {
+      RoleName: p.role, PolicyName: policy.POLICY_NAME, PolicyDocument: { Statement: [] } } };
+    role.inline[policy.POLICY_NAME] = { Statement: [] };
+  }
+  const after = policy.composeTemplate(before, service);
   const ledger = { schemaVersion: 1, service, environment: "test", domain: "thehairnarrative.com", sourceSha: config.sourceSha,
     ownerStackSha256: sha(stackId), serviceStackSha256: sha(binding.stackId), bindingSha256: hash(binding),
     originalSha256: hash(before), processedSha256: hash(before), composedSha256: hash(after), composedProcessedSha256: hash(after),
@@ -149,13 +155,14 @@ function revisionAWS(v) {
     }
     if (action === "execute-change-set") {
       state.writes.push(action); state.executed = true; state.template = state.pending; state.owner.Parameters = state.parameters;
-      state.role.inline[policy.POLICY_NAME] = policy.resolve(policy.policyResource(v.config.service).Properties.PolicyDocument,
+      state.role.inline[policy.policyName(v.config.service)] = policy.resolve(policy.policyResource(v.config.service).Properties.PolicyDocument,
         policy.validateBindings(v.binding, v.config));
       return {};
     }
     if (action === "describe-stack-resource") return { StackResourceDetail: input.StackName === v.binding.stackId
       ? { StackId: v.binding.stackId, StackName: selected.service, LogicalResourceId: input.LogicalResourceId,
-        ResourceType: "AWS::Lambda::Function", ResourceStatus: "UPDATE_COMPLETE", PhysicalResourceId: v.binding.functions[input.LogicalResourceId].split(":").at(-1) }
+        ResourceType: v.config.service === "api-runtime" ? "AWS::ApiGateway::RestApi" : "AWS::Lambda::Function", ResourceStatus: "UPDATE_COMPLETE",
+        PhysicalResourceId: v.config.service === "api-runtime" ? v.binding.runtime.apiId : v.binding.functions[input.LogicalResourceId].split(":").at(-1) }
       : { StackId: v.stackId, StackName: v.authority.stackName, LogicalResourceId: selected.logical,
         ResourceType: "AWS::IAM::RolePolicy", ResourceStatus: "CREATE_COMPLETE", PhysicalResourceId: "synthetic-policy" } };
     assert.fail(`unexpected synthetic transport ${service}:${action}`);
@@ -163,7 +170,7 @@ function revisionAWS(v) {
   return state;
 }
 
-for (const service of ["config", "api"]) {
+for (const service of ["config", "api", "api-runtime"]) {
   test(`${service}: real revision orchestration adds one policy and preserves prior trust and masked values`, async () => {
     assert.equal(typeof api().runRevision, "function");
     const v = setup(service), aws = revisionAWS(v), before = structuredClone(aws.role);
@@ -173,11 +180,41 @@ for (const service of ["config", "api"]) {
     const applied = await api().runRevision(v.ledger, v.binding, v.authority, { ...config, execute: true });
     assert.equal(applied.status, "applied"); assert.equal(applied.addedPolicies, 1);
     assert.deepEqual(aws.role.Role, before.Role); assert.deepEqual(aws.role.inline.Existing, before.inline.Existing);
+    for (const [name, document] of Object.entries(before.inline)) assert.deepEqual(aws.role.inline[name], document);
     assert.deepEqual(aws.template, v.after); assert.equal(aws.owner.RoleARN, v.authority.cfn);
     assert.ok(!JSON.stringify(applied).includes(v.binding.record.versionId));
     assert.deepEqual(aws.writes, ["put-object", "create-change-set", "execute-change-set"]);
   });
 }
+
+test("runtime revision rejects an API physical-ID mismatch without a write", async () => {
+  const v = setup("api-runtime"), aws = revisionAWS(v);
+  const transport = (...args) => {
+    const result = aws.aws(...args);
+    if (args[1] === "describe-stack-resource" && args[2].StackName === v.binding.stackId) {
+      result.StackResourceDetail.PhysicalResourceId = "different123";
+    }
+    return result;
+  };
+  await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority, {
+    ...v.config, aws: transport, authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3 }), /recovery_permission/);
+  assert.deepEqual(aws.writes, []);
+});
+
+test("runtime transport seals the policy implementation and accepts only the existing API read", () => {
+  const v = setup("api-runtime"), aws = revisionAWS(v), os = require("node:os");
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "thn-runtime-revision-test-")), directory = path.join(parent, "transport");
+  try {
+    const receipt = api().writeTransport(directory, v.ledger, v.authority, v.config);
+    assert.equal(api().verifyTransport(directory, receipt.manifestSha256, v.config).ledger.service, "api-runtime");
+    fs.appendFileSync(path.join(directory, "thn-test-api-runtime-permission-policy.js"), "\n// changed\n");
+    assert.throws(() => api().verifyTransport(directory, receipt.manifestSha256, v.config), /recovery_permission/);
+  } finally { fs.rmSync(parent, { recursive: true }); }
+  const client = api().createClients(v.authority, v.binding, v.ledger, { ...v.config, aws: aws.aws, authenticate: () => true });
+  client("lookup", "cloudformation", "describe-stack-resource", { StackName: v.binding.stackId, LogicalResourceId: "ApiProxyApi" });
+  assert.throws(() => client("lookup", "cloudformation", "describe-stack-resource", {
+    StackName: v.binding.stackId, LogicalResourceId: "ApiProxyFunction" }), /recovery_permission/);
+});
 
 test("review-time role drift rejects execution and does not silently expand permissions", async () => {
   assert.equal(typeof api().runRevision, "function");

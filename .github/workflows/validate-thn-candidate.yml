@@ -3,7 +3,7 @@ name: Validate THN candidate (no deploy)
 
 on:
   push:
-    branches: ['codex/thn-task029-infra']
+    branches: ['codex/thn-task029-infra', 'codex/thn-first-provisioning-20260912']
 
 permissions:
   contents: read
