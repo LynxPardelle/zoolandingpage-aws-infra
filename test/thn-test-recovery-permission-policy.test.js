@@ -51,6 +51,10 @@ test("API: no-role CreateChangeSet and CF-mediated update of exactly three funct
   assert.deepEqual(update.Condition, { StringEquals: { "aws:CalledViaFirst": "cloudformation.amazonaws.com" } });
   assert.ok(!document.Statement.some(s => s.Action.includes("lambda:UpdateFunctionCode") && !s.Condition));
   assert.deepEqual(document.Statement.find(s => s.Action.includes("lambda:GetFunction")).Resource, Object.values(binding.functions));
+  assert.deepEqual(document.Statement.find(s => s.Action.includes("lambda:GetFunctionConfiguration"))?.Resource, Object.values(binding.functions));
+  assert.deepEqual(document.Statement.find(s => s.Action.includes("lambda:ListTags"))?.Resource, Object.values(binding.functions),
+    "tagged original functions require the same exact read dependency");
+  assert.ok(document.Statement.find(s => s.Action.includes("cloudformation:ListStackResources")), "the actual baseline observer lists the existing stack inventory");
 });
 
 test("binding rejects foreign service, account, original bytes selector, version or reviewed digest", () => {

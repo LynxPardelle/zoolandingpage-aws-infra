@@ -85,7 +85,17 @@ adds three policies to existing deployment identities, preserving original
 roles/trust/policies. It does not activate or deploy the blog.
 
 The separate [THN TEST recovery permission revision](docs/thn-test-recovery-permissions.md)
-adds one exact Config or API recovery policy to its existing owning role. It
+adds one exact Config/API recovery policy or an independently reviewed API
+runtime provisioning policy to its existing owning role. It
 does not replay the initial supplemental workflow, adopt a service role for API,
 or enable the blog; fresh reviewed private bindings and public hash ledgers are
 required before any AWS application.
+
+An exact `INFRA_TEST_PROMOTION_SELECTION_JSON` repository variable can select
+source-only TEST promotion: schema version 1, mode `thn-source-only`, and the
+reviewed `devSha`, `devTree`, and `testBaseSha`. The existing two-parent promotion
+guard still applies. A stale/malformed selection fails before AWS credentials;
+an exact one validates/tests/synthesizes but neither publishes an ordinary
+deployable artifact nor enters its AWS deployment job, including manual runs.
+Absence preserves the ordinary flow. Do not remove the selector to bypass a
+blocked promotion; subsequent ordinary delivery requires its own exact review.

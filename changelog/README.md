@@ -1,5 +1,7 @@
 # Changelog
 
+- [2026-09-12 — Source-only promotion and isolated runtime permission revision](2026-09-12-thn-source-only-runtime-permissions.md)
+
 - [2026-09-12 — Exact THN TEST recovery permission revisions](2026-09-12-thn-recovery-permissions.md)
 
 - [2026-09-07 — Source artifact boundary](2026-09-07-source-artifact-boundary.md)
