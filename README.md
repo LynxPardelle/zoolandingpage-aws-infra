@@ -83,3 +83,9 @@ requires independently reviewed source/baseline/private-input seals before use.
 The independent [THN TEST supplemental permissions path](docs/thn-test-permissions.md)
 adds three policies to existing deployment identities, preserving original
 roles/trust/policies. It does not activate or deploy the blog.
+
+The separate [THN TEST recovery permission revision](docs/thn-test-recovery-permissions.md)
+adds one exact Config or API recovery policy to its existing owning role. It
+does not replay the initial supplemental workflow, adopt a service role for API,
+or enable the blog; fresh reviewed private bindings and public hash ledgers are
+required before any AWS application.
