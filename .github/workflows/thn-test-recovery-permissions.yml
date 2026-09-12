@@ -1,0 +1,140 @@
+name: THN TEST recovery permission revision
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Apply one exact policy in its existing owning stack
+        type: choice
+        options: [config, api, api-runtime]
+        default: config
+        required: true
+      execution:
+        description: Verify only, or apply the independently reviewed exact revision
+        type: choice
+        options: [verify, execute]
+        default: verify
+        required: true
+      reviewed_ledger_base64:
+        description: Canonical reviewed hash ledger encoded as base64, never private selectors
+        type: string
+        required: true
+      reviewed_ledger_sha256:
+        description: Independently reviewed SHA-256 of the canonical ledger bytes
+        type: string
+        required: true
+      approve_exact_permissions:
+        description: Approve only the selected one-policy Add, no other updates
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zoolandingpage-aws-infra-test-frontend
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  RECOVERY_PERMISSION_SERVICE: ${{ inputs.service }}
+  RECOVERY_PERMISSION_EXECUTION: ${{ inputs.execution }}
+  APPROVE_EXACT_RECOVERY_PERMISSIONS: ${{ inputs.approve_exact_permissions && 'true' || 'false' }}
+  REVIEWED_LEDGER_SHA256: ${{ inputs.reviewed_ledger_sha256 }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: test
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      manifest_sha256: ${{ steps.artifact.outputs.manifest_sha256 }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact TEST promotion source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/test
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          if [ "$RECOVERY_PERMISSION_EXECUTION" = execute ]; then
+            test "$APPROVE_EXACT_RECOVERY_PERMISSIONS" = true
+          fi
+          git fetch --no-tags origin refs/heads/dev:refs/remotes/origin/dev
+          read -r commit first_parent second_parent extra < <(git rev-list --parents -n 1 HEAD)
+          test "$commit" = "$GITHUB_SHA"
+          test -n "$first_parent"
+          test -n "$second_parent"
+          test -z "${extra:-}"
+          test "$second_parent" = "$(git rev-parse refs/remotes/origin/dev)"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'refs/remotes/origin/dev^{tree}')"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate owning source without cloud credentials
+        run: npm ci && npm test
+      - name: Seal reviewed source and public digests
+        id: artifact
+        shell: bash
+        env:
+          REVIEWED_LEDGER_BASE64: ${{ inputs.reviewed_ledger_base64 }}
+        run: |
+          set -euo pipefail
+          result="$(node tools/thn-test-recovery-permissions.js prepare .recovery-permissions)"
+          digest="$(RESULT="$result" node -e 'process.stdout.write(JSON.parse(process.env.RESULT).manifestSha256)')"
+          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+          printf 'manifest_sha256=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload
+        with:
+          name: thn-recovery-permissions-${{ inputs.service }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: .recovery-permissions/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: validate
+    environment: test
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      EXPECTED_RECOVERY_MANIFEST_SHA256: ${{ needs.validate.outputs.manifest_sha256 }}
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: .transport
+          merge-multiple: true
+      - name: Verify immutable revision before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_RECOVERY_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(sha256sum .transport/manifest.sha256 | cut -d' ' -f1)" = "$EXPECTED_RECOVERY_MANIFEST_SHA256"
+          (cd .transport && sha256sum --check --strict manifest.sha256)
+          node .transport/thn-test-recovery-permissions.js verify .transport
+      - uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Verify or apply one exact policy and preserve all original roles
+        env:
+          THN_RECOVERY_BINDING_JSON: ${{ inputs.service == 'config' && secrets.THN_CONFIG_RECOVERY_BINDING_JSON || inputs.service == 'api' && secrets.THN_API_RECOVERY_BINDING_JSON || inputs.service == 'api-runtime' && secrets.THN_API_RUNTIME_BINDING_JSON || '' }}
+          RECOVERY_CHANNEL_BUCKET: ${{ inputs.service == 'config' && secrets.THN_CONFIG_RECOVERY_CHANNEL_BUCKET || inputs.service == 'api' && secrets.THN_API_RECOVERY_CHANNEL_BUCKET || inputs.service == 'api-runtime' && secrets.THN_API_RUNTIME_CHANNEL_BUCKET || '' }}
+        run: node .transport/thn-test-recovery-permissions.js run .transport

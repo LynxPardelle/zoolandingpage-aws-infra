@@ -18,6 +18,23 @@ const roles = ["zoolanding-content-hub-test-deploy", "zoolanding-deployer-image-
 
 test("TEST adds only three separate policies and preserves every pre-existing synthesized value", () => {
   const template = synth("test");
+  // The independent recovery revision is proved exactly before removing it
+  // from this older three-supplement baseline assertion. Never reset the
+  // original hash or weaken the initial-only dispatcher's change-set guard.
+  const recovery = require("../tools/thn-test-recovery-permission-policy");
+  const recoveryRole = Object.entries(template.Resources).filter(([, r]) =>
+    r.Type === "AWS::IAM::Role" && r.Properties?.RoleName === recovery.TARGETS.api.role);
+  assert.equal(recoveryRole.length, 1);
+  for (const selection of ["api", "api-runtime"]) {
+    assert.deepEqual(template.Resources[recovery.TARGETS[selection].logical], {
+      ...recovery.policyResource(selection), DependsOn: [recoveryRole[0][0]],
+    });
+    delete template.Resources[recovery.TARGETS[selection].logical];
+    for (const [name, definition] of Object.entries(recovery.parameterDefinitions(selection))) {
+      assert.deepEqual(template.Parameters[name], definition);
+      delete template.Parameters[name];
+    }
+  }
   assert.equal(Object.values(template.Resources).filter(r => r.Type === "AWS::IAM::RolePolicy").length, 3);
   for (let i = 0; i < ids.length; i++) {
     assert.equal(template.Resources[ids[i]].Properties.RoleName, roles[i]);
