@@ -1,5 +1,7 @@
 # Changelog
 
+- [2026-09-13 — Scoped Hub version discovery](2026-09-13-thn-hub-version-discovery.md)
+
 - [2026-09-12 — Config TEST runtime-inspection permission](2026-09-12-thn-config-runtime-inspection.md)
 
 - [2026-09-12 — Source-only promotion and isolated runtime permission revision](2026-09-12-thn-source-only-runtime-permissions.md)

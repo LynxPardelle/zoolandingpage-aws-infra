@@ -12,6 +12,31 @@ policy, boundary, production resource or customer data is changed.
 
 ## Ownership and granted scope
 
+### Hub native-version discovery correction
+
+The independent `hub-version` selection modifies only the existing
+`ThnTestHubSupplementalPolicy`. It adds `lambda:ListVersionsByFunction` to the
+existing Lambda statement for the seven fixed Hub TEST functions and their
+existing `test` alias ARNs. It introduces no resource selector, wildcard,
+new role, policy, trust, version mutation, invocation, data access or production
+change. Reusing the statement preserves the aggregate 10,240-character inline
+policy limit; duplicating the seven resource ARNs in another statement exceeds it.
+
+The private `THN_HUB_VERSION_BINDING_JSON` secret has the same six-field shape as
+`image-version`, with `service=hub-version` and the exact reviewed Hub baseline
+source. A fresh independently reviewed hash ledger binds the actual original
+and processed owner templates and role policy. This selection requires the
+protected, stable, unprovisioned Hub and absence of Stack.RoleARN. It verifies the
+native service template has no THN runtime resources and refuses role adoption,
+replay, unrelated policy differences, replacement, or additional changes.
+
+Use the existing recovery permission workflow, first `verify`, then explicitly
+approved `execute`. Do not replay the three-policy initial supplement operation
+or Image recovery. Only one existing policy may be modified. This does not
+provision or activate the Hub. Additional permissions for optional version
+runtime/scaling/concurrency properties are not added by this correction; their
+use requires separate evidence from the exact provider/property path.
+
 | Selection | Owning source | Addition |
 | --- | --- | --- |
 | `config` | `createBackendSamDeployRoles`, Frontend | Exact versioned original ZIP/recovery record reads; exact Config TEST stack template/inventory reads |
@@ -228,7 +253,7 @@ parameters, role ID/trust/policies/quota, current service stack and exact object
 versions/ownership. The execution path publishes only the NoEcho-reference
 native template to the existing private content-addressed CDK channel, checks
 its bytes/encryption, and reviews exactly one `AWS::IAM::RolePolicy` Add (or the
-exact Auth tagging or Image version-discovery Modify described above).
+exact Auth tagging, Image version-discovery or Hub version-discovery Modify described above).
 No other resource modification, replacement, deletion or original parameter
 change is allowed. Returned native templates must match exactly; new parameter
 readback must be masked. Final IAM readback must equal the original role/trust
