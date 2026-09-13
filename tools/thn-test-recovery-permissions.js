@@ -3,6 +3,7 @@
 const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
 const prerequisite = require("./thn-test-prerequisites");
 const policy = require("./thn-test-recovery-permission-policy");
+const image = require("./thn-test-image-version-permission-policy");
 const { sha, canonical, ANCHORS, OPERATIONS } = prerequisite;
 const fail = () => { throw new Error("thn_recovery_permission_guard_failed"); };
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -33,8 +34,9 @@ function prepareRevision(original, processed, binding, ledger, config) {
   const prepared = policy.composeTemplate(original, config.service), native = policy.composeTemplate(processed, config.service);
   const action = policy.revisionAction(original, config.service);
   if (policy.revisionAction(processed, config.service) !== action) fail();
-  const previousDocument = action === "Modify" ? policy.resolve(original.Resources[target(config.service).logical].Properties.PolicyDocument, values) : undefined;
-  const document = policy.resolve(policy.policyResource(config.service).Properties.PolicyDocument, values);
+  const resolve = value => config.service === "image-version" ? image.resolve(value, config.account) : policy.resolve(value, values);
+  const previousDocument = action === "Modify" ? resolve(original.Resources[target(config.service).logical].Properties.PolicyDocument) : undefined;
+  const document = resolve(policy.policyResource(config.service).Properties.PolicyDocument);
   if (hash(prepared) !== ledger.composedSha256 || hash(native) !== ledger.composedProcessedSha256
     || hash(document) !== ledger.resolvedPolicySha256) fail();
   const parameters = [...Object.keys(original.Parameters || {}).sort().map(ParameterKey => ({ ParameterKey, UsePreviousValue: true })),
@@ -62,7 +64,7 @@ function reviewChangeSet(description, original, processed, expected) {
     || !Array.isArray(description.Changes) || description.Changes.length !== 1) fail();
   const change = description.Changes[0], r = change.ResourceChange;
   const modify = expected.action === "Modify";
-  if (modify && (expected.config.service !== "auth-provision" || !expected.policyPhysicalId)) fail();
+  if (modify && (!["auth-provision", "image-version"].includes(expected.config.service) || !expected.policyPhysicalId)) fail();
   if (change.Type !== "Resource" || r?.Action !== (modify ? "Modify" : "Add") || r.ResourceType !== "AWS::IAM::RolePolicy"
     || r.LogicalResourceId !== selected.logical || ![undefined, "False"].includes(r.Replacement)
     || (modify ? r.Replacement !== "False" || r.PhysicalResourceId !== expected.policyPhysicalId : r.PhysicalResourceId)
@@ -85,7 +87,8 @@ function reviewChangeSet(description, original, processed, expected) {
 }
 
 const FILES = ["authority.json", "coordinates.json", "ledger.json", "thn-test-recovery-permissions.js",
-  "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-auth-provision-permission-policy.js", "thn-test-prerequisites.js"];
+  "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-auth-provision-permission-policy.js",
+  "thn-test-image-version-permission-policy.js", "thn-test-permission-policy.js", "thn-test-prerequisites.js"];
 const bytes = value => Buffer.from(canonical(value));
 const authorityConfig = config => ({ ...config, anchors: config.authorityAnchors || ANCHORS });
 function validateAuthority(authority, config) {
@@ -192,7 +195,7 @@ function createClients(authority, binding, ledger, config) {
       if (service === "kms" && (!keys(input, ["KeyId"]) || input.KeyId !== "alias/aws/s3")) fail();
       if (service === "s3api") {
         if (action === "head-object") {
-          if (config.service === "auth-provision" || !keys(input, ["Bucket", "Key", "VersionId", "ExpectedBucketOwner"]) || input.ExpectedBucketOwner !== config.account
+          if (["auth-provision", "image-version"].includes(config.service) || !keys(input, ["Bucket", "Key", "VersionId", "ExpectedBucketOwner"]) || input.ExpectedBucketOwner !== config.account
             || ![binding.package, binding.record].some(o => input.Bucket === o.bucket && input.Key === o.key && input.VersionId === o.versionId)) fail();
         } else {
           const required = ["Bucket", "ExpectedBucketOwner", ...(["put-object", "get-object"].includes(action) ? ["Key"] : []),
@@ -285,6 +288,11 @@ async function executeRevision(ledger, binding, authority, config) {
   };
   const checkService = () => {
     const response = client("lookup", "cloudformation", "describe-stacks", { StackName: binding.stackId }), service = response.Stacks?.[0];
+    if (config.service === "image-version") {
+      if (response.Stacks?.length !== 1) fail();
+      image.validateServiceState(service, binding);
+      return;
+    }
     if (response.Stacks?.length !== 1 || service.StackName !== selected.service || service.StackId !== binding.stackId
       || service.RoleARN || !stable.includes(service.StackStatus)) fail();
     if (config.service === "auth-provision") {

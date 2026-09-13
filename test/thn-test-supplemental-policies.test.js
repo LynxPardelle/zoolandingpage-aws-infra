@@ -103,6 +103,18 @@ test("Hub supplemental IAM mutations require CloudFormation forward access; dire
   assert.equal(direct[0].Resource.length, 2);
 });
 
+test("only Image's CFN executor can discover versions of its one private TEST function", () => {
+  const resources = synth("test").Resources;
+  const matching = ids.flatMap(id => resources[id].Properties.PolicyDocument.Statement
+    .filter(s => s.Action.includes("lambda:ListVersionsByFunction"))
+    .map(statement => ({ id, statement })));
+  assert.deepEqual(matching, [{ id: ids[2], statement: {
+    Effect: "Allow",
+    Action: ["lambda:ListVersionsByFunction"],
+    Resource: [{ "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:zoolanding-image-upload-test-ThnImageUploadV2" }],
+  } }]);
+});
+
 test("all three supplements fit alongside the independently measured original inline policies", () => {
   const { resolvedPolicy } = require("../tools/thn-test-permissions");
   const baselineCharacters = [3423, 1964, 3768];
