@@ -36,3 +36,9 @@ See [the owning guide](../docs/thn-test-recovery-permissions.md).
   the exact private binding, eight NoEcho parameters, one-policy-only template
   composition, all 29 original owning-stack resources and prior role/trust.
   This local candidate check did not configure secrets or apply IAM changes.
+- The default scanner identified one public identity digest as a generic API key.
+  Its independent read-only provenance was verified; the digest was not renamed
+  or re-encoded. Added only its exact commit/path/rule/line fingerprint, retaining
+  all defaults and earlier entries. Native-scanner tests still detect the same
+  value outside that immutable historical location, mutated values and unrelated
+  fixtures. No value, path, rule or inline-comment suppression was introduced.
