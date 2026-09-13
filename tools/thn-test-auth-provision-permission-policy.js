@@ -7,7 +7,7 @@ const REVIEWED_COMMIT = "cbc17c8f560c8586be641faa0abc7c60bd17a698";
 const FUNCTIONS = ["zoolanding-auth-admin-test-ThnOwnerOperatorV2", "zoolanding-auth-admin-test-ThnAuthAdminV2Function",
   "zoolanding-auth-test-ThnV2OriginAuthorizer"];
 const TABLES = ["Session", "CurrentUserState", "Challenge", "Throttle", "Audit"];
-const PARAMS = ["StackArn", "PoolArnScope", ...FUNCTIONS.map((_, i) => `Function${i}Arn`), "Function0QualifiedArn",
+const PARAMS = ["StackArn", "PoolArnScope", "PoolCreateTagArn", ...FUNCTIONS.map((_, i) => `Function${i}Arn`), "Function0QualifiedArn",
   "OwnerAliasArn", ...TABLES.map(n => n + "TableArn"), ...FUNCTIONS.map((_, i) => `Role${i}Arn`),
   ...[0, 1, 2, 3].flatMap(i => [`Log${i}Arn`, `Log${i}AccessArn`])];
 const fail = () => { throw new Error("thn_recovery_permission_guard_failed"); };
@@ -29,7 +29,7 @@ function policyResource() {
   return {Type: "AWS::IAM::RolePolicy", Properties: {RoleName: TARGET.role, PolicyName: TARGET.policyName,
     PolicyDocument: {Version: "2012-10-17", Statement: [
       statement(["cognito-idp:CreateUserPool"], ["*"], {StringEquals: {...via.StringEquals, ...region, ...poolTags("RequestTag")}}),
-      statement(["cognito-idp:TagResource"], [ref("PoolArnScope")], {StringEquals: {...via.StringEquals, ...poolTags("RequestTag")}}),
+      statement(["cognito-idp:TagResource"], [ref("PoolCreateTagArn")], {StringEquals: {...via.StringEquals, ...poolTags("RequestTag")}}),
       statement(["cognito-idp:CreateUserPoolClient", "cognito-idp:CreateGroup", "cognito-idp:SetUserPoolMfaConfig"],
         [ref("PoolArnScope")], {StringEquals: {...via.StringEquals, ...poolTags("ResourceTag")}}),
       statement(["cognito-idp:DescribeUserPool", "cognito-idp:GetUserPoolMfaConfig", "cognito-idp:DescribeUserPoolClient",
@@ -68,7 +68,8 @@ function validateBindings(binding, config) {
     || !new RegExp(`^arn:aws:cloudformation:us-east-1:${binding.account}:stack/${TARGET.service}/[A-Za-z0-9-]+$`).test(binding.stackId)
     || binding.releaseCommit !== REVIEWED_COMMIT) fail();
   const arn = (service, value) => `arn:aws:${service}:${service === "iam" ? "" : "us-east-1"}:${binding.account}:${value}`;
-  const values = {StackArn: binding.stackId, PoolArnScope: arn("cognito-idp", "userpool/us-east-1_*")};
+  const values = {StackArn: binding.stackId, PoolArnScope: arn("cognito-idp", "userpool/us-east-1_*"),
+    PoolCreateTagArn: arn("cognito-idp", "userpool/*")};
   FUNCTIONS.forEach((name, i) => {values[`Function${i}Arn`] = arn("lambda", "function:" + name);
     values[`Function${i}QualifiedArn`] = values[`Function${i}Arn`] + ":*";
     values[`Role${i}Arn`] = arn("iam", "role/" + name + "Role");});
