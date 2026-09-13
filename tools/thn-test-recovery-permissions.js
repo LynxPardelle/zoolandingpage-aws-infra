@@ -156,7 +156,7 @@ function createClients(authority, binding, ledger, config) {
         if (input.ChangeSetName !== undefined && input.ChangeSetName !== name && !changeArn(input.ChangeSetName)) fail();
         if (action === "get-template" && !["Original", "Processed"].includes(input.TemplateStage)) fail();
         if (action === "describe-change-set" && input.IncludePropertyValues !== true) fail();
-        if (action === "describe-stack-resource" && !(serviceRead ? (config.service === "api-runtime" ? ["ApiProxyApi"] : policy.FUNCTIONS) : [selected.logical]).includes(input.LogicalResourceId)) fail();
+        if (action === "describe-stack-resource" && !(serviceRead ? (config.service === "api-runtime" ? ["ApiProxyApi"] : policy.functionNames(config.service)) : [selected.logical]).includes(input.LogicalResourceId)) fail();
         if (action === "create-change-set") {
           if (sha(input.StackName) !== ledger.ownerStackSha256 || input.RoleARN !== authority.cfn || input.ChangeSetType !== "UPDATE"
             || input.ChangeSetName !== name || input.ClientToken !== name || input.IncludeNestedStacks !== false
@@ -264,7 +264,7 @@ async function executeRevision(ledger, binding, authority, config) {
     const response = client("lookup", "cloudformation", "describe-stacks", { StackName: binding.stackId }), service = response.Stacks?.[0];
     if (response.Stacks?.length !== 1 || service.StackName !== selected.service || service.StackId !== binding.stackId
       || service.RoleARN || !stable.includes(service.StackStatus)) fail();
-    for (const logical of config.service === "api" ? policy.FUNCTIONS : []) {
+    for (const logical of policy.functionNames(config.service)) {
       const r = client("lookup", "cloudformation", "describe-stack-resource", { StackName: binding.stackId, LogicalResourceId: logical }).StackResourceDetail;
       if (r?.StackId !== binding.stackId || r.StackName !== selected.service || r.LogicalResourceId !== logical
         || r.ResourceType !== "AWS::Lambda::Function" || !stable.includes(r.ResourceStatus)

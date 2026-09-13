@@ -9,7 +9,7 @@ const hash = value => sha(canonical(value));
 function setup(service = "config") {
   const { binding, config } = service === "api-runtime" ? runtimeFixture() : fixture(service), p = policy.TARGETS[service];
   config.sourceSha = "1".repeat(40); config.runId = "123"; config.runAttempt = "1";
-  const stackName = "ZoolandingTest-Zoolandingpage-test-" + (service === "config" ? "Frontend" : "ServiceRepositoryBootstrap");
+  const stackName = "ZoolandingTest-Zoolandingpage-test-" + (service.startsWith("config") ? "Frontend" : "ServiceRepositoryBootstrap");
   const stackId = `arn:aws:cloudformation:us-east-1:${config.account}:stack/${stackName}/synthetic`;
   const authority = { account: config.account, region: "us-east-1", stackName, bucket: `cdk-synthetic-assets-${config.account}-us-east-1`,
     ...Object.fromEntries([["lookup", "lookup"], ["deploy", "deploy"], ["publisher", "file-publishing"], ["cfn", "cfn-exec"]]
@@ -19,7 +19,7 @@ function setup(service = "config") {
   const role = { Role: { RoleName: p.role, Arn: `arn:aws:iam::${config.account}:role/${p.role}`, Path: "/",
     RoleId: "AROA" + "Q".repeat(16), AssumeRolePolicyDocument: { Statement: [] } }, inline: { Existing: { Statement: [] } }, attached: [] };
   const before = original(service);
-  if (service === "api-runtime") {
+  if (["api-runtime", "config-runtime"].includes(service)) {
     before.Resources.PriorRecovery = { Type: "AWS::IAM::RolePolicy", Properties: {
       RoleName: p.role, PolicyName: policy.POLICY_NAME, PolicyDocument: { Statement: [] } } };
     role.inline[policy.POLICY_NAME] = { Statement: [] };
@@ -170,7 +170,7 @@ function revisionAWS(v) {
   return state;
 }
 
-for (const service of ["config", "api", "api-runtime"]) {
+for (const service of ["config", "api", "api-runtime", "config-runtime"]) {
   test(`${service}: real revision orchestration adds one policy and preserves prior trust and masked values`, async () => {
     assert.equal(typeof api().runRevision, "function");
     const v = setup(service), aws = revisionAWS(v), before = structuredClone(aws.role);
@@ -186,6 +186,18 @@ for (const service of ["config", "api", "api-runtime"]) {
     assert.deepEqual(aws.writes, ["put-object", "create-change-set", "execute-change-set"]);
   });
 }
+
+test("Config runtime rejects function identity mismatch before any permission write", async () => {
+  const v = setup("config-runtime"), aws = revisionAWS(v);
+  const transport = (...args) => {
+    const result = aws.aws(...args);
+    if (args[1] === "describe-stack-resource" && args[2].StackName === v.binding.stackId) result.StackResourceDetail.PhysicalResourceId += "other";
+    return result;
+  };
+  await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority, {
+    ...v.config, aws: transport, authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3}));
+  assert.deepEqual(aws.writes, []);
+});
 
 test("runtime revision rejects an API physical-ID mismatch without a write", async () => {
   const v = setup("api-runtime"), aws = revisionAWS(v);

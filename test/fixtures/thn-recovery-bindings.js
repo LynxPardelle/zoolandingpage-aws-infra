@@ -5,6 +5,15 @@ const hash = value => sha(canonical(value));
 const account = "123456789012";
 
 function fixture(service = "config") {
+  if (service === "config-runtime") {
+    const value = fixture("config");
+    value.binding.service = service;
+    value.binding.functions = {ConfigAuthoringFunction: `arn:aws:lambda:us-east-1:${account}:function:zoolanding-config-authoring-test-synthetic`};
+    value.config.service = service;
+    value.config.anchors.config.functions = {ConfigAuthoringFunction: sha(value.binding.functions.ConfigAuthoringFunction)};
+    value.config.expectedBindingSha256 = hash(value.binding);
+    return value;
+  }
   const name = `zoolanding-${service === "config" ? "config-authoring" : "api-proxy"}-test`;
   const binding = { schemaVersion: 1, service, environment: "test", account,
     stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/${name}/synthetic`,
@@ -23,7 +32,7 @@ function fixture(service = "config") {
 function original(service) {
   return { Parameters: { ExistingSecret: { Type: "String", NoEcho: true } }, Outputs: { Keep: { Value: "unchanged" } },
     Resources: { ExistingRole: { Type: "AWS::IAM::Role", Properties: {
-      RoleName: service === "config" ? "zoolanding-config-authoring-test-deploy" : "zoolanding-deployer-api-proxy-test-github-deploy",
+      RoleName: service.startsWith("config") ? "zoolanding-config-authoring-test-deploy" : "zoolanding-deployer-api-proxy-test-github-deploy",
       AssumeRolePolicyDocument: { Version: "2012-10-17", Statement: [] } } },
       OriginalPolicy: { Type: "AWS::IAM::Policy", Properties: { PolicyName: "preserve", PolicyDocument: { Statement: [] } } } } };
 }
