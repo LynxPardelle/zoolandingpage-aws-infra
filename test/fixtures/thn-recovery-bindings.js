@@ -12,9 +12,10 @@ function fixture(service = "config") {
     record: { bucket: "synthetic-channel", key: service === "config"
       ? `system/deploy-artifacts/${"1".repeat(40)}/123/1/aws-live-snapshot.json` : `${name}/snapshot.json`, versionId: "record-version" },
     functions: service === "api" ? Object.fromEntries(["ApiProxyFunction", "AuthProvisioningExecutorFunction", "AuthJwtAuthorizerFunction"]
-      .map(n => [n, `arn:aws:lambda:us-east-1:${account}:function:${name}-${n}-synthetic`])) : {} };
+      .map(n => [n, `arn:aws:lambda:us-east-1:${account}:function:${name}-${n.slice(0, 20)}-synthetic`])) : {} };
   const anchors = { account: sha(account), [service]: {
     selector: hash({ Bucket: binding.package.bucket, Key: binding.package.key }), version: sha(binding.package.versionId) } };
+  if (service === "api") anchors.api.functions = Object.fromEntries(Object.entries(binding.functions).map(([n, arn]) => [n, sha(arn)]));
   return { binding, config: { account, anchors, service, channelBucket: binding.record.bucket,
     expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId) } };
 }

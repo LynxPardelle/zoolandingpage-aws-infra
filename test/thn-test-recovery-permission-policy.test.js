@@ -57,6 +57,55 @@ test("API: no-role CreateChangeSet and CF-mediated update of exactly three funct
   assert.ok(document.Statement.find(s => s.Action.includes("cloudformation:ListStackResources")), "the actual baseline observer lists the existing stack inventory");
 });
 
+test("API: accepts independently anchored provider names without guessing full logical IDs", () => {
+  const { binding, config } = fixture("api"), module = api();
+  assert.ok(!binding.functions.AuthProvisioningExecutorFunction.includes("-AuthProvisioningExecutorFunction-"));
+  assert.ok(!binding.functions.AuthJwtAuthorizerFunction.includes("-AuthJwtAuthorizerFunction-"));
+  const values = module.validateBindings(binding, config);
+  const document = module.resolve(module.policyResource("api").Properties.PolicyDocument, values);
+  assert.deepEqual(document.Statement.find(s => s.Action.includes("lambda:UpdateFunctionCode")).Resource,
+    module.FUNCTIONS.map(name => binding.functions[name]));
+  assert.ok(document.Statement.every(s => s.Resource.every(r => !r.includes("*"))));
+});
+
+test("API: rebinding a reviewed ledger does not accept an unanchored or swapped function", () => {
+  for (const mutate of [
+    b => b.functions.AuthProvisioningExecutorFunction += "x",
+    b => { [b.functions.AuthProvisioningExecutorFunction, b.functions.AuthJwtAuthorizerFunction] =
+      [b.functions.AuthJwtAuthorizerFunction, b.functions.AuthProvisioningExecutorFunction]; },
+  ]) {
+    const { binding, config } = fixture("api"); mutate(binding); config.expectedBindingSha256 = hash(binding);
+    assert.throws(() => api().validateBindings(binding, config), /recovery_permission/);
+  }
+});
+
+test("API: rejects missing, incomplete or extra independent function anchors", () => {
+  for (const mutate of [
+    anchors => delete anchors.api.functions,
+    anchors => delete anchors.api.functions.AuthJwtAuthorizerFunction,
+    anchors => anchors.api.functions.UnreviewedFunction = "f".repeat(64),
+    anchors => anchors.api.functions.ApiProxyFunction = "g".repeat(64),
+  ]) {
+    const { binding, config } = fixture("api"); mutate(config.anchors);
+    assert.throws(() => api().validateBindings(binding, config), /recovery_permission/);
+  }
+});
+
+test("API: even an anchored function must be an unqualified same-account regional Lambda ARN", () => {
+  for (const replacement of [
+    `arn:aws:lambda:us-west-2:${account}:function:synthetic`,
+    "arn:aws:lambda:us-east-1:999999999999:function:synthetic",
+    `arn:aws:lambda:us-east-1:${account}:function:synthetic:live`,
+    `arn:aws:lambda:us-east-1:${account}:function:${"x".repeat(65)}`,
+  ]) {
+    const { binding, config } = fixture("api");
+    binding.functions.ApiProxyFunction = replacement;
+    config.anchors.api.functions.ApiProxyFunction = sha(replacement);
+    config.expectedBindingSha256 = hash(binding);
+    assert.throws(() => api().validateBindings(binding, config), /recovery_permission/);
+  }
+});
+
 test("binding rejects foreign service, account, original bytes selector, version or reviewed digest", () => {
   for (const mutate of [b => b.environment = "production", b => b.service = "config", b => b.account = "999999999999",
     b => b.stackId += "-foreign", b => b.package.key = "other/key", b => b.package.versionId = "newer",

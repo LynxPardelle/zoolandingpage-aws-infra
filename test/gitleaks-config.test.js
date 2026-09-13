@@ -13,6 +13,7 @@ const exactNonSecretHashes = [
   "c85e674c60e540ca8f1ea7029f8a0cae0fa843881ade918242355601ce3f87da",
   "21af44b105a8f395e7c997c70342ad3222c7f3f1592f3b2d67381eda3e610091",
   "eca48ab275d9eec59f46235a548858df944263d1f7e6e25d68316ad530b17ca4",
+  "a42bfc7255b66badea2cf8bb0ec04a86286eb5b0b24a9a180607ed3422126ef4",
 ];
 
 test("Gitleaks keeps all defaults without value, path, rule or comment bypasses", () => {
@@ -30,17 +31,17 @@ test("Gitleaks keeps all defaults without value, path, rule or comment bypasses"
 const binary = process.env.GITLEAKS_BINARY || (process.env.RUNNER_TEMP
   ? path.join(process.env.RUNNER_TEMP, process.platform === "win32" ? "gitleaks.exe" : "gitleaks") : undefined);
 
-test("native pinned scanner detects all three non-secret hashes plus changed and distinct fixtures; stdin has no fingerprint exception", {
+test("native pinned scanner detects every reviewed non-secret hash plus changed and distinct fixtures; stdin has no fingerprint exception", {
   skip: !binary || !existsSync(binary) ? "Provide GITLEAKS_BINARY for pinned native scanner verification; CI supplies RUNNER_TEMP/gitleaks." : false,
 }, () => {
   assert.ok(existsSync(configPath), "reviewed exact-value Gitleaks configuration is required");
   const version = spawnSync(binary, ["version"], { encoding: "utf8", timeout: 10000 });
   assert.equal(version.status, 0);
   assert.equal(version.stdout.trim(), "8.30.1");
-  const lines = ["lib/stacks/frontend-stack.js", "tools/thn-test-prerequisites.js"]
+  const lines = ["lib/stacks/frontend-stack.js", "tools/thn-test-prerequisites.js", "tools/thn-test-recovery-permission-policy.js"]
     .flatMap(file => readFileSync(path.join(root, file), "utf8").split(/\r?\n/))
     .filter(line => exactNonSecretHashes.some(value => line.includes(value)));
-  assert.equal(lines.length, 3, "do not rename or alter the source hashes to evade detection");
+  assert.equal(lines.length, exactNonSecretHashes.length, "do not rename or alter the source hashes to evade detection");
   const scan = input => {
     const result = spawnSync(binary, ["stdin", "--config", configPath, "--redact=100", "--no-banner", "--ignore-gitleaks-allow",
       "--report-format", "json", "--report-path", "-"], { input, encoding: "utf8", timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
@@ -49,7 +50,7 @@ test("native pinned scanner detects all three non-secret hashes plus changed and
     assert.ok(findings.every(item => item.Secret === "REDACTED"), "findings must not expose input values");
     return { exitCode: result.status, rules: findings.map(item => item.RuleID) };
   };
-  assert.deepEqual(scan(lines.join("\n")), { exitCode: 1, rules: Array(3).fill("generic-api-key") });
+  assert.deepEqual(scan(lines.join("\n")), { exitCode: 1, rules: Array(exactNonSecretHashes.length).fill("generic-api-key") });
   const changed = lines.map(line => {
     const value = exactNonSecretHashes.find(item => line.includes(item));
     return line.replace(value, `${value[0] === "a" ? "b" : "a"}${value.slice(1)}`);
@@ -58,7 +59,7 @@ test("native pinned scanner detects all three non-secret hashes plus changed and
   assert.ok(!exactNonSecretHashes.includes(distinct));
   const detected = scan([...changed, `api_key = "${distinct}"`].join("\n"));
   assert.equal(detected.exitCode, 1);
-  assert.deepEqual(detected.rules, Array(4).fill("generic-api-key"));
+  assert.deepEqual(detected.rules, Array(exactNonSecretHashes.length + 1).fill("generic-api-key"));
   const extended = scan(`api_key = "${exactNonSecretHashes[0]}ab"`);
   assert.deepEqual(extended, { exitCode: 1, rules: ["generic-api-key"] });
 });
@@ -67,7 +68,7 @@ test("committed ignore entries resolve only to reviewed public seals or syntheti
   const file = path.join(root, ".gitleaksignore");
   assert.ok(existsSync(file), "preserve the existing reviewed historical fingerprints");
   const entries = readFileSync(file, "utf8").split(/\r?\n/).filter(line => line && !line.startsWith("#"));
-  assert.equal(entries.length, 7);
+  assert.equal(entries.length, 8);
   assert.equal(new Set(entries).size, entries.length);
   assert.deepEqual(entries.slice(0, 2), [
     "f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-api-key:452",
@@ -75,7 +76,7 @@ test("committed ignore entries resolve only to reviewed public seals or syntheti
   ]);
   const verified = [];
   for (const entry of entries) {
-    const match = /^([a-f0-9]{40}):(lib\/stacks\/frontend-stack\.js|tools\/thn-test-prerequisites\.js|test\/(?:thn-test-permissions|gitleaks-config)\.test\.js):generic-api-key:([1-9][0-9]*)$/.exec(entry);
+    const match = /^([a-f0-9]{40}):(lib\/stacks\/frontend-stack\.js|tools\/thn-test-(?:prerequisites|recovery-permission-policy)\.js|test\/(?:thn-test-permissions|gitleaks-config)\.test\.js):generic-api-key:([1-9][0-9]*)$/.exec(entry);
     assert.ok(match, "only exact commit/path/rule/line fingerprints are permitted");
     const result = spawnSync("git", ["-c", `safe.directory=${root.replaceAll("\\", "/")}`, "show", `${match[1]}:${match[2]}`], { cwd: root, encoding: "utf8", timeout: 10000 });
     assert.equal(result.status, 0);

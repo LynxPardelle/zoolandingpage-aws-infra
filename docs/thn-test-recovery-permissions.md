@@ -42,7 +42,14 @@ The private canonical JSON binding has exactly these fields: `schemaVersion`,
 for the two recovery selections.
 Each object selector contains exactly `bucket`, `key`, `versionId`.
 `functions` is empty for Config and contains exactly the three approved logical
-function names/physical ARNs for API. The package selector/version is anchored
+function names/physical ARNs for API. Each API physical ARN must match its
+independently observed SHA-256 identity anchor, remain unqualified, and belong to
+the same account and region. Do not derive physical names from complete logical
+IDs: provider-generated names may be shortened. Rebinding a reviewed ledger does
+not replace these independent identity anchors. The execution preflight also
+reconciles each physical ARN with its exact CloudFormation logical resource.
+No wildcard or additional function permission is introduced by this validation.
+The package selector/version is anchored
 to the previously byte-verified original recovery evidence. The record is one
 exact immutable version in its existing service channel. Config uses its
 `system/deploy-artifacts/<sha>/<run>/<attempt>/aws-live-snapshot.json` family;
