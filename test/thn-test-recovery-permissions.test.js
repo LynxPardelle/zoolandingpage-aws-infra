@@ -194,7 +194,9 @@ test("Auth revision rejects active, unprotected or ambiguous lifecycle flags bef
     s => s.Parameters.push({ParameterKey: "EnableThnAuthAdminV2", ParameterValue: "false"}),
     s => s.Parameters.push({ParameterKey: "ProvisionThnAuthAdminV2State", ParameterValue: "true"})]) {
     const v = setup("auth-provision"), aws = revisionAWS(v);
-    const transport = (...args) => {const result = aws.aws(...args);
+    const transport = (...args) => {if (args[1] === "get-template" && args[2].StackName === v.binding.stackId)
+      return {TemplateBody: {Resources: {}, Parameters: {EnableThnAuthAdminV2: {Type:"String"}}}};
+      const result = aws.aws(...args);
       if (args[1] === "describe-stacks" && args[2].StackName === v.binding.stackId) mutate(result.Stacks[0]); return result;};
     await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority, {...v.config, aws: transport,
       authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3}));
@@ -214,6 +216,34 @@ test("Auth transport has no recovery object authority and detects substituted po
     fs.appendFileSync(path.join(directory, "thn-test-auth-provision-permission-policy.js"), "\n// substituted\n");
     assert.throws(() => api().verifyTransport(directory, receipt.manifestSha256, v.config));
   } finally {fs.rmSync(parent, {recursive: true});}
+});
+
+test("Auth first provisioning accepts absent flags only in a verified legacy template", async () => {
+  for (const legacy of [true, false]) {
+    const v = setup("auth-provision"), aws = revisionAWS(v);
+    const transport = (...args) => {
+      if (args[1] === "get-template" && args[2].StackName === v.binding.stackId) return {TemplateBody:
+        legacy ? {Resources: {Existing: {Type: "AWS::Lambda::Function"}}} : {Resources: {ThnAuthAdminV2UserPool: {Type: "AWS::Cognito::UserPool"}}}};
+      const result = aws.aws(...args);
+      if (args[1] === "describe-stacks" && args[2].StackName === v.binding.stackId) result.Stacks[0].Parameters = [];
+      return result;
+    };
+    const run = () => api().runRevision(v.ledger, v.binding, v.authority, {...v.config, aws:transport,
+      authenticate:()=>true, execute:true, delay:async()=>{}, maxPolls:3});
+    if (legacy) assert.equal((await run()).status, "applied");
+    else {await assert.rejects(run); assert.deepEqual(aws.writes, []);}
+  }
+});
+
+test("Auth legacy template probe reads only the exact native processed template", () => {
+  const v = setup("auth-provision"), aws = revisionAWS(v);
+  const client = api().createClients(v.authority, v.binding, v.ledger, {...v.config, aws:aws.aws, authenticate:()=>true});
+  for (const input of [{StackName:v.binding.stackId + "other", TemplateStage:"Processed"},
+    {StackName:v.binding.stackId, TemplateStage:"Original"},
+    {StackName:v.binding.stackId, TemplateStage:"Processed", ChangeSetName:"foreign"}]) {
+    assert.throws(() => client("lookup", "cloudformation", "get-template", input));
+  }
+  assert.deepEqual(aws.writes, []);
 });
 
 test("Config runtime rejects function identity mismatch before any permission write", async () => {

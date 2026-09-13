@@ -143,7 +143,9 @@ function createClients(authority, binding, ledger, config) {
       if (!allowed[kind]?.includes(`${service}:${action}`) || !object(input)) fail();
       if (service === "cloudformation") {
         const owner = input.StackName === authority.stackName || sha(input.StackName || "") === ledger.ownerStackSha256;
-        const serviceRead = input.StackName === binding.stackId && kind === "lookup" && ["describe-stacks", "describe-stack-resource"].includes(action);
+        const serviceRead = input.StackName === binding.stackId && kind === "lookup" &&
+          (["describe-stacks", "describe-stack-resource"].includes(action) ||
+            (config.service === "auth-provision" && action === "get-template" && input.TemplateStage === "Processed" && input.ChangeSetName === undefined));
         if (!owner && !serviceRead) fail();
         const expectedKeys = {
           "describe-stacks": ["StackName"], "describe-stack-resource": ["StackName", "LogicalResourceId"],
@@ -267,8 +269,16 @@ async function executeRevision(ledger, binding, authority, config) {
     if (config.service === "auth-provision") {
       const parameters = parametersSnapshot(service.Parameters || []);
       if (service.EnableTerminationProtection !== true
-        || parameters.filter(p => p.ParameterKey === "EnableThnAuthAdminV2").length !== 1 || parameters.some(p =>
+        || parameters.some(p =>
         ["EnableThnAuthAdminV2", "ProvisionThnAuthAdminV2State"].includes(p.ParameterKey) && p.ParameterValue !== "false")) fail();
+      if (!parameters.some(p => p.ParameterKey === "EnableThnAuthAdminV2")) {
+        // SAM source may be YAML. Inspect CloudFormation's already transformed native document.
+        const body = client("lookup", "cloudformation", "get-template", {StackName: binding.stackId, TemplateStage: "Processed"}).TemplateBody;
+        const legacy = typeof body === "string" ? JSON.parse(body) : body;
+        if (parameters.some(p => p.ParameterKey === "ProvisionThnAuthAdminV2State") || !object(legacy) || !object(legacy.Resources)
+          || Object.keys(legacy.Resources).some(k => k.startsWith("Thn"))
+          || ["EnableThnAuthAdminV2", "ProvisionThnAuthAdminV2State"].some(k => Object.hasOwn(legacy.Parameters || {}, k))) fail();
+      }
     }
     for (const logical of policy.functionNames(config.service)) {
       const r = client("lookup", "cloudformation", "describe-stack-resource", { StackName: binding.stackId, LogicalResourceId: logical }).StackResourceDetail;

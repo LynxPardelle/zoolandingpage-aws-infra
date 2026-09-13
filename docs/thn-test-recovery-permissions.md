@@ -122,7 +122,11 @@ Composition rejects attempted role adoption, an existing policy, stale hashes,
 or any other resource change. Execution preserves the original role identity,
 trust, policies and masked previous parameters. Auth must remain protected,
 stable, not enabled and not provisioned when applying this initial correction;
-missing/duplicate enable flags fail closed. No execution role is associated with
+duplicate or inconsistent flags fail closed. If both flags are absent, a direct
+read of the exact service's native processed template must show no THN resources or flag
+definitions, proving the legacy first-provision baseline. That exception cannot
+read another stack, unprocessed source or a pending change set. The native document
+also avoids parsing arbitrary SAM YAML in the sealed runner. No execution role is associated with
 the Auth service stack.
 
 The policy covers only:
