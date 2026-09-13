@@ -5,6 +5,13 @@ const hash = value => sha(canonical(value));
 const account = "123456789012";
 
 function fixture(service = "config") {
+  if (service === "auth-provision") {
+    const binding = {schemaVersion: 1, service, environment: "test", account,
+      stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-auth-admin-test/synthetic`,
+      releaseCommit: "cbc17c8f560c8586be641faa0abc7c60bd17a698"};
+    return {binding, config: {service, account, anchors: {account: sha(account)},
+      expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId)}};
+  }
   if (service === "config-runtime") {
     const value = fixture("config");
     value.binding.service = service;
@@ -30,6 +37,8 @@ function fixture(service = "config") {
 }
 
 function original(service) {
+  if (service === "auth-provision") return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}},
+    Resources: {Unrelated: {Type: "AWS::IAM::RolePolicy", Properties: {RoleName: "other", PolicyName: "keep"}}}};
   return { Parameters: { ExistingSecret: { Type: "String", NoEcho: true } }, Outputs: { Keep: { Value: "unchanged" } },
     Resources: { ExistingRole: { Type: "AWS::IAM::Role", Properties: {
       RoleName: service.startsWith("config") ? "zoolanding-config-authoring-test-deploy" : "zoolanding-deployer-api-proxy-test-github-deploy",

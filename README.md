@@ -86,7 +86,8 @@ roles/trust/policies. It does not activate or deploy the blog.
 
 The separate [THN TEST recovery permission revision](docs/thn-test-recovery-permissions.md)
 adds one exact Config/API recovery policy, an independently reviewed API
-runtime provisioning policy, or a Config runtime-inspection read policy to its existing owning role. It
+runtime provisioning policy, a Config runtime-inspection read policy, or the
+[closed Auth TEST provisioning correction](docs/thn-test-recovery-permissions.md#closed-auth-test-provisioning-correction) to an existing role. It
 does not replay the initial supplemental workflow, adopt a service role for API,
 or enable the blog; fresh reviewed private bindings and public hash ledgers are
 required before any AWS application.
