@@ -118,11 +118,26 @@ function validateBindings(binding, config) {
   } catch { fail(); }
 }
 
+function revisionAction(original, service) {
+  const selected = target(service);
+  if (service !== "auth-provision" || !original?.Resources?.[selected.logical]) return "Add";
+  const legacy = auth.policyResource();
+  legacy.Properties.PolicyDocument.Statement.find(s => s.Action === "cognito-idp:TagResource").Resource = {Ref: "ThnAuthProvisionPoolArnScope"};
+  const definitions = auth.parameterDefinitions(); delete definitions.ThnAuthProvisionPoolCreateTagArn;
+  if (!same(original.Resources[selected.logical], legacy)
+    || Object.hasOwn(original.Parameters || {}, "ThnAuthProvisionPoolCreateTagArn")
+    || Object.entries(definitions).some(([name, definition]) => !same(original.Parameters?.[name], definition))) fail();
+  return "Modify";
+}
+
 function composeTemplate(original, service) {
   const selected = target(service), definitions = parameterDefinitions(service);
-  if (!object(original) || !object(original.Resources) || original.Transform || original.Resources[selected.logical]
-    || Object.keys(definitions).some(name => Object.hasOwn(original.Parameters || {}, name))
-    || Object.values(original.Resources).some(r => r.Properties?.PolicyName === policyName(service))) fail();
+  if (!object(original) || !object(original.Resources) || original.Transform) fail();
+  const modify = revisionAction(original, service) === "Modify";
+  if ((!modify && (original.Resources[selected.logical]
+    || Object.keys(definitions).some(name => Object.hasOwn(original.Parameters || {}, name))))
+    || Object.entries(original.Resources).some(([name, r]) => r.Properties?.PolicyName === policyName(service)
+      && !(modify && name === selected.logical))) fail();
   const roles = Object.entries(original.Resources).filter(([, r]) => r.Type === "AWS::IAM::Role" && r.Properties?.RoleName === selected.role);
   if (roles.length !== (selected.externalRole ? 0 : 1)) fail();
   const result = structuredClone(original);
@@ -143,15 +158,18 @@ function resolve(value, parameters) {
   return value;
 }
 
-function roleSnapshot(input, service, account, newDocument) {
+function roleSnapshot(input, service, account, newDocument, previousDocument) {
   const selected = target(service), role = input?.Role;
+  const modify = previousDocument !== undefined;
+  if (modify && (service !== "auth-provision" || !same(input?.inline?.[policyName(service)], previousDocument))) fail();
   if (!keys(input, ["Role", "inline", "attached"]) || role?.RoleName !== selected.role
     || role.Arn !== `arn:aws:iam::${account}:role/${selected.role}` || role.Path !== "/"
     || !/^AROA[A-Z0-9]{16,}$/.test(role.RoleId) || !object(role.AssumeRolePolicyDocument)
-    || !object(input.inline) || !Object.keys(input.inline).length || Object.hasOwn(input.inline, policyName(service))
+    || !object(input.inline) || !Object.keys(input.inline).length || Object.hasOwn(input.inline, policyName(service)) !== modify
     || !Array.isArray(input.attached) || input.attached.length
     || Object.values(input.inline).some(p => !object(p) || !Array.isArray(p.Statement))
-    || [...Object.values(input.inline), newDocument].reduce((n, p) => n + JSON.stringify(p).length, 0) > 10240) fail();
+    || [...Object.entries(input.inline).filter(([name]) => !modify || name !== policyName(service)).map(([, p]) => p), newDocument]
+      .reduce((n, p) => n + JSON.stringify(p).length, 0) > 10240) fail();
   const result = structuredClone(input);
   delete result.Role.RoleLastUsed;
   if (result.Role.Tags) result.Role.Tags.sort((a, b) => canonical(a).localeCompare(canonical(b)));
@@ -174,4 +192,4 @@ function addCanonicalPolicy(scope, environment, service, role) {
 }
 
 module.exports = { TARGETS, POLICY_NAME, FUNCTIONS, BINDING_ANCHORS, parameterDefinitions, policyResource, policyName, functionNames,
-  validateBindings, composeTemplate, resolve, roleSnapshot, addCanonicalPolicy };
+  validateBindings, revisionAction, composeTemplate, resolve, roleSnapshot, addCanonicalPolicy };

@@ -24,7 +24,7 @@ on:
         type: string
         required: true
       approve_exact_permissions:
-        description: Approve only the selected one-policy Add, no other updates
+        description: Approve one policy Add or the exact existing Auth tagging correction
         type: boolean
         default: false
         required: true

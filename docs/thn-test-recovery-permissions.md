@@ -116,9 +116,9 @@ role name are code-owned, not configurable grant selectors. Store this canonical
 binding only in `THN_AUTH_PROVISION_BINDING_JSON` in the existing TEST environment.
 No package/record selector or recovery-channel secret is needed for this target.
 
-The private binding derives 23 required NoEcho parameters. The policy is owned by
+The private binding derives 24 required NoEcho parameters. The policy is owned by
 Bootstrap, while the existing Auth deploy role remains outside that template.
-Composition rejects attempted role adoption, an existing policy, stale hashes,
+Composition rejects attempted role adoption, an unexpected existing policy, stale hashes,
 or any other resource change. Execution preserves the original role identity,
 trust, policies and masked previous parameters. Auth must remain protected,
 stable, not enabled and not provisioned when applying this initial correction;
@@ -163,6 +163,26 @@ Applying this policy does not provision Auth or activate client access. Retry
 only the owning immutable closed Auth provisioning workflow after independent
 readback, required-action simulations and shared-resource baseline checks.
 
+### Creation-time tagging revision
+
+The sole existing-policy exception is a correction from the exact original
+`ThnTestClosedProvisioningV1` template. Cognito evaluates creation-time
+`TagResource` against `userpool/*`, not `userpool/us-east-1_*`. Only that
+statement uses the additional `ThnAuthProvisionPoolCreateTagArn` NoEcho value,
+derived within the same fixed account and region. Its CloudFormation mediation
+and exact stack/logical request-tag conditions remain unchanged. All other pool
+operations keep the original, narrower resource scope.
+
+The driver rejects already-corrected, widened, duplicated or drifted policies.
+It requires the exact original 23 parameter definitions, sends their previous
+values unchanged, and adds only the new tagging parameter. The native change
+set must contain exactly one `AWS::IAM::RolePolicy` Modify with replacement
+`False` and the independently observed existing physical identity. IAM readback
+must match the approved replacement, with the original role/trust and all other
+inline/attached policies unchanged. Quota checks count the replacement once.
+The same existing binding secret is reused; no additional private selector is
+accepted. All other service selections remain Add-only.
+
 ## Execution boundary
 
 The unprivileged job proves the exact two-parent TEST promotion/current dev tree,
@@ -177,7 +197,8 @@ Verification binds account, stable/protected owning stack, original templates,
 parameters, role ID/trust/policies/quota, current service stack and exact object
 versions/ownership. The execution path publishes only the NoEcho-reference
 native template to the existing private content-addressed CDK channel, checks
-its bytes/encryption, and reviews exactly one `AWS::IAM::RolePolicy` Add.
+its bytes/encryption, and reviews exactly one `AWS::IAM::RolePolicy` Add (or the
+exact Auth-only tagging Modify described above).
 No other resource modification, replacement, deletion or original parameter
 change is allowed. Returned native templates must match exactly; new parameter
 readback must be masked. Final IAM readback must equal the original role/trust
