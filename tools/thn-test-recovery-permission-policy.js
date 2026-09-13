@@ -15,7 +15,14 @@ const BINDING_ANCHORS = Object.freeze({
   config: { selector: "f4cb00cadf1f687b7c5296411ebcd26047bc914fa07eb0c94fef1c16331d1050",
     version: "6984afadd24127cc007a9cdcc387984f50305189ac4e88ff101d81b76a696ea3" },
   api: { selector: "1a860d67a954ad8ceb0786421cb2b62a796f9eab54f436544d3739536ca1c4c0",
-    version: "3ded86cf20709eb9cffe17774eb1361544d70581bcbb91bdb4969cbeaf3d4e13" },
+    version: "3ded86cf20709eb9cffe17774eb1361544d70581bcbb91bdb4969cbeaf3d4e13",
+    // Independently observed original identities; never infer provider physical
+    // names from full logical IDs, which may be shortened by CloudFormation.
+    functions: Object.freeze({
+      ApiProxyFunction: "a42bfc7255b66badea2cf8bb0ec04a86286eb5b0b24a9a180607ed3422126ef4",
+      AuthProvisioningExecutorFunction: "45f250284ecf861257cf51bb17fb05f5f57313c4dbe600028e299f406eafd78f",
+      AuthJwtAuthorizerFunction: "2442a7085c5bb1bf63410df55ccaa564f1eaec751e434187322db0503ba19ebc",
+    }) },
 });
 const fail = () => { throw new Error("thn_recovery_permission_guard_failed"); };
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -81,8 +88,12 @@ function validateBindings(binding, config) {
       values[selected.prefix + name + "ObjectArn"] = `arn:aws:s3:::${item.bucket}/${item.key}`;
       values[selected.prefix + name + "VersionId"] = item.versionId;
     }
+    if (service === "api" && !keys(anchors.api.functions, FUNCTIONS)) fail();
     for (const name of service === "api" ? FUNCTIONS : []) {
-      if (!new RegExp(`^arn:aws:lambda:us-east-1:${binding.account}:function:${selected.service}-${name}-[A-Za-z0-9_-]+$`).test(binding.functions[name])) fail();
+      if (!/^[a-f0-9]{64}$/.test(anchors.api.functions[name])
+        || typeof binding.functions[name] !== "string"
+        || !new RegExp(`^arn:aws:lambda:us-east-1:${binding.account}:function:[A-Za-z0-9_-]{1,64}$`).test(binding.functions[name])
+        || sha(binding.functions[name]) !== anchors.api.functions[name]) fail();
       values[selected.prefix + name + "Arn"] = binding.functions[name];
     }
     return values;

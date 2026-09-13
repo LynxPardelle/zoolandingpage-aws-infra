@@ -10,3 +10,5 @@ f0e164190d931fce84e0065e5a7e73db705782f1:lib/stacks/frontend-stack.js:generic-ap
 3678fd0c1364e4e933c105e08ebcf41b28f8c386:test/thn-test-permissions.test.js:generic-api-key:207
 # Regression matcher for those same synthetic identifiers; exact source-line digest is tested.
 4358fad1797cd0d03fa5d3a32b1c32491062cb12:test/gitleaks-config.test.js:generic-api-key:84
+# Exact observed Lambda identity SHA-256, not an API key or access capability.
+28baedcaf96ac11a9f3e4e81212c9d2c831e99aa:tools/thn-test-recovery-permission-policy.js:generic-api-key:22
