@@ -120,7 +120,8 @@ function revisionAWS(v) {
       Credentials: { AccessKeyId: "ASIA" + "Q".repeat(16), SecretAccessKey: "S".repeat(40), SessionToken: "synthetic-token",
         Expiration: new Date(Date.now() + 3500000).toISOString() } };
     if (action === "describe-stacks") return { Stacks: [input.StackName === v.binding.stackId
-      ? { StackName: selected.service, StackId: v.binding.stackId, StackStatus: "UPDATE_COMPLETE" } : structuredClone(state.owner)] };
+      ? { StackName: selected.service, StackId: v.binding.stackId, StackStatus: "UPDATE_COMPLETE", ...(v.config.service === "auth-provision"
+        ? {EnableTerminationProtection: true, Parameters: [{ParameterKey: "EnableThnAuthAdminV2", ParameterValue: "false"}]} : {}) } : structuredClone(state.owner)] };
     if (action === "get-template") return { TemplateBody: structuredClone(input.ChangeSetName ? state.pending : state.template) };
     if (action === "get-role") return { Role: input.RoleName === roleName ? structuredClone(state.role.Role)
       : { Arn: v.authority.cfn, AssumeRolePolicyDocument: { Version: "2012-10-17", Statement: [
@@ -170,7 +171,7 @@ function revisionAWS(v) {
   return state;
 }
 
-for (const service of ["config", "api", "api-runtime", "config-runtime"]) {
+for (const service of ["config", "api", "api-runtime", "config-runtime", "auth-provision"]) {
   test(`${service}: real revision orchestration adds one policy and preserves prior trust and masked values`, async () => {
     assert.equal(typeof api().runRevision, "function");
     const v = setup(service), aws = revisionAWS(v), before = structuredClone(aws.role);
@@ -182,10 +183,38 @@ for (const service of ["config", "api", "api-runtime", "config-runtime"]) {
     assert.deepEqual(aws.role.Role, before.Role); assert.deepEqual(aws.role.inline.Existing, before.inline.Existing);
     for (const [name, document] of Object.entries(before.inline)) assert.deepEqual(aws.role.inline[name], document);
     assert.deepEqual(aws.template, v.after); assert.equal(aws.owner.RoleARN, v.authority.cfn);
-    assert.ok(!JSON.stringify(applied).includes(v.binding.record.versionId));
+    if (v.binding.record) assert.ok(!JSON.stringify(applied).includes(v.binding.record.versionId));
     assert.deepEqual(aws.writes, ["put-object", "create-change-set", "execute-change-set"]);
   });
 }
+
+test("Auth revision rejects active, unprotected or ambiguous lifecycle flags before writes", async () => {
+  for (const mutate of [s => s.EnableTerminationProtection = false,
+    s => s.Parameters[0].ParameterValue = "true", s => s.Parameters = [],
+    s => s.Parameters.push({ParameterKey: "EnableThnAuthAdminV2", ParameterValue: "false"}),
+    s => s.Parameters.push({ParameterKey: "ProvisionThnAuthAdminV2State", ParameterValue: "true"})]) {
+    const v = setup("auth-provision"), aws = revisionAWS(v);
+    const transport = (...args) => {const result = aws.aws(...args);
+      if (args[1] === "describe-stacks" && args[2].StackName === v.binding.stackId) mutate(result.Stacks[0]); return result;};
+    await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority, {...v.config, aws: transport,
+      authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3}));
+    assert.deepEqual(aws.writes, []);
+  }
+});
+
+test("Auth transport has no recovery object authority and detects substituted policy source", () => {
+  const v = setup("auth-provision"), aws = revisionAWS(v), os = require("node:os");
+  const client = api().createClients(v.authority, v.binding, v.ledger, {...v.config, aws: aws.aws, authenticate: () => true});
+  assert.throws(() => client("lookup", "s3api", "head-object", {Bucket: "synthetic", Key: "x", VersionId: "1", ExpectedBucketOwner: v.config.account}));
+  assert.deepEqual(aws.writes, []);
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "thn-auth-permission-test-")), directory = path.join(parent, "transport");
+  try {
+    const receipt = api().writeTransport(directory, v.ledger, v.authority, v.config);
+    assert.equal(api().verifyTransport(directory, receipt.manifestSha256, v.config).ledger.service, "auth-provision");
+    fs.appendFileSync(path.join(directory, "thn-test-auth-provision-permission-policy.js"), "\n// substituted\n");
+    assert.throws(() => api().verifyTransport(directory, receipt.manifestSha256, v.config));
+  } finally {fs.rmSync(parent, {recursive: true});}
+});
 
 test("Config runtime rejects function identity mismatch before any permission write", async () => {
   const v = setup("config-runtime"), aws = revisionAWS(v);

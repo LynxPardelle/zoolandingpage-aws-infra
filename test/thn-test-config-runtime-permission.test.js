@@ -80,7 +80,7 @@ test("Config runtime checks ARN shape even when a fixture supplies matching iden
 
 test("Config runtime dispatch uses an independent binding without changing the original recovery secrets", () => {
   const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/thn-test-recovery-permissions.yml"), "utf8");
-  assert.match(workflow, /options: \[config, api, api-runtime, config-runtime\]/);
+  assert.match(workflow, /options: \[config, api, api-runtime, config-runtime, auth-provision\]/);
   assert.match(workflow, /inputs.service == 'config-runtime' && secrets.THN_CONFIG_RUNTIME_BINDING_JSON/);
   assert.match(workflow, /inputs.service == 'config-runtime' && secrets.THN_CONFIG_RECOVERY_CHANNEL_BUCKET/);
   assert.match(workflow, /inputs.service == 'config' && secrets.THN_CONFIG_RECOVERY_BINDING_JSON/);

@@ -1,7 +1,9 @@
 "use strict";
 const { canonical, sha } = require("./thn-test-prerequisites");
 const runtime = require("./thn-test-api-runtime-permission-policy");
+const auth = require("./thn-test-auth-provision-permission-policy");
 const TARGETS = Object.freeze({
+  "auth-provision": auth.TARGET,
   "api-runtime": runtime.TARGET,
   "config-runtime": { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigRuntimeInspectionPolicy",
     prefix: "ThnConfigRuntime", service: "zoolanding-config-authoring-test", owner: "certificate", policyName: "ThnTestRuntimeInspectionV1" },
@@ -41,6 +43,7 @@ function functionNames(service) {
 }
 
 function parameterDefinitions(service) {
+  if (service === "auth-provision") return auth.parameterDefinitions();
   if (service === "api-runtime") return runtime.parameterDefinitions();
   if (service === "config-runtime") return { ThnConfigRuntimeFunctionArn: { Type: "String", NoEcho: true, MinLength: 1, MaxLength: 2048 } };
   const { prefix } = target(service);
@@ -50,6 +53,7 @@ function parameterDefinitions(service) {
 }
 
 function policyResource(service) {
+  if (service === "auth-provision") return auth.policyResource();
   if (service === "api-runtime") return runtime.policyResource();
   const { role, prefix } = target(service);
   const statement = (Action, Resource, Condition) => ({ Effect: "Allow", Action, Resource, ...(Condition ? { Condition } : {}) });
@@ -72,6 +76,7 @@ function policyResource(service) {
 }
 
 function validateBindings(binding, config) {
+  if (config.service === "auth-provision") return auth.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   if (config.service === "api-runtime") return runtime.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   try {
     const service = config.service, selected = target(service), anchors = config.anchors || BINDING_ANCHORS;
@@ -119,10 +124,10 @@ function composeTemplate(original, service) {
     || Object.keys(definitions).some(name => Object.hasOwn(original.Parameters || {}, name))
     || Object.values(original.Resources).some(r => r.Properties?.PolicyName === policyName(service))) fail();
   const roles = Object.entries(original.Resources).filter(([, r]) => r.Type === "AWS::IAM::Role" && r.Properties?.RoleName === selected.role);
-  if (roles.length !== 1) fail();
+  if (roles.length !== (selected.externalRole ? 0 : 1)) fail();
   const result = structuredClone(original);
   result.Parameters = { ...(result.Parameters || {}), ...definitions };
-  result.Resources[selected.logical] = { ...policyResource(service), DependsOn: [roles[0][0]] };
+  result.Resources[selected.logical] = { ...policyResource(service), ...(selected.externalRole ? {} : {DependsOn: [roles[0][0]]}) };
   return result;
 }
 
@@ -164,7 +169,8 @@ function addCanonicalPolicy(scope, environment, service, role) {
   const definition = policyResource(service);
   const policy = new cdk.CfnResource(scope, selected.logical, { type: definition.Type, properties: definition.Properties });
   policy.overrideLogicalId(selected.logical);
-  policy.addResourceDependency(role);
+  if (!selected.externalRole) policy.addResourceDependency(role);
+  else if (role !== undefined) fail();
 }
 
 module.exports = { TARGETS, POLICY_NAME, FUNCTIONS, BINDING_ANCHORS, parameterDefinitions, policyResource, policyName, functionNames,
