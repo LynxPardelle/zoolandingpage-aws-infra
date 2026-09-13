@@ -2,7 +2,9 @@
 const { canonical, sha } = require("./thn-test-prerequisites");
 const runtime = require("./thn-test-api-runtime-permission-policy");
 const auth = require("./thn-test-auth-provision-permission-policy");
+const image = require("./thn-test-image-version-permission-policy");
 const TARGETS = Object.freeze({
+  "image-version": image.TARGET,
   "auth-provision": auth.TARGET,
   "api-runtime": runtime.TARGET,
   "config-runtime": { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigRuntimeInspectionPolicy",
@@ -43,6 +45,7 @@ function functionNames(service) {
 }
 
 function parameterDefinitions(service) {
+  if (service === "image-version") return {};
   if (service === "auth-provision") return auth.parameterDefinitions();
   if (service === "api-runtime") return runtime.parameterDefinitions();
   if (service === "config-runtime") return { ThnConfigRuntimeFunctionArn: { Type: "String", NoEcho: true, MinLength: 1, MaxLength: 2048 } };
@@ -53,6 +56,7 @@ function parameterDefinitions(service) {
 }
 
 function policyResource(service) {
+  if (service === "image-version") return image.policyResource();
   if (service === "auth-provision") return auth.policyResource();
   if (service === "api-runtime") return runtime.policyResource();
   const { role, prefix } = target(service);
@@ -76,6 +80,7 @@ function policyResource(service) {
 }
 
 function validateBindings(binding, config) {
+  if (config.service === "image-version") return image.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   if (config.service === "auth-provision") return auth.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   if (config.service === "api-runtime") return runtime.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   try {
@@ -119,6 +124,7 @@ function validateBindings(binding, config) {
 }
 
 function revisionAction(original, service) {
+  if (service === "image-version") {image.composeTemplate(original); return "Modify";}
   const selected = target(service);
   if (service !== "auth-provision" || !original?.Resources?.[selected.logical]) return "Add";
   const legacy = auth.policyResource();
@@ -131,6 +137,7 @@ function revisionAction(original, service) {
 }
 
 function composeTemplate(original, service) {
+  if (service === "image-version") return image.composeTemplate(original);
   const selected = target(service), definitions = parameterDefinitions(service);
   if (!object(original) || !object(original.Resources) || original.Transform) fail();
   const modify = revisionAction(original, service) === "Modify";
@@ -161,7 +168,7 @@ function resolve(value, parameters) {
 function roleSnapshot(input, service, account, newDocument, previousDocument) {
   const selected = target(service), role = input?.Role;
   const modify = previousDocument !== undefined;
-  if (modify && (service !== "auth-provision" || !same(input?.inline?.[policyName(service)], previousDocument))) fail();
+  if (modify && (!["auth-provision", "image-version"].includes(service) || !same(input?.inline?.[policyName(service)], previousDocument))) fail();
   if (!keys(input, ["Role", "inline", "attached"]) || role?.RoleName !== selected.role
     || role.Arn !== `arn:aws:iam::${account}:role/${selected.role}` || role.Path !== "/"
     || !/^AROA[A-Z0-9]{16,}$/.test(role.RoleId) || !object(role.AssumeRolePolicyDocument)

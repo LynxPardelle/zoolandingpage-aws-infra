@@ -72,6 +72,7 @@ function supplementalResources() {
     ],
     [
       statement(["lambda:PublishVersion", "lambda:CreateAlias"], [imageFunction]),
+      statement(["lambda:ListVersionsByFunction"], [imageFunction]),
       statement(["lambda:GetAlias", "lambda:UpdateAlias", "lambda:DeleteAlias", "lambda:GetProvisionedConcurrencyConfig"], [imageFunction, imageAlias]),
       statement(TABLE_PROVIDER_READS, [arn("dynamodb", "table/zoolanding-image-upload-test-ThnPrivateUploadTransactionsV2")]),
       statement(BUCKET_PROVIDER_READS, [bucketArn("zlp-thn-private-upload-test")]),

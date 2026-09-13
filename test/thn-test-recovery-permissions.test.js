@@ -6,6 +6,8 @@ const { fixture, original, runtimeFixture } = require("./fixtures/thn-recovery-b
 const file = path.join(__dirname, "../tools/thn-test-recovery-permissions.js");
 const api = () => { assert.ok(fs.existsSync(file), "missing exact recovery permission revision runner"); return require(file); };
 const hash = value => sha(canonical(value));
+const resolved = (document, values, service, account) => service === "image-version"
+  ? require("../tools/thn-test-permissions").resolvedPolicy(document, account) : policy.resolve(document, values);
 function setup(service = "config") {
   const { binding, config } = service === "api-runtime" ? runtimeFixture() : fixture(service), p = policy.TARGETS[service];
   config.sourceSha = "1".repeat(40); config.runId = "123"; config.runAttempt = "1";
@@ -19,6 +21,7 @@ function setup(service = "config") {
   const role = { Role: { RoleName: p.role, Arn: `arn:aws:iam::${config.account}:role/${p.role}`, Path: "/",
     RoleId: "AROA" + "Q".repeat(16), AssumeRolePolicyDocument: { Statement: [] } }, inline: { Existing: { Statement: [] } }, attached: [] };
   const before = original(service);
+  if (service === "image-version") role.inline[p.policyName] = resolved(before.Resources[p.logical].Properties.PolicyDocument, {}, service, config.account);
   if (["api-runtime", "config-runtime"].includes(service)) {
     before.Resources.PriorRecovery = { Type: "AWS::IAM::RolePolicy", Properties: {
       RoleName: p.role, PolicyName: policy.POLICY_NAME, PolicyDocument: { Statement: [] } } };
@@ -28,8 +31,8 @@ function setup(service = "config") {
   const ledger = { schemaVersion: 1, service, environment: "test", domain: "thehairnarrative.com", sourceSha: config.sourceSha,
     ownerStackSha256: sha(stackId), serviceStackSha256: sha(binding.stackId), bindingSha256: hash(binding),
     originalSha256: hash(before), processedSha256: hash(before), composedSha256: hash(after), composedProcessedSha256: hash(after),
-    roleSha256: hash(role), resolvedPolicySha256: hash(policy.resolve(policy.policyResource(service).Properties.PolicyDocument,
-      policy.validateBindings(binding, config))) };
+    roleSha256: hash(role), resolvedPolicySha256: hash(resolved(policy.policyResource(service).Properties.PolicyDocument,
+      policy.validateBindings(binding, config), service, config.account)) };
   config.expectedLedgerSha256 = hash(ledger);
   return { binding, config, authority, stackId, before, after, ledger, role };
 }
@@ -156,8 +159,8 @@ function revisionAWS(v) {
     }
     if (action === "execute-change-set") {
       state.writes.push(action); state.executed = true; state.template = state.pending; state.owner.Parameters = state.parameters;
-      state.role.inline[policy.policyName(v.config.service)] = policy.resolve(policy.policyResource(v.config.service).Properties.PolicyDocument,
-        policy.validateBindings(v.binding, v.config));
+      state.role.inline[policy.policyName(v.config.service)] = resolved(policy.policyResource(v.config.service).Properties.PolicyDocument,
+        policy.validateBindings(v.binding, v.config), v.config.service, v.config.account);
       return {};
     }
     if (action === "describe-stack-resource") return { StackResourceDetail: input.StackName === v.binding.stackId
@@ -199,6 +202,50 @@ function taggingSetup() {
   };
   return {v, aws};
 }
+
+function imageSetup() {
+  const v = setup("image-version"), aws = revisionAWS(v), delegate = aws.aws;
+  aws.aws = (...args) => {
+    const [, action, input] = args;
+    if (action === "create-change-set") assert.deepEqual(input.Parameters, [{ParameterKey: "ExistingSecret", UsePreviousValue: true}]);
+    const result = delegate(...args);
+    if (action === "describe-stacks" && input.StackName === v.binding.stackId) Object.assign(result.Stacks[0], {
+      StackStatus: "CREATE_FAILED", RoleARN: `arn:aws:iam::${v.config.account}:role/${policy.TARGETS["image-version"].role}`,
+      EnableTerminationProtection: true, Parameters: [
+        {ParameterKey: "EnableThnPrivateUploadV2", ParameterValue: "false"},
+        {ParameterKey: "ProvisionThnPrivateUploadV2State", ParameterValue: "true"},
+        {ParameterKey: "ThnPrivateUploadV2TerminationProtectionGate", ParameterValue: "CONFIRMED_ENABLED"}]});
+    if (action === "describe-change-set") Object.assign(result.Changes[0].ResourceChange,
+      {Action: "Modify", Replacement: "False", PhysicalResourceId: "synthetic-policy"});
+    if (action === "describe-stack-resource") result.StackResourceDetail.ResourceStatus = "UPDATE_COMPLETE";
+    return result;
+  };
+  return {v, aws};
+}
+test("Image version workflow verifies and updates only its existing supplement with no new parameters", async () => {
+  const {v, aws} = imageSetup(), before = structuredClone(aws.role);
+  const config = {...v.config, aws: aws.aws, authenticate: () => true, execute: false, delay: async () => {}, maxPolls: 3};
+  assert.equal((await api().runRevision(v.ledger, v.binding, v.authority, config)).status, "verified");
+  assert.deepEqual(aws.writes, []);
+  const result = await api().runRevision(v.ledger, v.binding, v.authority, {...config, execute: true});
+  assert.equal(result.modifiedPolicies, 1); assert.equal(result.addedPolicies, 0);
+  assert.deepEqual(aws.role.Role, before.Role); assert.deepEqual(aws.role.inline.Existing, before.inline.Existing);
+  assert.deepEqual(aws.template, v.after);
+});
+test("Image revision rejects active, unprotected, foreign-executor or wrong-state service before writes", async () => {
+  for (const mutate of [s => s.EnableTerminationProtection = false, s => s.RoleARN += "other",
+    s => s.StackStatus = "UPDATE_COMPLETE", s => s.Parameters[0].ParameterValue = "true",
+    s => s.Parameters[1].ParameterValue = "false"]) {
+    const {v, aws} = imageSetup(), transport = (...args) => {
+      const result = aws.aws(...args);
+      if (args[1] === "describe-stacks" && args[2].StackName === v.binding.stackId) mutate(result.Stacks[0]);
+      return result;
+    };
+    await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority, {...v.config, aws: transport,
+      authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3}));
+    assert.deepEqual(aws.writes, []);
+  }
+});
 test("Auth tagging revision verifies then modifies only its existing policy with previous NoEcho values", async () => {
   const {v, aws} = taggingSetup(), before = structuredClone(aws.role);
   const config = {...v.config, aws: aws.aws, authenticate: () => true, execute: false, delay: async () => {}, maxPolls: 3};
