@@ -145,7 +145,7 @@ function createClients(authority, binding, ledger, config) {
         const owner = input.StackName === authority.stackName || sha(input.StackName || "") === ledger.ownerStackSha256;
         const serviceRead = input.StackName === binding.stackId && kind === "lookup" &&
           (["describe-stacks", "describe-stack-resource"].includes(action) ||
-            (config.service === "auth-provision" && action === "get-template" && input.TemplateStage === "Original" && input.ChangeSetName === undefined));
+            (config.service === "auth-provision" && action === "get-template" && input.TemplateStage === "Processed" && input.ChangeSetName === undefined));
         if (!owner && !serviceRead) fail();
         const expectedKeys = {
           "describe-stacks": ["StackName"], "describe-stack-resource": ["StackName", "LogicalResourceId"],
@@ -272,7 +272,8 @@ async function executeRevision(ledger, binding, authority, config) {
         || parameters.some(p =>
         ["EnableThnAuthAdminV2", "ProvisionThnAuthAdminV2State"].includes(p.ParameterKey) && p.ParameterValue !== "false")) fail();
       if (!parameters.some(p => p.ParameterKey === "EnableThnAuthAdminV2")) {
-        const body = client("lookup", "cloudformation", "get-template", {StackName: binding.stackId, TemplateStage: "Original"}).TemplateBody;
+        // SAM source may be YAML. Inspect CloudFormation's already transformed native document.
+        const body = client("lookup", "cloudformation", "get-template", {StackName: binding.stackId, TemplateStage: "Processed"}).TemplateBody;
         const legacy = typeof body === "string" ? JSON.parse(body) : body;
         if (parameters.some(p => p.ParameterKey === "ProvisionThnAuthAdminV2State") || !object(legacy) || !object(legacy.Resources)
           || Object.keys(legacy.Resources).some(k => k.startsWith("Thn"))

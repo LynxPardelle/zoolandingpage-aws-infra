@@ -235,12 +235,12 @@ test("Auth first provisioning accepts absent flags only in a verified legacy tem
   }
 });
 
-test("Auth legacy template probe cannot read foreign stacks or pending/processed templates", () => {
+test("Auth legacy template probe reads only the exact native processed template", () => {
   const v = setup("auth-provision"), aws = revisionAWS(v);
   const client = api().createClients(v.authority, v.binding, v.ledger, {...v.config, aws:aws.aws, authenticate:()=>true});
-  for (const input of [{StackName:v.binding.stackId + "other", TemplateStage:"Original"},
-    {StackName:v.binding.stackId, TemplateStage:"Processed"},
-    {StackName:v.binding.stackId, TemplateStage:"Original", ChangeSetName:"foreign"}]) {
+  for (const input of [{StackName:v.binding.stackId + "other", TemplateStage:"Processed"},
+    {StackName:v.binding.stackId, TemplateStage:"Original"},
+    {StackName:v.binding.stackId, TemplateStage:"Processed", ChangeSetName:"foreign"}]) {
     assert.throws(() => client("lookup", "cloudformation", "get-template", input));
   }
   assert.deepEqual(aws.writes, []);

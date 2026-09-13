@@ -13,7 +13,7 @@ Date: 2026-09-12, Central Time.
 - Tests reject foreign bindings, stale source, role adoption, active or ambiguous
   lifecycle flags, transport substitution and inline-policy overflow.
 - Live preflight identified an untouched legacy Auth template without the new
-  flags. A follow-up verifies that exact original template contains neither THN
+  flags. A follow-up verifies that exact native processed template contains neither THN
   resources nor flag definitions before accepting absent flags for the first
   provisioning. No permission document or other target changes.
 
