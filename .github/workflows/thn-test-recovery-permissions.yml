@@ -6,7 +6,7 @@ on:
       service:
         description: Apply one exact policy in its existing owning stack
         type: choice
-        options: [config, api, api-runtime, config-runtime, auth-provision, image-version]
+        options: [config, api, api-runtime, config-runtime, auth-provision, image-version, hub-version]
         default: config
         required: true
       execution:
@@ -24,7 +24,7 @@ on:
         type: string
         required: true
       approve_exact_permissions:
-        description: Approve one policy Add or the exact existing Auth/Image correction
+        description: Approve one policy Add or the exact existing Auth/Image/Hub correction
         type: boolean
         default: false
         required: true
@@ -135,6 +135,6 @@ jobs:
           aws-region: us-east-1
       - name: Verify or apply one exact policy and preserve all original roles
         env:
-          THN_RECOVERY_BINDING_JSON: ${{ inputs.service == 'config' && secrets.THN_CONFIG_RECOVERY_BINDING_JSON || inputs.service == 'api' && secrets.THN_API_RECOVERY_BINDING_JSON || inputs.service == 'api-runtime' && secrets.THN_API_RUNTIME_BINDING_JSON || inputs.service == 'config-runtime' && secrets.THN_CONFIG_RUNTIME_BINDING_JSON || inputs.service == 'auth-provision' && secrets.THN_AUTH_PROVISION_BINDING_JSON || inputs.service == 'image-version' && secrets.THN_IMAGE_VERSION_BINDING_JSON || '' }}
+          THN_RECOVERY_BINDING_JSON: ${{ inputs.service == 'config' && secrets.THN_CONFIG_RECOVERY_BINDING_JSON || inputs.service == 'api' && secrets.THN_API_RECOVERY_BINDING_JSON || inputs.service == 'api-runtime' && secrets.THN_API_RUNTIME_BINDING_JSON || inputs.service == 'config-runtime' && secrets.THN_CONFIG_RUNTIME_BINDING_JSON || inputs.service == 'auth-provision' && secrets.THN_AUTH_PROVISION_BINDING_JSON || inputs.service == 'image-version' && secrets.THN_IMAGE_VERSION_BINDING_JSON || inputs.service == 'hub-version' && secrets.THN_HUB_VERSION_BINDING_JSON || '' }}
           RECOVERY_CHANNEL_BUCKET: ${{ inputs.service == 'config' && secrets.THN_CONFIG_RECOVERY_CHANNEL_BUCKET || inputs.service == 'api' && secrets.THN_API_RECOVERY_CHANNEL_BUCKET || inputs.service == 'api-runtime' && secrets.THN_API_RUNTIME_CHANNEL_BUCKET || inputs.service == 'config-runtime' && secrets.THN_CONFIG_RECOVERY_CHANNEL_BUCKET || '' }}
         run: node .transport/thn-test-recovery-permissions.js run .transport
