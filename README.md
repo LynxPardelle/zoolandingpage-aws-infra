@@ -85,8 +85,8 @@ adds three policies to existing deployment identities, preserving original
 roles/trust/policies. It does not activate or deploy the blog.
 
 The separate [THN TEST recovery permission revision](docs/thn-test-recovery-permissions.md)
-adds one exact Config/API recovery policy or an independently reviewed API
-runtime provisioning policy to its existing owning role. It
+adds one exact Config/API recovery policy, an independently reviewed API
+runtime provisioning policy, or a Config runtime-inspection read policy to its existing owning role. It
 does not replay the initial supplemental workflow, adopt a service role for API,
 or enable the blog; fresh reviewed private bindings and public hash ledgers are
 required before any AWS application.

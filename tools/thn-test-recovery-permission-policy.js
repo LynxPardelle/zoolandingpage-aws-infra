@@ -3,6 +3,8 @@ const { canonical, sha } = require("./thn-test-prerequisites");
 const runtime = require("./thn-test-api-runtime-permission-policy");
 const TARGETS = Object.freeze({
   "api-runtime": runtime.TARGET,
+  "config-runtime": { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigRuntimeInspectionPolicy",
+    prefix: "ThnConfigRuntime", service: "zoolanding-config-authoring-test", owner: "certificate", policyName: "ThnTestRuntimeInspectionV1" },
   config: { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigTestRecoveryPolicy",
     prefix: "ThnConfigRecovery", service: "zoolanding-config-authoring-test", owner: "certificate" },
   api: { role: "zoolanding-deployer-api-proxy-test-github-deploy", logical: "ThnApiTestRecoveryPolicy",
@@ -13,7 +15,8 @@ const FUNCTIONS = ["ApiProxyFunction", "AuthProvisioningExecutorFunction", "Auth
 const BINDING_ANCHORS = Object.freeze({
   account: "3e19eeb25ac142d015c5a4d347dc58784b0a79a124f1353b5e92d90673810a8f",
   config: { selector: "f4cb00cadf1f687b7c5296411ebcd26047bc914fa07eb0c94fef1c16331d1050",
-    version: "6984afadd24127cc007a9cdcc387984f50305189ac4e88ff101d81b76a696ea3" },
+    version: "6984afadd24127cc007a9cdcc387984f50305189ac4e88ff101d81b76a696ea3",
+    functions: Object.freeze({ ConfigAuthoringFunction: "299287c5e3f3a17efcaea773da7334551fb7b57fc43f81fa14ed5d27c5c12b82" }) },
   api: { selector: "1a860d67a954ad8ceb0786421cb2b62a796f9eab54f436544d3739536ca1c4c0",
     version: "3ded86cf20709eb9cffe17774eb1361544d70581bcbb91bdb4969cbeaf3d4e13",
     // Independently observed original identities; never infer provider physical
@@ -32,9 +35,14 @@ const hash = v => sha(canonical(v));
 const ref = name => ({ Ref: name });
 function target(service) { if (!Object.hasOwn(TARGETS, service)) fail(); return TARGETS[service]; }
 function policyName(service) { return target(service).policyName || POLICY_NAME; }
+function functionNames(service) {
+  target(service);
+  return service === "api" ? FUNCTIONS : service === "config-runtime" ? ["ConfigAuthoringFunction"] : [];
+}
 
 function parameterDefinitions(service) {
   if (service === "api-runtime") return runtime.parameterDefinitions();
+  if (service === "config-runtime") return { ThnConfigRuntimeFunctionArn: { Type: "String", NoEcho: true, MinLength: 1, MaxLength: 2048 } };
   const { prefix } = target(service);
   return Object.fromEntries(["StackArn", "PackageObjectArn", "PackageVersionId", "RecordObjectArn", "RecordVersionId",
     ...(service === "api" ? FUNCTIONS.map(n => n + "Arn") : [])].map(name => [prefix + name,
@@ -45,6 +53,9 @@ function policyResource(service) {
   if (service === "api-runtime") return runtime.policyResource();
   const { role, prefix } = target(service);
   const statement = (Action, Resource, Condition) => ({ Effect: "Allow", Action, Resource, ...(Condition ? { Condition } : {}) });
+  if (service === "config-runtime") return { Type: "AWS::IAM::RolePolicy", Properties: { RoleName: role,
+    PolicyName: policyName(service), PolicyDocument: { Version: "2012-10-17", Statement: [
+      statement(["lambda:GetRuntimeManagementConfig"], [ref("ThnConfigRuntimeFunctionArn")]) ] } } };
   const read = name => statement(["s3:GetObjectVersion"], [ref(prefix + name + "ObjectArn")],
     { StringEquals: { "s3:VersionId": ref(prefix + name + "VersionId") } });
   const statements = [read("Package"), read("Record"),
@@ -64,6 +75,7 @@ function validateBindings(binding, config) {
   if (config.service === "api-runtime") return runtime.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   try {
     const service = config.service, selected = target(service), anchors = config.anchors || BINDING_ANCHORS;
+    const recoveryService = service === "config-runtime" ? "config" : service, functions = functionNames(service);
     if (!keys(binding, ["schemaVersion", "service", "environment", "account", "stackId", "package", "record", "functions"])
       || binding.schemaVersion !== 1 || binding.service !== service || binding.environment !== "test"
       || !/^[0-9]{12}$/.test(binding.account) || binding.account !== config.account || sha(binding.account) !== anchors.account
@@ -75,27 +87,28 @@ function validateBindings(binding, config) {
         || item.key.split("/").some(s => !s || s === "." || s === "..") || typeof item.versionId !== "string"
         || !/^[A-Za-z0-9_.+/-]{1,1024}$/.test(item.versionId) || item.versionId === "null") fail();
     }
-    if (hash({ Bucket: binding.package.bucket, Key: binding.package.key }) !== anchors[service].selector
-      || sha(binding.package.versionId) !== anchors[service].version || binding.record.bucket !== config.channelBucket
-      || !(service === "config"
+    if (hash({ Bucket: binding.package.bucket, Key: binding.package.key }) !== anchors[recoveryService].selector
+      || sha(binding.package.versionId) !== anchors[recoveryService].version || binding.record.bucket !== config.channelBucket
+      || !(recoveryService === "config"
         ? /^system\/deploy-artifacts\/[a-f0-9]{40}\/[1-9][0-9]*\/[1-9][0-9]*\/aws-live-snapshot\.json$/.test(binding.record.key)
         : binding.record.key.startsWith(selected.service + "/"))
       || same([binding.package.bucket, binding.package.key], [binding.record.bucket, binding.record.key])
-      || !keys(binding.functions, service === "api" ? FUNCTIONS : [])) fail();
+      || !keys(binding.functions, functions)) fail();
     const values = { [selected.prefix + "StackArn"]: binding.stackId };
     for (const name of ["Package", "Record"]) {
       const item = binding[name.toLowerCase()];
       values[selected.prefix + name + "ObjectArn"] = `arn:aws:s3:::${item.bucket}/${item.key}`;
       values[selected.prefix + name + "VersionId"] = item.versionId;
     }
-    if (service === "api" && !keys(anchors.api.functions, FUNCTIONS)) fail();
-    for (const name of service === "api" ? FUNCTIONS : []) {
-      if (!/^[a-f0-9]{64}$/.test(anchors.api.functions[name])
+    if (functions.length && !keys(anchors[recoveryService].functions, functions)) fail();
+    for (const name of functions) {
+      if (!/^[a-f0-9]{64}$/.test(anchors[recoveryService].functions[name])
         || typeof binding.functions[name] !== "string"
         || !new RegExp(`^arn:aws:lambda:us-east-1:${binding.account}:function:[A-Za-z0-9_-]{1,64}$`).test(binding.functions[name])
-        || sha(binding.functions[name]) !== anchors.api.functions[name]) fail();
+        || sha(binding.functions[name]) !== anchors[recoveryService].functions[name]) fail();
       values[selected.prefix + name + "Arn"] = binding.functions[name];
     }
+    if (service === "config-runtime") return { ThnConfigRuntimeFunctionArn: binding.functions.ConfigAuthoringFunction };
     return values;
   } catch { fail(); }
 }
@@ -154,5 +167,5 @@ function addCanonicalPolicy(scope, environment, service, role) {
   policy.addResourceDependency(role);
 }
 
-module.exports = { TARGETS, POLICY_NAME, FUNCTIONS, BINDING_ANCHORS, parameterDefinitions, policyResource, policyName,
+module.exports = { TARGETS, POLICY_NAME, FUNCTIONS, BINDING_ANCHORS, parameterDefinitions, policyResource, policyName, functionNames,
   validateBindings, composeTemplate, resolve, roleSnapshot, addCanonicalPolicy };
