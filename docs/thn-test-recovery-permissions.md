@@ -4,7 +4,8 @@ This is a separate revision path, not a replay of the
 [initial Hub/Image supplemental permission operation](thn-test-permissions.md).
 It adds one named inline policy to an existing role in its verified owning
 stack, independently selected for Config, API recovery, API runtime provisioning,
-Config runtime inspection, or closed Auth provisioning. The last selection owns
+Config runtime inspection, or closed Auth provisioning. It also supports the
+exact existing Image version-discovery correction described below. The Auth selection owns
 only the new policy in Bootstrap; the existing manually created Auth deployment
 role is never imported or recreated. No role, trust, original
 policy, boundary, production resource or customer data is changed.
@@ -165,7 +166,7 @@ readback, required-action simulations and shared-resource baseline checks.
 
 ### Creation-time tagging revision
 
-The sole existing-policy exception is a correction from the exact original
+The Auth existing-policy exception is a correction from the exact original
 `ThnTestClosedProvisioningV1` template. Cognito evaluates creation-time
 `TagResource` against `userpool/*`, not `userpool/us-east-1_*`. Only that
 statement uses the additional `ThnAuthProvisionPoolCreateTagArn` NoEcho value,
@@ -181,7 +182,36 @@ set must contain exactly one `AWS::IAM::RolePolicy` Modify with replacement
 must match the approved replacement, with the original role/trust and all other
 inline/attached policies unchanged. Quota checks count the replacement once.
 The same existing binding secret is reused; no additional private selector is
-accepted. All other service selections remain Add-only.
+accepted. Only Auth tagging and Image version discovery permit an exact existing-policy
+revision; the other service selections remain Add-only.
+
+## Image version-discovery revision
+
+`image-version` modifies only the existing `ThnTestImageExecutorSupplementalPolicy`
+in Bootstrap. Its sole new statement permits `lambda:ListVersionsByFunction` on
+the unqualified private THN TEST Image function. It does not grant that action to
+the GitHub caller, Hub or other functions. The original role, trust, other policy
+statements, physical policy identity and owning-stack parameters stay unchanged.
+
+The binding has `schemaVersion`, `service`, `environment`, `account`, `stackId`
+and `releaseCommit`; source and target names are code-owned. Keep the canonical
+binding in the existing TEST environment secret `THN_IMAGE_VERSION_BINDING_JSON`.
+No new stack parameter or package/channel secret is used. Review the existing
+hash-ledger schema against the exact old and composed templates and live role.
+
+Composition requires the exact previously deployed policy including its executor
+dependency; already revised, missing, widened, duplicated or foreign resources
+fail closed. Other Hub/Image supplements with the same policy name on different
+roles are preserved. The service must still be protected, closed CREATE_FAILED
+with its existing CFN executor. The owner stack remains stable and protected.
+The native change set must be one non-replacing policy Modify, never an Add or
+whole-stack redeployment. IAM readback checks all original role/trust/policies.
+
+Apply this correction through the independent revision workflow after verification.
+Do not replay the initial three-policy ADD path or the failed Image `create`.
+Image's owning retained-recovery operation must independently verify the partial
+state and preserve the five resources. Neither the permission nor source promotion
+enables uploads or the blog.
 
 ## Execution boundary
 
@@ -198,7 +228,7 @@ parameters, role ID/trust/policies/quota, current service stack and exact object
 versions/ownership. The execution path publishes only the NoEcho-reference
 native template to the existing private content-addressed CDK channel, checks
 its bytes/encryption, and reviews exactly one `AWS::IAM::RolePolicy` Add (or the
-exact Auth-only tagging Modify described above).
+exact Auth tagging or Image version-discovery Modify described above).
 No other resource modification, replacement, deletion or original parameter
 change is allowed. Returned native templates must match exactly; new parameter
 readback must be masked. Final IAM readback must equal the original role/trust

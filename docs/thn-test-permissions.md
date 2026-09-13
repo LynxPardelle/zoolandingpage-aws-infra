@@ -22,6 +22,15 @@ reads do not enable optional features. There is no new object/item write, secret
 read, Lambda invocation, account activation or schedule enablement. Existing
 broader original policies are not rewritten.
 
+The Image CloudFormation executor additionally requires
+`lambda:ListVersionsByFunction` on its exact unqualified private TEST function
+for the native Lambda Version provider. This read does not grant invocation,
+version deletion, other functions, or permissions to the GitHub caller. The
+source correction is not an applied permission: an existing installation needs
+a separately reviewed one-policy revision, never replay of this initial-only
+three-policy workflow. A partial `CREATE_FAILED` Image stack must be reconciled
+and recovered without deleting retained resources or retrying absent-only CREATE.
+
 Hub has no separate execution role. Supplemental IAM operations require
 `aws:CalledViaFirst=cloudformation.amazonaws.com`; only `GetRole` on the exact two
 operator roles is directly available for service preflight. Attachments are

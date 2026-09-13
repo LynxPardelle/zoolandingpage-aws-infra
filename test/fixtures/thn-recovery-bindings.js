@@ -5,6 +5,13 @@ const hash = value => sha(canonical(value));
 const account = "123456789012";
 
 function fixture(service = "config") {
+  if (service === "image-version") {
+    const binding = {schemaVersion: 1, service, environment: "test", account,
+      stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-image-upload-test/synthetic`,
+      releaseCommit: "01f1a851b5d33a69b11e6aa98e28a44e08c4eaba"};
+    return {binding, config: {service, account, anchors: {account: sha(account)},
+      expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId)}};
+  }
   if (service === "auth-provision") {
     const binding = {schemaVersion: 1, service, environment: "test", account,
       stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-auth-admin-test/synthetic`,
@@ -37,6 +44,14 @@ function fixture(service = "config") {
 }
 
 function original(service) {
+  if (service === "image-version") {
+    const resources = require("../../tools/thn-test-permission-policy").supplementalResources();
+    const r = resources.ThnTestImageExecutorSupplementalPolicy;
+    r.Properties.PolicyDocument.Statement = r.Properties.PolicyDocument.Statement.filter(s => !s.Action.includes("lambda:ListVersionsByFunction"));
+    r.DependsOn = ["ExistingRole"];
+    resources.ExistingRole = {Type: "AWS::IAM::Role", Properties: {RoleName: r.Properties.RoleName, AssumeRolePolicyDocument: {Statement: []}}};
+    return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}}, Resources: resources};
+  }
   if (service === "auth-provision") return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}},
     Resources: {Unrelated: {Type: "AWS::IAM::RolePolicy", Properties: {RoleName: "other", PolicyName: "keep"}}}};
   return { Parameters: { ExistingSecret: { Type: "String", NoEcho: true } }, Outputs: { Keep: { Value: "unchanged" } },
