@@ -103,12 +103,18 @@ test("Hub supplemental IAM mutations require CloudFormation forward access; dire
   assert.equal(direct[0].Resource.length, 2);
 });
 
-test("only Image's CFN executor can discover versions of its one private TEST function", () => {
+test("version discovery is scoped independently to Image and the seven Hub TEST functions", () => {
   const resources = synth("test").Resources;
   const matching = ids.flatMap(id => resources[id].Properties.PolicyDocument.Statement
     .filter(s => s.Action.includes("lambda:ListVersionsByFunction"))
     .map(statement => ({ id, statement })));
-  assert.deepEqual(matching, [{ id: ids[2], statement: {
+  const names = ["ThnContentHubV2Authoring", "ThnV2PrivateAssetCollector", "ThnV2Publisher",
+    "ThnV2PublicMedia", "ThnV2Invalidation", "ThnV2EmergencyWithdraw", "ThnV2PreparedOrphanCollector"];
+  assert.deepEqual(matching, [{ id: ids[0], statement: {
+    Effect: "Allow", Action: ["lambda:PublishVersion", "lambda:CreateAlias", "lambda:GetAlias", "lambda:UpdateAlias",
+      "lambda:DeleteAlias", "lambda:GetProvisionedConcurrencyConfig", "lambda:ListVersionsByFunction"],
+    Resource: ["", ":test"].flatMap(suffix => names.map(name => ({ "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:zoolanding-content-hub-test-" + name + suffix }))),
+  } }, { id: ids[2], statement: {
     Effect: "Allow",
     Action: ["lambda:ListVersionsByFunction"],
     Resource: [{ "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:zoolanding-image-upload-test-ThnImageUploadV2" }],

@@ -5,6 +5,13 @@ const hash = value => sha(canonical(value));
 const account = "123456789012";
 
 function fixture(service = "config") {
+  if (service === "hub-version") {
+    const binding = {schemaVersion: 1, service, environment: "test", account,
+      stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-content-hub-test/synthetic`,
+      releaseCommit: "1e4ea57e562d555afda6a79a6f7ae33fab10ccae"};
+    return {binding, config: {service, account, anchors: {account: sha(account)},
+      expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId)}};
+  }
   if (service === "image-version") {
     const binding = {schemaVersion: 1, service, environment: "test", account,
       stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-image-upload-test/synthetic`,
@@ -44,6 +51,12 @@ function fixture(service = "config") {
 }
 
 function original(service) {
+  if (service === "hub-version") {
+    const resources = require("../../tools/thn-test-permission-policy").supplementalResources();
+    const r = resources.ThnTestHubSupplementalPolicy;
+    r.Properties.PolicyDocument.Statement[0].Action = r.Properties.PolicyDocument.Statement[0].Action.filter(a => a !== "lambda:ListVersionsByFunction");
+    return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}}, Resources: resources};
+  }
   if (service === "image-version") {
     const resources = require("../../tools/thn-test-permission-policy").supplementalResources();
     const r = resources.ThnTestImageExecutorSupplementalPolicy;

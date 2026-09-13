@@ -6,7 +6,7 @@ const { fixture, original, runtimeFixture } = require("./fixtures/thn-recovery-b
 const file = path.join(__dirname, "../tools/thn-test-recovery-permissions.js");
 const api = () => { assert.ok(fs.existsSync(file), "missing exact recovery permission revision runner"); return require(file); };
 const hash = value => sha(canonical(value));
-const resolved = (document, values, service, account) => service === "image-version"
+const resolved = (document, values, service, account) => ["image-version", "hub-version"].includes(service)
   ? require("../tools/thn-test-permissions").resolvedPolicy(document, account) : policy.resolve(document, values);
 function setup(service = "config") {
   const { binding, config } = service === "api-runtime" ? runtimeFixture() : fixture(service), p = policy.TARGETS[service];
@@ -21,7 +21,7 @@ function setup(service = "config") {
   const role = { Role: { RoleName: p.role, Arn: `arn:aws:iam::${config.account}:role/${p.role}`, Path: "/",
     RoleId: "AROA" + "Q".repeat(16), AssumeRolePolicyDocument: { Statement: [] } }, inline: { Existing: { Statement: [] } }, attached: [] };
   const before = original(service);
-  if (service === "image-version") role.inline[p.policyName] = resolved(before.Resources[p.logical].Properties.PolicyDocument, {}, service, config.account);
+  if (["image-version", "hub-version"].includes(service)) role.inline[p.policyName] = resolved(before.Resources[p.logical].Properties.PolicyDocument, {}, service, config.account);
   if (["api-runtime", "config-runtime"].includes(service)) {
     before.Resources.PriorRecovery = { Type: "AWS::IAM::RolePolicy", Properties: {
       RoleName: p.role, PolicyName: policy.POLICY_NAME, PolicyDocument: { Statement: [] } } };
@@ -202,6 +202,47 @@ function taggingSetup() {
   };
   return {v, aws};
 }
+
+function hubSetup() {
+  const v = setup("hub-version"), aws = revisionAWS(v), delegate = aws.aws;
+  aws.aws = (...args) => {
+    const [, action, input] = args;
+    if (action === "get-template" && input.StackName === v.binding.stackId) return {TemplateBody: {Resources: {Shared: {Type: "AWS::Lambda::Function"}}}};
+    const result = delegate(...args);
+    if (action === "describe-stacks" && input.StackName === v.binding.stackId) Object.assign(result.Stacks[0], {
+      StackStatus: "UPDATE_COMPLETE", EnableTerminationProtection: true,
+      Parameters: [{ParameterKey: "EnvironmentName", ParameterValue: "test"}]});
+    if (action === "describe-change-set") Object.assign(result.Changes[0].ResourceChange,
+      {Action: "Modify", Replacement: "False", PhysicalResourceId: "synthetic-policy"});
+    if (action === "describe-stack-resource") result.StackResourceDetail.ResourceStatus = "UPDATE_COMPLETE";
+    return result;
+  };
+  return {v, aws};
+}
+
+test("Hub version workflow verifies then modifies only its existing supplement", async () => {
+  const {v, aws} = hubSetup(), before = structuredClone(aws.role);
+  const config = {...v.config, aws: aws.aws, authenticate: () => true, execute: false, delay: async () => {}, maxPolls: 3};
+  assert.equal((await api().runRevision(v.ledger, v.binding, v.authority, config)).status, "verified");
+  assert.deepEqual(aws.writes, []);
+  const result = await api().runRevision(v.ledger, v.binding, v.authority, {...config, execute: true});
+  assert.equal(result.modifiedPolicies, 1); assert.equal(result.addedPolicies, 0);
+  assert.deepEqual(aws.role.Role, before.Role); assert.deepEqual(aws.role.inline.Existing, before.inline.Existing);
+  assert.deepEqual(aws.template, v.after);
+});
+
+test("Hub permission revision rejects enabled, provisioned, adopted or drifted stacks", async () => {
+  for (const mutate of [s => s.EnableTerminationProtection = false, s => s.RoleARN = "unapproved",
+    s => s.StackStatus = "CREATE_FAILED", s => s.Parameters.push({ParameterKey: "EnableThnContentHubV2", ParameterValue: "true"}),
+    s => s.Parameters.push({ParameterKey: "ProvisionThnContentHubV2State", ParameterValue: "true"})]) {
+    const {v, aws} = hubSetup(), delegate = aws.aws;
+    const transport = (...args) => {const r = delegate(...args);
+      if (args[1] === "describe-stacks" && args[2].StackName === v.binding.stackId) mutate(r.Stacks[0]); return r;};
+    await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority, {...v.config, aws: transport,
+      authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3}));
+    assert.deepEqual(aws.writes, []);
+  }
+});
 
 function imageSetup() {
   const v = setup("image-version"), aws = revisionAWS(v), delegate = aws.aws;

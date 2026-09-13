@@ -38,7 +38,7 @@ function supplementalResources() {
   const statements = [
     [
       statement(["lambda:PublishVersion", "lambda:CreateAlias", "lambda:GetAlias", "lambda:UpdateAlias", "lambda:DeleteAlias",
-        "lambda:GetProvisionedConcurrencyConfig"], [...hubFunctions, ...hubAliases]),
+        "lambda:GetProvisionedConcurrencyConfig", "lambda:ListVersionsByFunction"], [...hubFunctions, ...hubAliases]),
       statement(["lambda:GetAlias", "lambda:GetFunctionConcurrency"], [imageFunction, imageAlias]),
       statement(["cloudformation:DescribeStacks"], [arn("cloudformation", "stack/zoolanding-auth-admin-test/*"),
         arn("cloudformation", "stack/zoolanding-image-upload-test/*")]),
