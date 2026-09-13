@@ -171,6 +171,60 @@ function revisionAWS(v) {
   return state;
 }
 
+function taggingSetup() {
+  const v = setup("auth-provision"), selected = policy.TARGETS[v.config.service];
+  v.before = structuredClone(v.after);
+  delete v.before.Parameters.ThnAuthProvisionPoolCreateTagArn;
+  v.before.Resources[selected.logical].Properties.PolicyDocument.Statement.find(s => s.Action === "cognito-idp:TagResource").Resource = {Ref: "ThnAuthProvisionPoolArnScope"};
+  v.role.inline[selected.policyName] = policy.resolve(v.before.Resources[selected.logical].Properties.PolicyDocument, policy.validateBindings(v.binding, v.config));
+  v.after = policy.composeTemplate(v.before, v.config.service);
+  Object.assign(v.ledger, {originalSha256: hash(v.before), processedSha256: hash(v.before), composedSha256: hash(v.after),
+    composedProcessedSha256: hash(v.after), roleSha256: hash(v.role)});
+  v.config.expectedLedgerSha256 = hash(v.ledger);
+  const aws = revisionAWS(v), delegate = aws.aws;
+  aws.owner.Parameters = Object.keys(v.before.Parameters).map(ParameterKey => ({ParameterKey, ParameterValue: "****"}));
+  aws.aws = (...args) => {
+    const [, action, input] = args;
+    if (action === "create-change-set") {
+      assert.equal(input.Parameters.length, new Set(input.Parameters.map(p => p.ParameterKey)).size);
+      for (const p of input.Parameters) assert.deepEqual(p, p.ParameterKey === "ThnAuthProvisionPoolCreateTagArn"
+        ? {ParameterKey: p.ParameterKey, ParameterValue: `arn:aws:cognito-idp:us-east-1:${v.config.account}:userpool/*`}
+        : {ParameterKey: p.ParameterKey, UsePreviousValue: true});
+    }
+    const result = delegate(...args);
+    if (action === "describe-change-set") Object.assign(result.Changes[0].ResourceChange,
+      {Action: "Modify", Replacement: "False", PhysicalResourceId: "synthetic-policy"});
+    if (action === "describe-stack-resource") result.StackResourceDetail.ResourceStatus = "UPDATE_COMPLETE";
+    return result;
+  };
+  return {v, aws};
+}
+test("Auth tagging revision verifies then modifies only its existing policy with previous NoEcho values", async () => {
+  const {v, aws} = taggingSetup(), before = structuredClone(aws.role);
+  const config = {...v.config, aws: aws.aws, authenticate: () => true, execute: false, delay: async () => {}, maxPolls: 3};
+  assert.equal((await api().runRevision(v.ledger, v.binding, v.authority, config)).status, "verified");
+  assert.deepEqual(aws.writes, []);
+  const result = await api().runRevision(v.ledger, v.binding, v.authority, {...config, execute: true});
+  assert.equal(result.status, "applied"); assert.equal(result.addedPolicies, 0); assert.equal(result.modifiedPolicies, 1);
+  assert.deepEqual(aws.role.Role, before.Role); assert.deepEqual(aws.role.inline.Existing, before.inline.Existing);
+  assert.deepEqual(Object.keys(aws.role.inline).sort(), Object.keys(before.inline).sort());
+  assert.deepEqual(aws.template, v.after);
+});
+test("Auth tagging Modify rejects replacement, wrong identity, unrelated changes and stale actual policy", async () => {
+  for (const mutate of [
+    (r, a) => {if (a === "describe-change-set") r.Changes[0].ResourceChange.Replacement = "True";},
+    (r, a) => {if (a === "describe-change-set") r.Changes[0].ResourceChange.PhysicalResourceId = "foreign";},
+    (r, a) => {if (a === "describe-change-set") r.Changes.push(structuredClone(r.Changes[0]));},
+    (r, a) => {if (a === "get-role-policy" && r.PolicyName === "ThnTestClosedProvisioningV1") delete r.PolicyDocument.Statement[1].Condition;},
+  ]) {
+    const {v, aws} = taggingSetup(), delegate = aws.aws;
+    aws.aws = (...args) => {const r = delegate(...args); mutate(r, args[1]); return r;};
+    await assert.rejects(api().runRevision(v.ledger, v.binding, v.authority,
+      {...v.config, aws: aws.aws, authenticate: () => true, execute: true, delay: async () => {}, maxPolls: 3}), /recovery_permission/);
+    assert.ok(!aws.writes.includes("execute-change-set"));
+  }
+});
+
 for (const service of ["config", "api", "api-runtime", "config-runtime", "auth-provision"]) {
   test(`${service}: real revision orchestration adds one policy and preserves prior trust and masked values`, async () => {
     assert.equal(typeof api().runRevision, "function");

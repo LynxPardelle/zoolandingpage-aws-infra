@@ -31,12 +31,16 @@ function prepareRevision(original, processed, binding, ledger, config) {
     expectedStackSha256: ledger.serviceStackSha256 });
   if (hash(original) !== ledger.originalSha256 || hash(processed) !== ledger.processedSha256) fail();
   const prepared = policy.composeTemplate(original, config.service), native = policy.composeTemplate(processed, config.service);
+  const action = policy.revisionAction(original, config.service);
+  if (policy.revisionAction(processed, config.service) !== action) fail();
+  const previousDocument = action === "Modify" ? policy.resolve(original.Resources[target(config.service).logical].Properties.PolicyDocument, values) : undefined;
   const document = policy.resolve(policy.policyResource(config.service).Properties.PolicyDocument, values);
   if (hash(prepared) !== ledger.composedSha256 || hash(native) !== ledger.composedProcessedSha256
     || hash(document) !== ledger.resolvedPolicySha256) fail();
   const parameters = [...Object.keys(original.Parameters || {}).sort().map(ParameterKey => ({ ParameterKey, UsePreviousValue: true })),
-    ...Object.keys(values).sort().map(ParameterKey => ({ ParameterKey, ParameterValue: values[ParameterKey] }))];
-  return { original: prepared, processed: native, parameters, document };
+    ...Object.keys(values).filter(k => !Object.hasOwn(original.Parameters || {}, k)).sort()
+      .map(ParameterKey => ({ ParameterKey, ParameterValue: values[ParameterKey] }))];
+  return { original: prepared, processed: native, parameters, document, action, previousDocument };
 }
 
 function parametersSnapshot(parameters) {
@@ -57,9 +61,12 @@ function reviewChangeSet(description, original, processed, expected) {
     || !same(original, expected.original) || !same(processed, expected.processed)
     || !Array.isArray(description.Changes) || description.Changes.length !== 1) fail();
   const change = description.Changes[0], r = change.ResourceChange;
-  if (change.Type !== "Resource" || r?.Action !== "Add" || r.ResourceType !== "AWS::IAM::RolePolicy"
+  const modify = expected.action === "Modify";
+  if (modify && (expected.config.service !== "auth-provision" || !expected.policyPhysicalId)) fail();
+  if (change.Type !== "Resource" || r?.Action !== (modify ? "Modify" : "Add") || r.ResourceType !== "AWS::IAM::RolePolicy"
     || r.LogicalResourceId !== selected.logical || ![undefined, "False"].includes(r.Replacement)
-    || r.PhysicalResourceId || r.ChangeSetId || r.ModuleInfo) fail();
+    || (modify ? r.Replacement !== "False" || r.PhysicalResourceId !== expected.policyPhysicalId : r.PhysicalResourceId)
+    || r.ChangeSetId || r.ModuleInfo) fail();
   const definitions = policy.parameterDefinitions(expected.config.service);
   if (!Array.isArray(description.Parameters)
     || !same(description.Parameters.map(p => p.ParameterKey).sort(), Object.keys(original.Parameters || {}).sort())) fail();
@@ -168,8 +175,10 @@ function createClients(authority, binding, ledger, config) {
           const supplied = {};
           for (const p of input.Parameters) {
             if (Object.hasOwn(values, p.ParameterKey)) {
-              if (!keys(p, ["ParameterKey", "ParameterValue"]) || p.ParameterValue !== values[p.ParameterKey]) fail();
-              supplied[p.ParameterKey] = p.ParameterValue;
+              const previousAuth = config.service === "auth-provision" && p.ParameterKey !== "ThnAuthProvisionPoolCreateTagArn"
+                && keys(p, ["ParameterKey", "UsePreviousValue"]) && p.UsePreviousValue === true;
+              if (!previousAuth && (!keys(p, ["ParameterKey", "ParameterValue"]) || p.ParameterValue !== values[p.ParameterKey])) fail();
+              supplied[p.ParameterKey] = values[p.ParameterKey];
             } else if (!keys(p, ["ParameterKey", "UsePreviousValue"]) || typeof p.ParameterKey !== "string" || p.UsePreviousValue !== true) fail();
           }
           if (!same(supplied, values)) fail();
@@ -244,11 +253,21 @@ async function executeRevision(ledger, binding, authority, config) {
   const original = readTemplate("Original"), processed = readTemplate("Processed");
   const prepared = prepareRevision(original, processed, binding, ledger, config);
   if (!same(previousParameters.map(p => p.ParameterKey).sort(), Object.keys(original.Parameters || {}).sort())) fail();
+  let policyPhysicalId;
+  const checkExistingPolicy = () => {
+    if (prepared.action !== "Modify") return;
+    const r = client("lookup", "cloudformation", "describe-stack-resource", {StackName: stackId, LogicalResourceId: selected.logical}).StackResourceDetail;
+    if (r?.StackId !== stackId || r.StackName !== authority.stackName || r.LogicalResourceId !== selected.logical
+      || r.ResourceType !== "AWS::IAM::RolePolicy" || !stable.includes(r.ResourceStatus) || !r.PhysicalResourceId
+      || (policyPhysicalId !== undefined && r.PhysicalResourceId !== policyPhysicalId)) fail();
+    policyPhysicalId = r.PhysicalResourceId;
+  };
   const checkRoles = (final = false) => {
     const RoleName = selected.role, request = { RoleName }, Role = client("lookup", "iam", "get-role", request).Role;
     const names = client("lookup", "iam", "list-role-policies", request), attached = client("lookup", "iam", "list-attached-role-policies", request);
     if (names.IsTruncated || attached.IsTruncated || !Array.isArray(names.PolicyNames)
-      || new Set(names.PolicyNames).size !== names.PolicyNames.length || names.PolicyNames.includes(policy.policyName(config.service)) !== final
+      || new Set(names.PolicyNames).size !== names.PolicyNames.length
+      || names.PolicyNames.includes(policy.policyName(config.service)) !== (final || prepared.action === "Modify")
       || !Array.isArray(attached.AttachedPolicies)) fail();
     const inline = {};
     for (const PolicyName of names.PolicyNames) {
@@ -258,9 +277,11 @@ async function executeRevision(ledger, binding, authority, config) {
     }
     if (final) {
       if (!same(inline[policy.policyName(config.service)], prepared.document)) fail();
-      delete inline[policy.policyName(config.service)];
+      if (prepared.previousDocument) inline[policy.policyName(config.service)] = prepared.previousDocument;
+      else delete inline[policy.policyName(config.service)];
     }
-    if (hash(policy.roleSnapshot({ Role, inline, attached: attached.AttachedPolicies }, config.service, config.account, prepared.document)) !== ledger.roleSha256) fail();
+    if (hash(policy.roleSnapshot({ Role, inline, attached: attached.AttachedPolicies }, config.service, config.account,
+      prepared.document, prepared.previousDocument)) !== ledger.roleSha256) fail();
   };
   const checkService = () => {
     const response = client("lookup", "cloudformation", "describe-stacks", { StackName: binding.stackId }), service = response.Stacks?.[0];
@@ -305,7 +326,7 @@ async function executeRevision(ledger, binding, authority, config) {
     const current = readStack();
     if (!same(settings(current), settings(stack)) || !same(parametersSnapshot(current.Parameters || []), previousParameters)
       || !same(readTemplate("Original"), original) || !same(readTemplate("Processed"), processed)) fail();
-    checkRoles(); checkService();
+    checkExistingPolicy(); checkRoles(); checkService();
   };
   baseline();
   const receipt = { status: "verified", service: config.service, addedPolicies: 0, originalRolesPreserved: true,
@@ -360,7 +381,7 @@ async function executeRevision(ledger, binding, authority, config) {
     });
     const review = () => reviewChangeSet(client("deploy", "cloudformation", "describe-change-set", input),
       readTemplate("Original", created.Id, "deploy"), readTemplate("Processed", created.Id, "deploy"), {
-        config, authority, stackId, name, id: created.Id, ...prepared, previousParameters });
+        config, authority, stackId, name, id: created.Id, ...prepared, previousParameters, policyPhysicalId });
     review(); baseline(); verifyObject("publisher"); verifyObject("deploy"); review(); baseline();
     client("deploy", "cloudformation", "execute-change-set", { StackName: stackId, ChangeSetName: created.Id, ClientRequestToken: name });
     await wait(() => client("deploy", "cloudformation", "describe-change-set", input), d => {
@@ -369,7 +390,8 @@ async function executeRevision(ledger, binding, authority, config) {
       return d.ExecutionStatus === "EXECUTE_COMPLETE";
     });
     const final = await wait(() => readStack(true), s => s.StackStatus === "UPDATE_COMPLETE");
-    const finalParameters = parametersSnapshot(final.Parameters || []), definitions = policy.parameterDefinitions(config.service);
+    const finalParameters = parametersSnapshot(final.Parameters || []), definitions = Object.fromEntries(
+      Object.entries(policy.parameterDefinitions(config.service)).filter(([name]) => !Object.hasOwn(original.Parameters || {}, name)));
     if (!same(settings(final), settings(stack)) || !same(readTemplate("Original"), prepared.original)
       || !same(readTemplate("Processed"), prepared.processed)
       || !same(finalParameters.filter(p => !Object.hasOwn(definitions, p.ParameterKey)), previousParameters)
@@ -377,9 +399,11 @@ async function executeRevision(ledger, binding, authority, config) {
         Object.keys(definitions).sort().map(ParameterKey => ({ ParameterKey, ParameterValue: "****" })))) fail();
     const r = client("lookup", "cloudformation", "describe-stack-resource", { StackName: stackId, LogicalResourceId: selected.logical }).StackResourceDetail;
     if (r?.StackId !== stackId || r.StackName !== authority.stackName || r.LogicalResourceId !== selected.logical
-      || r.ResourceType !== "AWS::IAM::RolePolicy" || r.ResourceStatus !== "CREATE_COMPLETE" || !r.PhysicalResourceId) fail();
+      || r.ResourceType !== "AWS::IAM::RolePolicy" || r.ResourceStatus !== (prepared.action === "Modify" ? "UPDATE_COMPLETE" : "CREATE_COMPLETE")
+      || !r.PhysicalResourceId || (prepared.action === "Modify" && r.PhysicalResourceId !== policyPhysicalId)) fail();
     checkRoles(true); checkService();
-    return { ...receipt, status: "applied", addedPolicies: 1, noEchoReadbackVerified: true };
+    return { ...receipt, status: "applied", addedPolicies: prepared.action === "Modify" ? 0 : 1,
+      ...(prepared.action === "Modify" ? {modifiedPolicies: 1} : {}), noEchoReadbackVerified: true };
   } finally {
     if (path.dirname(directory) !== os.tmpdir() || !path.basename(directory).startsWith("thn-recovery-permission-")) fail();
     fs.rmSync(directory, { recursive: true });
