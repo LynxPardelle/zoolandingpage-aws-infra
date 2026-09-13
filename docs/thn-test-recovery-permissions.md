@@ -3,7 +3,7 @@
 This is a separate revision path, not a replay of the
 [initial Hub/Image supplemental permission operation](thn-test-permissions.md).
 It adds one named inline policy to an existing role in its verified owning
-stack, independently selected for Config, API recovery, or API runtime provisioning. No role, trust, original
+stack, independently selected for Config, API recovery, API runtime provisioning, or Config runtime inspection. No role, trust, original
 policy, boundary, production resource or customer data is changed.
 
 ## Ownership and granted scope
@@ -11,6 +11,7 @@ policy, boundary, production resource or customer data is changed.
 | Selection | Owning source | Addition |
 | --- | --- | --- |
 | `config` | `createBackendSamDeployRoles`, Frontend | Exact versioned original ZIP/recovery record reads; exact Config TEST stack template/inventory reads |
+| `config-runtime` | `createBackendSamDeployRoles`, Frontend | Separate `ThnTestRuntimeInspectionV1` policy: only `lambda:GetRuntimeManagementConfig` on the independently anchored, unqualified existing Config TEST function |
 | `api` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Exact versioned ZIP/record reads; exact API TEST stack template and `aws-recovery-*` change-set creation without a role argument; inspection and CloudFormation-mediated code updates of exactly three existing functions |
 | `api-runtime` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Separate `ThnTestRuntimeProvisioningV1` policy: exact forward package/plan and retained-route capture reads, dedicated Auth resource metadata, and narrowly bounded provider access for first provisioning/retained route transitions |
 
@@ -59,6 +60,18 @@ Store each binding and channel name only in private TEST secrets:
 `THN_CONFIG_RECOVERY_BINDING_JSON`, `THN_CONFIG_RECOVERY_CHANNEL_BUCKET`,
 `THN_API_RECOVERY_BINDING_JSON`, `THN_API_RECOVERY_CHANNEL_BUCKET`.
 Do not print, commit or place these values in public workflow inputs/artifacts.
+
+For `config-runtime`, retain the original Config package/record selectors and
+the same closed binding schema, set `service` to `config-runtime`, and supply
+exactly `functions.ConfigAuthoringFunction`. Store this separate binding in
+`THN_CONFIG_RUNTIME_BINDING_JSON`; reuse `THN_CONFIG_RECOVERY_CHANNEL_BUCKET`.
+The original Config binding and recovery policy remain unchanged. The driver
+checks the original object versions and reconciles the function with its
+CloudFormation logical resource. Only one new required NoEcho parameter,
+`ThnConfigRuntimeFunctionArn`, enters the owning template. No alias/version
+wildcard, runtime-update action, code write, data access or service creation is
+granted. A fresh reviewed ledger is required for this independent one-policy
+Add; it does not replay the already-applied recovery addition.
 
 For `api-runtime`, replace `functions` with `runtime` containing exactly
 `apiId`, `authStackId` and `routesRecord`. The package is the reviewed forward
