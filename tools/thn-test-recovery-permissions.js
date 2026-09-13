@@ -78,7 +78,7 @@ function reviewChangeSet(description, original, processed, expected) {
 }
 
 const FILES = ["authority.json", "coordinates.json", "ledger.json", "thn-test-recovery-permissions.js",
-  "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-prerequisites.js"];
+  "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-auth-provision-permission-policy.js", "thn-test-prerequisites.js"];
 const bytes = value => Buffer.from(canonical(value));
 const authorityConfig = config => ({ ...config, anchors: config.authorityAnchors || ANCHORS });
 function validateAuthority(authority, config) {
@@ -181,7 +181,7 @@ function createClients(authority, binding, ledger, config) {
       if (service === "kms" && (!keys(input, ["KeyId"]) || input.KeyId !== "alias/aws/s3")) fail();
       if (service === "s3api") {
         if (action === "head-object") {
-          if (!keys(input, ["Bucket", "Key", "VersionId", "ExpectedBucketOwner"]) || input.ExpectedBucketOwner !== config.account
+          if (config.service === "auth-provision" || !keys(input, ["Bucket", "Key", "VersionId", "ExpectedBucketOwner"]) || input.ExpectedBucketOwner !== config.account
             || ![binding.package, binding.record].some(o => input.Bucket === o.bucket && input.Key === o.key && input.VersionId === o.versionId)) fail();
         } else {
           const required = ["Bucket", "ExpectedBucketOwner", ...(["put-object", "get-object"].includes(action) ? ["Key"] : []),
@@ -264,6 +264,12 @@ async function executeRevision(ledger, binding, authority, config) {
     const response = client("lookup", "cloudformation", "describe-stacks", { StackName: binding.stackId }), service = response.Stacks?.[0];
     if (response.Stacks?.length !== 1 || service.StackName !== selected.service || service.StackId !== binding.stackId
       || service.RoleARN || !stable.includes(service.StackStatus)) fail();
+    if (config.service === "auth-provision") {
+      const parameters = parametersSnapshot(service.Parameters || []);
+      if (service.EnableTerminationProtection !== true
+        || parameters.filter(p => p.ParameterKey === "EnableThnAuthAdminV2").length !== 1 || parameters.some(p =>
+        ["EnableThnAuthAdminV2", "ProvisionThnAuthAdminV2State"].includes(p.ParameterKey) && p.ParameterValue !== "false")) fail();
+    }
     for (const logical of policy.functionNames(config.service)) {
       const r = client("lookup", "cloudformation", "describe-stack-resource", { StackName: binding.stackId, LogicalResourceId: logical }).StackResourceDetail;
       if (r?.StackId !== binding.stackId || r.StackName !== selected.service || r.LogicalResourceId !== logical
@@ -278,7 +284,7 @@ async function executeRevision(ledger, binding, authority, config) {
     // The immutable original selector/version is anchored by the service's
     // byte-verified recovery receipt. This read checks existence/ownership only;
     // it is not a replacement for that driver checking the ZIP bytes.
-    for (const object of [binding.package, binding.record]) {
+    for (const object of (config.service === "auth-provision" ? [] : [binding.package, binding.record])) {
       const head = client("lookup", "s3api", "head-object", { Bucket: object.bucket, Key: object.key,
         VersionId: object.versionId, ExpectedBucketOwner: config.account });
       if (head.VersionId !== object.versionId || !Number.isSafeInteger(head.ContentLength) || head.ContentLength < 1) fail();

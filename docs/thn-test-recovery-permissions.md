@@ -3,7 +3,10 @@
 This is a separate revision path, not a replay of the
 [initial Hub/Image supplemental permission operation](thn-test-permissions.md).
 It adds one named inline policy to an existing role in its verified owning
-stack, independently selected for Config, API recovery, API runtime provisioning, or Config runtime inspection. No role, trust, original
+stack, independently selected for Config, API recovery, API runtime provisioning,
+Config runtime inspection, or closed Auth provisioning. The last selection owns
+only the new policy in Bootstrap; the existing manually created Auth deployment
+role is never imported or recreated. No role, trust, original
 policy, boundary, production resource or customer data is changed.
 
 ## Ownership and granted scope
@@ -14,6 +17,7 @@ policy, boundary, production resource or customer data is changed.
 | `config-runtime` | `createBackendSamDeployRoles`, Frontend | Separate `ThnTestRuntimeInspectionV1` policy: only `lambda:GetRuntimeManagementConfig` on the independently anchored, unqualified existing Config TEST function |
 | `api` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Exact versioned ZIP/record reads; exact API TEST stack template and `aws-recovery-*` change-set creation without a role argument; inspection and CloudFormation-mediated code updates of exactly three existing functions |
 | `api-runtime` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Separate `ThnTestRuntimeProvisioningV1` policy: exact forward package/plan and retained-route capture reads, dedicated Auth resource metadata, and narrowly bounded provider access for first provisioning/retained route transitions |
+| `auth-provision` | ServiceRepositoryBootstrap, external existing Auth deploy role | Separate `ThnTestClosedProvisioningV1` policy: only the reviewed dedicated Auth TEST pool, functions, execution roles, table configuration and log groups |
 
 `tools/thn-test-recovery-permission-policy.js` supplies both the canonical TEST
 CDK hooks and the exact native-template addition. Each recovery policy is
@@ -102,6 +106,58 @@ original/processed templates, both composed templates, original role snapshot
 and resolved new policy. `validateLedger` defines the closed schema. Pass only
 its canonical base64 bytes and SHA-256 as workflow inputs. Do not build an
 unreviewed ledger from whichever resources happen to be present at dispatch.
+
+## Closed Auth TEST provisioning correction
+
+`auth-provision` is tied to the reviewed immutable Auth TEST source. Its binding
+contains only `schemaVersion`, `service`, `environment`, `account`, `stackId` and
+`releaseCommit`. The source identity and every function, table, log and execution
+role name are code-owned, not configurable grant selectors. Store this canonical
+binding only in `THN_AUTH_PROVISION_BINDING_JSON` in the existing TEST environment.
+No package/record selector or recovery-channel secret is needed for this target.
+
+The private binding derives 23 required NoEcho parameters. The policy is owned by
+Bootstrap, while the existing Auth deploy role remains outside that template.
+Composition rejects attempted role adoption, an existing policy, stale hashes,
+or any other resource change. Execution preserves the original role identity,
+trust, policies and masked previous parameters. Auth must remain protected,
+stable, not enabled and not provisioned when applying this initial correction;
+missing/duplicate enable flags fail closed. No execution role is associated with
+the Auth service stack.
+
+The policy covers only:
+
+- Cognito pool creation with region, exact stack/logical request-tag and
+  CloudFormation conditions; client/group creation and MFA setup require the
+  matching pool resource tags. Pool metadata needed by the closed verifier can
+  be read directly. No account administration or user data permission is added.
+- The three fixed THN functions and metadata, the owner's immutable versions,
+  `test` alias and resource policy. The origin authorizer's fixed function and
+  execution role use a different namespace from the original role's grant, so
+  only that exact role/function receive missing creation/rollback operations.
+  Its PassRole requires CloudFormation and `iam:PassedToService=lambda.amazonaws.com`.
+  There is no human-role update, operator PassRole or new managed-policy grant.
+- Backup/configuration metadata for five exact THN tables and the audit table's
+  declared resource policy, never item access or retained-table deletion.
+- Creation/retention/tag metadata for four exact retained log groups, never log
+  events or log deletion. `DescribeLogGroups` is regional discovery on `*`, not
+  resource-level isolation. Modern tagging uses the bare group ARN; other log
+  operations use its `:*` access ARN.
+
+CloudFormation-mediated writes do not grant direct application-data access.
+The unavoidable `CreateUserPool` wildcard is restricted by the conditions above;
+system-tag presence during the real create call remains a live release check,
+not a conclusion from policy simulation. See the official
+[Cognito authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_cognito-idp.html).
+No optional SMS, customer KMS, VPC, EFS, managed capacity or provisioned-concurrency
+write is granted. Unused provider features are not inferred from denied inventory
+probes. The original policy plus this exact correction is close to the IAM inline
+quota; the runner checks the complete live aggregate and must stop on any drift.
+Do not replace originals or switch to broader roles to work around the quota.
+
+Applying this policy does not provision Auth or activate client access. Retry
+only the owning immutable closed Auth provisioning workflow after independent
+readback, required-action simulations and shared-resource baseline checks.
 
 ## Execution boundary
 
