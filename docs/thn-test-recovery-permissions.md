@@ -303,8 +303,9 @@ Verification binds account, stable/protected owning stack, original templates,
 parameters, role ID/trust/policies/quota, current service stack and exact object
 versions/ownership. The execution path publishes only the NoEcho-reference
 native template to the existing private content-addressed CDK channel, checks
-its bytes/encryption, and reviews exactly one `AWS::IAM::RolePolicy` Add (or the
-exact Auth tagging, Image version-discovery or Hub version-discovery Modify described above).
+its bytes/encryption, and reviews exactly one policy Add or the exact Auth
+managed-policy repair, Auth tagging, Image version-discovery or Hub
+version-discovery Modify described above.
 No other resource modification, replacement, deletion or original parameter
 change is allowed. Returned native templates must match exactly; new parameter
 readback must be masked. Final IAM readback must equal the original role/trust
