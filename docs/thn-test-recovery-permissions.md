@@ -135,8 +135,8 @@ unreviewed ledger from whichever resources happen to be present at dispatch.
 
 ## Auth TEST activation managed policy
 
-`auth-enable` is a separate additive path, not a replay of `auth-provision`.
-It creates exactly one `AWS::IAM::ManagedPolicy`, `ThnTestAuthEnableV1`, owned by
+`auth-enable` is a separate path, not a replay of `auth-provision`.
+On first use it creates exactly one `AWS::IAM::ManagedPolicy`, `ThnTestAuthEnableV1`, owned by
 Bootstrap and attached only to the existing Auth TEST deploy role. Both inline
 policies, role identity/trust, every existing template resource and parameter
 remain unchanged. The inline aggregate is independently checked against 10,240
@@ -151,6 +151,10 @@ Neither callers nor GitHub inputs choose resource names or permission actions.
 
 Permissions cover Function URL lifecycle, authorizer resource-policy lifecycle,
 the registry operator's inline-policy lifecycle, and THN Auth metric alarms.
+The origin authorizer has a fixed physical name outside the deploy role's usual
+`zoolanding-auth-admin-test-*` Lambda scope. The exact authorizer ARN also needs
+`GetFunctionConfiguration`, `UpdateFunctionCode`, `UpdateFunctionConfiguration`
+and `UntagResource` for an update or rollback. This is not a wildcard grant.
 All writes require CloudFormation forward access. Reads contain no customer data.
 IAM cannot restrict PutRolePolicy by inline-policy name: its resource boundary is
 the exact registry operator role; this residual authority requires reviewed,
@@ -158,16 +162,19 @@ immutable Auth templates. No trust, PassRole, Cognito user administration or dat
 write permission is granted. Alarm names are provider-generated under the Auth
 stack's `ThnAuthAdminV2` prefix; no shared alarm namespace is included.
 
-The baseline must be UPDATE_COMPLETE, protected, provisioned and disabled, with
-no separate Auth stack service role and no managed policy attachments on its
-deploy role. Use an independently reviewed public hash ledger and private binding;
-run verify before execute. The change-set reviewer permits only the single exact
-ManagedPolicy Add, never role adoption, replacement or collateral changes. An
-existing policy of the same name is not adopted: creation fails closed. Before
-dispatch, independently confirm that the policy name is unused and that the IaC
-executor and lookup roles can perform exact create/attach/readback/reversal.
+The initial Add baseline must be UPDATE_COMPLETE, protected, provisioned and
+disabled, with no separate Auth stack service role or existing managed attachment
+on its deploy role. The repair path accepts the one existing, exact IaC-owned
+managed policy and a protected, provisioned, disabled Auth stack in
+`UPDATE_ROLLBACK_FAILED`. It modifies only that policy's document in place, with
+no replacement or changes to roles, trust, attachments or other resources.
+Any different existing policy, document, attachment or service state fails closed.
+Use an independently reviewed public hash ledger and private binding; run verify
+before execute. Before dispatch, confirm that IaC can update and read back the
+exact policy and that Auth stack recovery remains a separate, later operation.
 
-After execution, read back the exact ARN, default version `v1`, document, sole
+After execution, read back the exact ARN, default version `v1` for Add or `v2`
+for the exact one-time repair, document, sole
 role attachment, no user/group attachment or boundary usage, and unchanged role
 and inline policies. A failed readback requires reconciliation, not an automatic
 retry. Source promotion alone grants no permissions and enables no service.
@@ -175,7 +182,7 @@ retry. Source promotion alone grants no permissions and enables no service.
 For reversal, first disable Auth through its owning guarded service workflow
 while this policy remains available for cleanup. Only then review a separate
 IaC removal of this exact managed policy, preserving all other resources. The
-add-only workflow intentionally cannot delete policies or service data.
+workflow intentionally cannot delete policies or service data.
 
 ## Closed Auth TEST provisioning correction
 

@@ -137,6 +137,11 @@ function revisionAction(original, service) {
   if (service === "image-version") {image.composeTemplate(original); return "Modify";}
   if (service === "hub-version") {hub.composeTemplate(original); return "Modify";}
   const selected = target(service);
+  if (service === "auth-enable" && original?.Resources?.[selected.logical]) {
+    if (!same(original.Resources[selected.logical], authEnable.previousPolicyResource())
+      || Object.entries(authEnable.parameterDefinitions()).some(([name, definition]) => !same(original.Parameters?.[name], definition))) fail();
+    return "Modify";
+  }
   if (service !== "auth-provision" || !original?.Resources?.[selected.logical]) return "Add";
   const legacy = auth.policyResource();
   legacy.Properties.PolicyDocument.Statement.find(s => s.Action === "cognito-idp:TagResource").Resource = {Ref: "ThnAuthProvisionPoolArnScope"};
@@ -181,13 +186,15 @@ function roleSnapshot(input, service, account, newDocument, previousDocument) {
   const selected = target(service), role = input?.Role;
   const modify = previousDocument !== undefined;
   const managed = service === "auth-enable";
-  if (managed && (modify || JSON.stringify(newDocument).length > 6144)) fail();
-  if (modify && (!["auth-provision", "image-version", "hub-version"].includes(service) || !same(input?.inline?.[policyName(service)], previousDocument))) fail();
+  if (managed && JSON.stringify(newDocument).length > 6144) fail();
+  if (modify && (!["auth-enable", "auth-provision", "image-version", "hub-version"].includes(service)
+    || (managed ? !object(previousDocument) : !same(input?.inline?.[policyName(service)], previousDocument)))) fail();
   if (!keys(input, ["Role", "inline", "attached"]) || role?.RoleName !== selected.role
     || role.Arn !== `arn:aws:iam::${account}:role/${selected.role}` || role.Path !== "/"
     || !/^AROA[A-Z0-9]{16,}$/.test(role.RoleId) || !object(role.AssumeRolePolicyDocument)
-    || !object(input.inline) || !Object.keys(input.inline).length || Object.hasOwn(input.inline, policyName(service)) !== modify
-    || !Array.isArray(input.attached) || input.attached.length
+    || !object(input.inline) || !Object.keys(input.inline).length || Object.hasOwn(input.inline, policyName(service)) !== (modify && !managed)
+    || !Array.isArray(input.attached)
+    || !(managed && modify ? same(input.attached, [{PolicyName: selected.policyName, PolicyArn: authEnable.policyArn(account)}]) : input.attached.length === 0)
     || Object.values(input.inline).some(p => !object(p) || !Array.isArray(p.Statement))
     || [...Object.entries(input.inline).filter(([name]) => !modify || name !== policyName(service)).map(([, p]) => p), ...(managed ? [] : [newDocument])]
       .reduce((n, p) => n + JSON.stringify(p).length, 0) > 10240) fail();
