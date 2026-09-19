@@ -11,7 +11,7 @@ function policyArn(account) {return `arn:aws:iam::${account}:policy/${TARGET.pol
 function parameterDefinitions() {
   return Object.fromEntries(PARAMS.map(n => [TARGET.prefix + n, {Type: "String", NoEcho: true, MinLength: 1, MaxLength: 2048}]));
 }
-function policyResource() {
+function policyResource(includeAuthorizerConfiguration = true) {
   const via = {StringEquals: {"aws:CalledViaFirst": "cloudformation.amazonaws.com"}};
   const grant = (Action, name, write = false) => ({Effect: "Allow", Action, Resource: ref(name), ...(write ? {Condition: via} : {})});
   return {Type: "AWS::IAM::ManagedPolicy", Properties: {ManagedPolicyName: TARGET.policyName, Path: "/", Roles: [TARGET.role],
@@ -19,6 +19,10 @@ function policyResource() {
       grant(["lambda:CreateFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "lambda:DeleteFunctionUrlConfig"], "OwnerAliasArn", true),
       grant(["lambda:GetFunctionUrlConfig"], "OwnerAliasArn"),
       grant(["lambda:AddPermission", "lambda:RemovePermission"], "AuthorizerArn", true),
+      ...(includeAuthorizerConfiguration ? [
+        grant(["lambda:GetFunctionConfiguration"], "AuthorizerArn"),
+        grant(["lambda:UntagResource", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration"], "AuthorizerArn", true),
+      ] : []),
       grant(["lambda:GetPolicy"], "AuthorizerArn"),
       grant(["iam:PutRolePolicy", "iam:DeleteRolePolicy"], "OperatorArn", true),
       grant(["iam:GetRolePolicy"], "OperatorArn"),
@@ -26,6 +30,7 @@ function policyResource() {
       grant(["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"], "AlarmScopeArn"),
     ]}}};
 }
+function previousPolicyResource() {return policyResource(false);}
 function validateBindings(binding, config) {
   if (!binding || canonical(Object.keys(binding).sort()) !== canonical(["schemaVersion", "service", "environment", "account", "stackId", "releaseCommit"].sort())
     || binding.schemaVersion !== 1 || binding.service !== "auth-enable" || binding.environment !== "test"
@@ -42,12 +47,13 @@ function validateBindings(binding, config) {
     ThnAuthEnableAlarmScopeArn: arn("cloudwatch", "alarm:zoolanding-auth-admin-test-ThnAuthAdminV2*"),
   };
 }
-function validateServiceState(service, binding) {
+function validateServiceState(service, binding, options = {}) {
   const p = service?.Parameters;
   if (service?.StackName !== TARGET.service || service.StackId !== binding.stackId || service.RoleARN
-    || service.StackStatus !== "UPDATE_COMPLETE" || service.EnableTerminationProtection !== true
+    || !(service.StackStatus === "UPDATE_COMPLETE" || (options.allowRollbackFailed === true && service.StackStatus === "UPDATE_ROLLBACK_FAILED"))
+    || service.EnableTerminationProtection !== true
     || !Array.isArray(p) || new Set(p.map(x => x.ParameterKey)).size !== p.length
     || p.find(x => x.ParameterKey === "ProvisionThnAuthAdminV2State")?.ParameterValue !== "true"
     || p.find(x => x.ParameterKey === "EnableThnAuthAdminV2")?.ParameterValue !== "false") fail();
 }
-module.exports = {TARGET, REVIEWED_COMMIT, policyArn, parameterDefinitions, policyResource, validateBindings, validateServiceState};
+module.exports = {TARGET, REVIEWED_COMMIT, policyArn, parameterDefinitions, policyResource, previousPolicyResource, validateBindings, validateServiceState};
