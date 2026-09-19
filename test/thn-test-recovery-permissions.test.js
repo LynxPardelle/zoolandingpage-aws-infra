@@ -110,6 +110,65 @@ test("closed AWS transport rejects unrelated write and preserves the caller envi
 
 module.exports = { setup };
 
+function authEnableSetup() {
+  const v = setup("auth-enable"), aws = revisionAWS(v), delegate = aws.aws;
+  const selected = policy.TARGETS["auth-enable"], arn = `arn:aws:iam::${v.config.account}:policy/${selected.policyName}`;
+  aws.aws = (...args) => {
+    const [, action, input] = args;
+    if (action === "get-policy") return {Policy: {Arn: arn, PolicyName: selected.policyName, Path: "/", DefaultVersionId: "v1", AttachmentCount: 1, PermissionsBoundaryUsageCount: 0}};
+    if (action === "get-policy-version") return {PolicyVersion: {VersionId: "v1", IsDefaultVersion: true,
+      Document: resolved(policy.policyResource("auth-enable").Properties.PolicyDocument, policy.validateBindings(v.binding, v.config), "auth-enable", v.config.account)}};
+    if (action === "list-entities-for-policy") return {PolicyRoles: [{RoleName: selected.role, RoleId: aws.role.Role.RoleId}], PolicyUsers: [], PolicyGroups: [], IsTruncated: false};
+    const r = delegate(...args);
+    if (action === "describe-stacks" && input.StackName === v.binding.stackId) Object.assign(r.Stacks[0], {
+      EnableTerminationProtection: true, Parameters: [{ParameterKey: "ProvisionThnAuthAdminV2State", ParameterValue: "true"},
+        {ParameterKey: "EnableThnAuthAdminV2", ParameterValue: "false"}]});
+    if (action === "describe-change-set") r.Changes[0].ResourceChange.ResourceType = "AWS::IAM::ManagedPolicy";
+    if (action === "execute-change-set") delete aws.role.inline[selected.policyName];
+    if (action === "list-attached-role-policies" && aws.executed) r.AttachedPolicies = [{PolicyName: selected.policyName, PolicyArn: arn}];
+    if (action === "describe-stack-resource") Object.assign(r.StackResourceDetail, {ResourceType: "AWS::IAM::ManagedPolicy", PhysicalResourceId: arn});
+    return r;
+  };
+  return {v, aws};
+}
+
+test("Auth enable applies one managed policy and preserves every original inline policy and role", async () => {
+  const {v, aws} = authEnableSetup(), before = structuredClone(aws.role);
+  const config = {...v.config, aws: aws.aws, authenticate: () => true, execute: false, delay: async () => {}, maxPolls: 3};
+  assert.equal((await api().runRevision(v.ledger, v.binding, v.authority, config)).status, "verified");
+  assert.deepEqual(aws.writes, []);
+  assert.equal((await api().runRevision(v.ledger, v.binding, v.authority, {...config, execute: true})).status, "applied");
+  assert.deepEqual(aws.role, before);
+  assert.deepEqual(aws.template, v.after);
+  assert.deepEqual(aws.writes, ["put-object", "create-change-set", "execute-change-set"]);
+});
+
+test("Auth enable rejects lifecycle drift, collateral changes, foreign attachment and broadened readback", async () => {
+  for (const mutate of [
+    (r,a) => {if (a === "describe-stacks" && r.Stacks[0].StackName === "zoolanding-auth-admin-test") r.Stacks[0].EnableTerminationProtection = false;},
+    (r,a) => {if (a === "describe-stacks" && r.Stacks[0].Parameters?.[0]?.ParameterKey === "ProvisionThnAuthAdminV2State") r.Stacks[0].Parameters[0].ParameterValue = "false";},
+    (r,a) => {if (a === "describe-change-set") r.Changes.push(structuredClone(r.Changes[0]));},
+    (r,a) => {if (a === "list-attached-role-policies") r.AttachedPolicies.push({PolicyName: "foreign", PolicyArn: "foreign"});},
+    (r,a) => {if (a === "get-policy-version") r.PolicyVersion.Document.Statement[0].Resource = "*";},
+    (r,a) => {if (a === "list-entities-for-policy") r.PolicyUsers.push({UserName: "foreign"});},
+  ]) {
+    const {v, aws} = authEnableSetup(), delegate = aws.aws;
+    aws.aws = (...args) => {const r = delegate(...args); mutate(r,args[1]); return r;};
+    await assert.rejects(api().runRevision(v.ledger,v.binding,v.authority,{...v.config,aws:aws.aws,authenticate:()=>true,execute:true,delay:async()=>{},maxPolls:3}));
+  }
+});
+
+test("Auth managed-policy reads cannot select another policy, version or mutate IAM", () => {
+  const {v, aws} = authEnableSetup();
+  const client = api().createClients(v.authority,v.binding,v.ledger,{...v.config,aws:aws.aws,authenticate:()=>true});
+  const PolicyArn = `arn:aws:iam::${v.config.account}:policy/ThnTestAuthEnableV1`;
+  assert.equal(client("lookup","iam","get-policy",{PolicyArn}).Policy.Arn, PolicyArn);
+  for (const [action,input] of [["get-policy",{PolicyArn:PolicyArn+"foreign"}],
+    ["get-policy-version",{PolicyArn,VersionId:"v2"}], ["attach-role-policy",{PolicyArn,RoleName:"foreign"}],
+    ["list-entities-for-policy",{PolicyArn,EntityFilter:"Role"}]])
+    assert.throws(()=>client("lookup","iam",action,input));
+});
+
 function revisionAWS(v) {
   const roleName = policy.TARGETS[v.config.service].role, selected = policy.TARGETS[v.config.service];
   const kms = `arn:aws:kms:us-east-1:${v.config.account}:key/synthetic`, bucketPolicy = { Statement: [{ Effect: "Deny", Action: "s3:*", Resource: "synthetic" }] };

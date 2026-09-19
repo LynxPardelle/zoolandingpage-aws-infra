@@ -22,6 +22,13 @@ test("TEST adds only three separate policies and preserves every pre-existing sy
   // from this older three-supplement baseline assertion. Never reset the
   // original hash or weaken the initial-only dispatcher's change-set guard.
   const recovery = require("../tools/thn-test-recovery-permission-policy");
+  const enabled = recovery.TARGETS["auth-enable"];
+  assert.deepEqual(template.Resources[enabled.logical], recovery.policyResource("auth-enable"));
+  delete template.Resources[enabled.logical];
+  for (const [name, definition] of Object.entries(recovery.parameterDefinitions("auth-enable"))) {
+    assert.deepEqual(template.Parameters[name], definition);
+    delete template.Parameters[name];
+  }
   const auth = recovery.TARGETS["auth-provision"];
   assert.deepEqual(template.Resources[auth.logical], recovery.policyResource("auth-provision"));
   assert.equal(Object.values(template.Resources).filter(r => r.Type === "AWS::IAM::Role" && r.Properties?.RoleName === auth.role).length, 0);
