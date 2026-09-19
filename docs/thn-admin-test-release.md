@@ -53,6 +53,9 @@ CloudFormation, the transported verifier:
    its ARN to the release metadata hash, and requires `DescribeCertificate`
    to return the same account/region/ARN, `ISSUED`, and exactly the admin host
    as both domain name and sole SAN. Wildcards and additional hosts fail.
+   The retained certificate and two existing Config TEST policies keep their
+   live metadata shape; enabling CDK path metadata must not introduce unrelated
+   change-set entries for these resources.
 3. Uses the owned TEST stack output to locate the private APP artifact bucket.
    It downloads only the selected release's `manifest.json`, `delivery.json`,
    `thn-admin-release.json`, and `thn-route-manifest.json` into memory.
