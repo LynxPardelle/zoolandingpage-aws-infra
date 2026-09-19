@@ -215,6 +215,11 @@ function addCanonicalPolicy(scope, environment, service, role) {
   const definition = policyResource(service);
   const policy = new cdk.CfnResource(scope, selected.logical, { type: definition.Type, properties: definition.Properties });
   policy.overrideLogicalId(selected.logical);
+  // These retained TEST policies were installed without generated path metadata.
+  // Adding it would create unrelated IAM change-set entries during THN activation.
+  if (service === "config" || service === "config-runtime") {
+    delete policy.cfnOptions.metadata?.["aws:cdk:path"];
+  }
   if (!selected.externalRole) policy.addResourceDependency(role);
   else if (role !== undefined) fail();
 }
