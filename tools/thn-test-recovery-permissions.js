@@ -5,6 +5,7 @@ const prerequisite = require("./thn-test-prerequisites");
 const policy = require("./thn-test-recovery-permission-policy");
 const image = require("./thn-test-image-version-permission-policy");
 const hub = require("./thn-test-hub-version-permission-policy");
+const authEnable = require("./thn-test-auth-enable-permission-policy");
 const { sha, canonical, ANCHORS, OPERATIONS } = prerequisite;
 const fail = () => { throw new Error("thn_recovery_permission_guard_failed"); };
 const object = v => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -66,7 +67,7 @@ function reviewChangeSet(description, original, processed, expected) {
   const change = description.Changes[0], r = change.ResourceChange;
   const modify = expected.action === "Modify";
   if (modify && (!["auth-provision", "image-version", "hub-version"].includes(expected.config.service) || !expected.policyPhysicalId)) fail();
-  if (change.Type !== "Resource" || r?.Action !== (modify ? "Modify" : "Add") || r.ResourceType !== "AWS::IAM::RolePolicy"
+  if (change.Type !== "Resource" || r?.Action !== (modify ? "Modify" : "Add") || r.ResourceType !== policy.policyResource(expected.config.service).Type
     || r.LogicalResourceId !== selected.logical || ![undefined, "False"].includes(r.Replacement)
     || (modify ? r.Replacement !== "False" || r.PhysicalResourceId !== expected.policyPhysicalId : r.PhysicalResourceId)
     || r.ChangeSetId || r.ModuleInfo) fail();
@@ -88,6 +89,7 @@ function reviewChangeSet(description, original, processed, expected) {
 }
 
 const FILES = ["authority.json", "coordinates.json", "ledger.json", "thn-test-recovery-permissions.js",
+  "thn-test-auth-enable-permission-policy.js",
   "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-auth-provision-permission-policy.js",
   "thn-test-image-version-permission-policy.js", "thn-test-hub-version-permission-policy.js", "thn-test-permission-policy.js", "thn-test-prerequisites.js"];
 const bytes = value => Buffer.from(canonical(value));
@@ -143,6 +145,7 @@ function createClients(authority, binding, ledger, config) {
   const changeArn = value => typeof value === "string" && new RegExp(`^arn:aws:cloudformation:us-east-1:${config.account}:changeSet/${name}/[A-Za-z0-9-]+$`).test(value);
   const allowed = {
     lookup: ["cloudformation:describe-stacks", "cloudformation:get-template", "cloudformation:describe-stack-resource",
+      ...(config.service === "auth-enable" ? ["iam:get-policy", "iam:get-policy-version", "iam:list-entities-for-policy"] : []),
       "iam:get-role", "iam:list-role-policies", "iam:get-role-policy", "iam:list-attached-role-policies",
       "s3api:head-object", "s3api:get-bucket-acl", "s3api:get-bucket-policy", "s3api:get-bucket-encryption", "kms:describe-key"],
     deploy: ["cloudformation:create-change-set", "cloudformation:describe-change-set", "cloudformation:execute-change-set",
@@ -190,13 +193,16 @@ function createClients(authority, binding, ledger, config) {
         if (action === "execute-change-set" && (sha(input.StackName) !== ledger.ownerStackSha256
           || !changeArn(input.ChangeSetName) || input.ClientRequestToken !== name)) fail();
       }
-      if (service === "iam" && (!keys(input, action === "get-role-policy" ? ["RoleName", "PolicyName"] : ["RoleName"])
+      const managedRead = config.service === "auth-enable" && ["get-policy", "get-policy-version", "list-entities-for-policy"].includes(action);
+      if (service === "iam" && managedRead && (!keys(input, ["PolicyArn", ...(action === "get-policy-version" ? ["VersionId"] : [])])
+        || input.PolicyArn !== authEnable.policyArn(config.account) || (action === "get-policy-version" && input.VersionId !== "v1"))) fail();
+      if (service === "iam" && !managedRead && (!keys(input, action === "get-role-policy" ? ["RoleName", "PolicyName"] : ["RoleName"])
         || ![selected.role, ...(action === "get-role" ? [authority.cfn.split("/").at(-1)] : [])].includes(input.RoleName)
         || (action === "get-role-policy" && !/^[\w+=,.@-]{1,128}$/.test(input.PolicyName)))) fail();
       if (service === "kms" && (!keys(input, ["KeyId"]) || input.KeyId !== "alias/aws/s3")) fail();
       if (service === "s3api") {
         if (action === "head-object") {
-          if (["auth-provision", "image-version", "hub-version"].includes(config.service) || !keys(input, ["Bucket", "Key", "VersionId", "ExpectedBucketOwner"]) || input.ExpectedBucketOwner !== config.account
+          if (["auth-enable", "auth-provision", "image-version", "hub-version"].includes(config.service) || !keys(input, ["Bucket", "Key", "VersionId", "ExpectedBucketOwner"]) || input.ExpectedBucketOwner !== config.account
             || ![binding.package, binding.record].some(o => input.Bucket === o.bucket && input.Key === o.key && input.VersionId === o.versionId)) fail();
         } else {
           const required = ["Bucket", "ExpectedBucketOwner", ...(["put-object", "get-object"].includes(action) ? ["Key"] : []),
@@ -267,11 +273,12 @@ async function executeRevision(ledger, binding, authority, config) {
     policyPhysicalId = r.PhysicalResourceId;
   };
   const checkRoles = (final = false) => {
+    const managed = config.service === "auth-enable";
     const RoleName = selected.role, request = { RoleName }, Role = client("lookup", "iam", "get-role", request).Role;
     const names = client("lookup", "iam", "list-role-policies", request), attached = client("lookup", "iam", "list-attached-role-policies", request);
     if (names.IsTruncated || attached.IsTruncated || !Array.isArray(names.PolicyNames)
       || new Set(names.PolicyNames).size !== names.PolicyNames.length
-      || names.PolicyNames.includes(policy.policyName(config.service)) !== (final || prepared.action === "Modify")
+      || names.PolicyNames.includes(policy.policyName(config.service)) !== (!managed && (final || prepared.action === "Modify"))
       || !Array.isArray(attached.AttachedPolicies)) fail();
     const inline = {};
     for (const PolicyName of names.PolicyNames) {
@@ -279,7 +286,19 @@ async function executeRevision(ledger, binding, authority, config) {
       if (result.RoleName !== RoleName || result.PolicyName !== PolicyName || !object(result.PolicyDocument)) fail();
       inline[PolicyName] = result.PolicyDocument;
     }
-    if (final) {
+    if (final && managed) {
+      const PolicyArn = authEnable.policyArn(config.account);
+      if (!same(attached.AttachedPolicies, [{PolicyName: selected.policyName, PolicyArn}])) fail();
+      const info = client("lookup", "iam", "get-policy", {PolicyArn}).Policy;
+      const version = client("lookup", "iam", "get-policy-version", {PolicyArn, VersionId: "v1"}).PolicyVersion;
+      const entities = client("lookup", "iam", "list-entities-for-policy", {PolicyArn});
+      if (info?.Arn !== PolicyArn || info.PolicyName !== selected.policyName || info.Path !== "/" || info.DefaultVersionId !== "v1"
+        || info.AttachmentCount !== 1 || info.PermissionsBoundaryUsageCount !== 0
+        || version?.VersionId !== "v1" || version.IsDefaultVersion !== true || !same(version.Document, prepared.document)
+        || entities.IsTruncated || !same(entities.PolicyRoles, [{RoleName: selected.role, RoleId: Role.RoleId}])
+        || !same(entities.PolicyUsers, []) || !same(entities.PolicyGroups, [])) fail();
+      attached.AttachedPolicies = [];
+    } else if (final) {
       if (!same(inline[policy.policyName(config.service)], prepared.document)) fail();
       if (prepared.previousDocument) inline[policy.policyName(config.service)] = prepared.previousDocument;
       else delete inline[policy.policyName(config.service)];
@@ -289,6 +308,11 @@ async function executeRevision(ledger, binding, authority, config) {
   };
   const checkService = () => {
     const response = client("lookup", "cloudformation", "describe-stacks", { StackName: binding.stackId }), service = response.Stacks?.[0];
+    if (config.service === "auth-enable") {
+      if (response.Stacks?.length !== 1) fail();
+      authEnable.validateServiceState(service, binding);
+      return;
+    }
     if (config.service === "hub-version") {
       if (response.Stacks?.length !== 1) fail();
       hub.validateServiceState(service, binding);
@@ -415,7 +439,8 @@ async function executeRevision(ledger, binding, authority, config) {
         Object.keys(definitions).sort().map(ParameterKey => ({ ParameterKey, ParameterValue: "****" })))) fail();
     const r = client("lookup", "cloudformation", "describe-stack-resource", { StackName: stackId, LogicalResourceId: selected.logical }).StackResourceDetail;
     if (r?.StackId !== stackId || r.StackName !== authority.stackName || r.LogicalResourceId !== selected.logical
-      || r.ResourceType !== "AWS::IAM::RolePolicy" || r.ResourceStatus !== (prepared.action === "Modify" ? "UPDATE_COMPLETE" : "CREATE_COMPLETE")
+      || r.ResourceType !== policy.policyResource(config.service).Type || r.ResourceStatus !== (prepared.action === "Modify" ? "UPDATE_COMPLETE" : "CREATE_COMPLETE")
+      || (config.service === "auth-enable" && r.PhysicalResourceId !== authEnable.policyArn(config.account))
       || !r.PhysicalResourceId || (prepared.action === "Modify" && r.PhysicalResourceId !== policyPhysicalId)) fail();
     checkRoles(true); checkService();
     return { ...receipt, status: "applied", addedPolicies: prepared.action === "Modify" ? 0 : 1,
