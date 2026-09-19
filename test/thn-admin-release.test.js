@@ -29,6 +29,13 @@ test("enabled selection binds exact manifest bytes and independent source metada
   assert.throws(() => select({ ...f.inputs, FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: JSON.stringify({ ...f.metadata, manifestSha256: "0".repeat(64) }) }), /thn_admin_release_invalid/);
 });
 
+test("enabled selection accepts a sealed mixed-case Angular module token", async () => {
+  const f = fixture(["/browser/chunk-KFx0GTIz.js"]);
+  const selected = select(f.inputs);
+  assert.deepEqual(selected.manifest, f.manifest);
+  assert.equal(await consumer.verifyPublishedAdminRelease(selected, async key => f.objects.get(key)), true);
+});
+
 test("selection rejects missing, unknown, duplicate and oversized metadata", () => {
   const f = fixture();
   for (const metadata of [undefined, {}, { ...f.metadata, environment: "production" }, { ...f.metadata, unexpected: true }, { ...f.metadata, releaseId: "../other" }]) {
@@ -39,7 +46,7 @@ test("selection rejects missing, unknown, duplicate and oversized metadata", () 
 });
 
 test("manifest rejects absent hashes, path collisions, traversal and non-public paths", () => {
-  for (const paths of [[], ["/browser/main.js"], ["/browser/main-notahash.js"], ["/browser/main-2ZPUOXRY.js", "/browser/main-2ZPUOXRY.js"],
+  for (const paths of [[], ["/browser/main.js"], ["/browser/main-short.js"], ["/browser/main-2ZPUOXRY.js", "/browser/main-2ZPUOXRY.js"],
     ["/browser/main-2ZPUOXRY.js", "/browser/MAIN-2ZPUOXRY.js"], ["/browser/../main-2ZPUOXRY.js"], ["/browser/%2e/main-2ZPUOXRY.js"],
     ["/browser/server/main-2ZPUOXRY.js"], ["/browser/main-2ZPUOXRY.js?x=1"], ["/browser/*"], ["/main-2ZPUOXRY.js"],
     ["/browser/1234abcd1234abcd.policy.json"], Array.from({ length: 65 }, (_, i) => `/browser/${i}-1234abcd.js`)]) {

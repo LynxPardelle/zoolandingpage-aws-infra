@@ -1,6 +1,7 @@
 # Changelog
 
 - [2026-09-19 — Proposed Auth TEST HTTP API logging permission revision](2026-09-19-thn-auth-http-api-logging-permissions.md)
+- [2026-09-19 — THN admin Angular hash compatibility](2026-09-19-thn-admin-angular-hash-compatibility.md)
 
 - [2026-09-19 — Isolated Auth activation permissions](2026-09-19-thn-auth-enable-permissions.md)
 
