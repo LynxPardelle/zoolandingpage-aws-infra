@@ -26,8 +26,8 @@ No cross-repository token or newly public metadata endpoint is required.
 
 The manifest remains the closed APP schema: `version`, `environment`, `releaseId`,
 and `staticAssetPaths`. Paths must be 1–64 exact public asset paths under
-`/browser/`, with either an 8–64-character hex token or an 8-character uppercase
-base32 Angular/esbuild token. Unknown fields, path traversal, private path
+`/browser/`, with either an 8–64-character hex token or an eight-character
+URL-safe mixed-case Angular/esbuild token. Unknown fields, path traversal, private path
 segments, non-asset extensions, duplicates and case-fold collisions fail closed.
 
 Validation stores the selection and verifier in the same independently hashed

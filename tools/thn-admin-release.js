@@ -26,7 +26,7 @@ function isHashedStaticAssetPath(value) {
     || segment.includes("..") || privateSegments.has(segment.toLowerCase()))) return false;
   const fileName = segments.at(-1);
   return /\.(?:js|mjs|css|woff2?|ttf|otf|eot|png|jpe?g|webp|avif|gif|svg|ico)$/.test(fileName)
-    && /(?:^|[._-])(?:[A-Fa-f0-9]{8,64}|[A-Z2-7]{8})(?=[._-])/.test(fileName);
+    && /(?:^|[._-])(?:[A-Fa-f0-9]{8,64}|[A-Za-z0-9_-]{8})(?=[._-])/.test(fileName);
 }
 
 // Environment inputs are public-safe, operator-selected bytes from an independently
