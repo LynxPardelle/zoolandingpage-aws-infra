@@ -34,6 +34,34 @@ test("auth-enable seals exact source and derives scopes, rejecting caller-contro
     assert.throws(() => policy.validateBindings({...binding, ...change}, config));
 });
 
+test("auth-enable fills every missing origin authorizer lifecycle action on the exact ARN", () => {
+  const {binding, config} = fixture("auth-enable");
+  const values = policy.validateBindings(binding, config);
+  const document = policy.resolve(policy.policyResource("auth-enable").Properties.PolicyDocument, values);
+  for (const action of ["lambda:GetFunctionConfiguration", "lambda:UntagResource", "lambda:UpdateFunctionCode",
+    "lambda:UpdateFunctionConfiguration"]) {
+    const grants = document.Statement.filter(s => [].concat(s.Action).includes(action));
+    assert.equal(grants.length, 1, action);
+    assert.equal(grants[0].Resource, values.ThnAuthEnableAuthorizerArn);
+    if (action !== "lambda:GetFunctionConfiguration")
+      assert.deepEqual(grants[0].Condition, {StringEquals: {"aws:CalledViaFirst": "cloudformation.amazonaws.com"}});
+  }
+});
+
+test("auth-enable repairs only the exact existing managed policy", () => {
+  const before = original("auth-enable"), target = policy.TARGETS["auth-enable"];
+  const module = require("../tools/thn-test-auth-enable-permission-policy");
+  const legacy = policy.composeTemplate(before, "auth-enable");
+  legacy.Resources[target.logical] = module.previousPolicyResource();
+  assert.equal(policy.revisionAction(legacy, "auth-enable"), "Modify");
+  const corrected = policy.composeTemplate(legacy, "auth-enable");
+  assert.deepEqual(Object.keys(corrected.Resources).sort(), Object.keys(legacy.Resources).sort());
+  assert.deepEqual(corrected.Resources[target.logical].Properties.Roles, [target.role]);
+  const foreign = structuredClone(legacy);
+  foreign.Resources[target.logical].Properties.PolicyDocument.Statement[0].Effect = "Deny";
+  assert.throws(() => policy.revisionAction(foreign, "auth-enable"));
+});
+
 test("managed correction fits without relaxing inline quota or accepting existing attachments", () => {
   assert.ok(policy.TARGETS["auth-enable"], "missing managed-policy quota handling");
   const {binding, config} = fixture("auth-enable"), target = policy.TARGETS["auth-enable"];
@@ -60,6 +88,9 @@ test("Auth enable refuses role adoption, duplicate policy identities and ambiguo
   const state = {StackName: module.TARGET.service, StackId: binding.stackId, StackStatus: "UPDATE_COMPLETE", EnableTerminationProtection: true,
     Parameters: [{ParameterKey: "ProvisionThnAuthAdminV2State", ParameterValue: "true"}, {ParameterKey: "EnableThnAuthAdminV2", ParameterValue: "false"}]};
   assert.doesNotThrow(() => module.validateServiceState(state,binding));
+  const failedRollback = structuredClone(state); failedRollback.StackStatus = "UPDATE_ROLLBACK_FAILED";
+  assert.throws(() => module.validateServiceState(failedRollback, binding));
+  assert.doesNotThrow(() => module.validateServiceState(failedRollback, binding, {allowRollbackFailed: true}));
   for (const mutate of [s=>s.Parameters.push(s.Parameters[0]), s=>s.Parameters.pop(), s=>s.Parameters[1].ParameterValue="true",
     s=>s.RoleARN="foreign", s=>s.StackStatus="UPDATE_IN_PROGRESS", s=>s.StackId+="foreign"]){
     const changed=structuredClone(state); mutate(changed); assert.throws(()=>module.validateServiceState(changed,binding));

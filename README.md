@@ -92,7 +92,7 @@ does not replay the initial supplemental workflow, adopt a service role for API,
 or enable the blog; fresh reviewed private bindings and public hash ledgers are
 required before any AWS application.
 
-The independent `auth-enable` selector adds one TEST-only customer-managed policy
+The independent `auth-enable` selector adds or repairs one TEST-only customer-managed policy
 for the already-provisioned Auth activation lifecycle. It preserves both inline
 policies and role trust; its managed-policy exception does not apply to other
 selectors. See [the activation permission contract](docs/thn-test-recovery-permissions.md#auth-test-activation-managed-policy).
