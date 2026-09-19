@@ -26,7 +26,7 @@ test("auth-enable seals exact source and derives scopes, rejecting caller-contro
   assert.ok(!canonical(d).includes("role/zoolanding-thn-content-hub-test-operator"));
   for (const s of d.Statement) {
     assert.ok(![].concat(s.Action).some(a => a.includes("*") || a === "iam:PassRole"));
-    assert.notEqual(s.Resource, "*");
+    if (s.Resource === "*") assert.ok([].concat(s.Action).every(a => a.startsWith("logs:")));
     if ([].concat(s.Action).some(a => /:(Create|Update|Delete|Put|Add|Remove|Tag|Untag)/.test(a)))
       assert.equal(s.Condition.StringEquals["aws:CalledViaFirst"], "cloudformation.amazonaws.com");
   }
@@ -46,6 +46,38 @@ test("auth-enable fills every missing origin authorizer lifecycle action on the 
     if (action !== "lambda:GetFunctionConfiguration")
       assert.deepEqual(grants[0].Condition, {StringEquals: {"aws:CalledViaFirst": "cloudformation.amazonaws.com"}});
   }
+});
+
+test("auth-enable grants only the HTTP API log-delivery activation actions through CloudFormation in TEST", () => {
+  const {binding, config} = fixture("auth-enable");
+  const values = policy.validateBindings(binding, config);
+  const document = policy.resolve(policy.policyResource("auth-enable").Properties.PolicyDocument, values);
+  const global = document.Statement.filter(s => s.Resource === "*");
+  assert.equal(global.length, 1);
+  assert.deepEqual([].concat(global[0].Action).sort(), [
+    "logs:CreateLogDelivery", "logs:DeleteLogDelivery", "logs:DescribeResourcePolicies",
+    "logs:GetLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:UpdateLogDelivery",
+  ].sort());
+  assert.deepEqual(global[0].Condition, {StringEquals: {
+    "aws:CalledViaFirst": "cloudformation.amazonaws.com", "aws:RequestedRegion": "us-east-1",
+  }});
+  assert.ok(document.Statement.every(s => s.Resource === "*" || ![].concat(s.Action).some(a => a.startsWith("logs:"))));
+  assert.ok(!JSON.stringify(document).includes("zoolanding-content-hub-test"));
+  assert.ok(!JSON.stringify(document).includes("zoolanding-image-upload-test"));
+});
+
+test("auth-enable accepts only the current v2 managed policy as the v3 revision baseline", () => {
+  const module = require("../tools/thn-test-auth-enable-permission-policy");
+  const before = original("auth-enable"), target = policy.TARGETS["auth-enable"];
+  const current = policy.composeTemplate(before, "auth-enable");
+  current.Resources[target.logical] = module.previousPolicyResource();
+  assert.equal(policy.revisionAction(current, "auth-enable"), "Modify");
+  const next = policy.composeTemplate(current, "auth-enable");
+  assert.deepEqual(next.Resources[target.logical], module.policyResource());
+  const legacy = structuredClone(current);
+  legacy.Resources[target.logical] = module.legacyPolicyResource();
+  assert.throws(() => policy.revisionAction(legacy, "auth-enable"));
+  assert.throws(() => policy.revisionAction(next, "auth-enable"));
 });
 
 test("auth-enable repairs only the exact existing managed policy", () => {
@@ -90,7 +122,10 @@ test("Auth enable refuses role adoption, duplicate policy identities and ambiguo
   assert.doesNotThrow(() => module.validateServiceState(state,binding));
   const failedRollback = structuredClone(state); failedRollback.StackStatus = "UPDATE_ROLLBACK_FAILED";
   assert.throws(() => module.validateServiceState(failedRollback, binding));
-  assert.doesNotThrow(() => module.validateServiceState(failedRollback, binding, {allowRollbackFailed: true}));
+  assert.doesNotThrow(() => module.validateServiceState(failedRollback, binding, {allowRollbackState: true}));
+  const recoveredRollback = structuredClone(state); recoveredRollback.StackStatus = "UPDATE_ROLLBACK_COMPLETE";
+  assert.throws(() => module.validateServiceState(recoveredRollback, binding));
+  assert.doesNotThrow(() => module.validateServiceState(recoveredRollback, binding, {allowRollbackState: true}));
   for (const mutate of [s=>s.Parameters.push(s.Parameters[0]), s=>s.Parameters.pop(), s=>s.Parameters[1].ParameterValue="true",
     s=>s.RoleARN="foreign", s=>s.StackStatus="UPDATE_IN_PROGRESS", s=>s.StackId+="foreign"]){
     const changed=structuredClone(state); mutate(changed); assert.throws(()=>module.validateServiceState(changed,binding));
