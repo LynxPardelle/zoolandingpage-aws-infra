@@ -19,7 +19,7 @@ function fixture(service = "config") {
     return {binding, config: {service, account, anchors: {account: sha(account)},
       expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId)}};
   }
-  if (service === "auth-provision") {
+  if (["auth-provision", "auth-enable"].includes(service)) {
     const binding = {schemaVersion: 1, service, environment: "test", account,
       stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-auth-admin-test/synthetic`,
       releaseCommit: "cbc17c8f560c8586be641faa0abc7c60bd17a698"};
@@ -65,7 +65,7 @@ function original(service) {
     resources.ExistingRole = {Type: "AWS::IAM::Role", Properties: {RoleName: r.Properties.RoleName, AssumeRolePolicyDocument: {Statement: []}}};
     return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}}, Resources: resources};
   }
-  if (service === "auth-provision") return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}},
+  if (["auth-provision", "auth-enable"].includes(service)) return {Parameters: {ExistingSecret: {Type: "String", NoEcho: true}},
     Resources: {Unrelated: {Type: "AWS::IAM::RolePolicy", Properties: {RoleName: "other", PolicyName: "keep"}}}};
   return { Parameters: { ExistingSecret: { Type: "String", NoEcho: true } }, Outputs: { Keep: { Value: "unchanged" } },
     Resources: { ExistingRole: { Type: "AWS::IAM::Role", Properties: {
