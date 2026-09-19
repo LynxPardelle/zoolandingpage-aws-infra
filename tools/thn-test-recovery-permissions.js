@@ -197,7 +197,7 @@ function createClients(authority, binding, ledger, config) {
       const managedRead = config.service === "auth-enable" && ["get-policy", "get-policy-version", "list-entities-for-policy"].includes(action);
       if (service === "iam" && managedRead && (!keys(input, ["PolicyArn", ...(action === "get-policy-version" ? ["VersionId"] : [])])
         || input.PolicyArn !== authEnable.policyArn(config.account)
-        || (action === "get-policy-version" && !["v1", "v2"].includes(input.VersionId)))) fail();
+        || (action === "get-policy-version" && !["v1", "v2", "v3"].includes(input.VersionId)))) fail();
       if (service === "iam" && !managedRead && (!keys(input, action === "get-role-policy" ? ["RoleName", "PolicyName"] : ["RoleName"])
         || ![selected.role, ...(action === "get-role" ? [authority.cfn.split("/").at(-1)] : [])].includes(input.RoleName)
         || (action === "get-role-policy" && !/^[\w+=,.@-]{1,128}$/.test(input.PolicyName)))) fail();
@@ -292,7 +292,7 @@ async function executeRevision(ledger, binding, authority, config) {
       const PolicyArn = authEnable.policyArn(config.account);
       if (!same(attached.AttachedPolicies, [{PolicyName: selected.policyName, PolicyArn}])) fail();
       const info = client("lookup", "iam", "get-policy", {PolicyArn}).Policy;
-      const expectedVersion = final && prepared.action === "Modify" ? "v2" : "v1";
+      const expectedVersion = prepared.action === "Modify" ? (final ? "v3" : "v2") : "v1";
       const version = client("lookup", "iam", "get-policy-version", {PolicyArn, VersionId: expectedVersion}).PolicyVersion;
       const entities = client("lookup", "iam", "list-entities-for-policy", {PolicyArn});
       if (info?.Arn !== PolicyArn || info.PolicyName !== selected.policyName || info.Path !== "/" || info.DefaultVersionId !== expectedVersion
@@ -314,7 +314,7 @@ async function executeRevision(ledger, binding, authority, config) {
     const response = client("lookup", "cloudformation", "describe-stacks", { StackName: binding.stackId }), service = response.Stacks?.[0];
     if (config.service === "auth-enable") {
       if (response.Stacks?.length !== 1) fail();
-      authEnable.validateServiceState(service, binding, {allowRollbackFailed: prepared.action === "Modify"});
+      authEnable.validateServiceState(service, binding, {allowRollbackState: prepared.action === "Modify"});
       return;
     }
     if (config.service === "hub-version") {
