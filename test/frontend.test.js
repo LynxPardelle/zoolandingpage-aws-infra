@@ -1300,13 +1300,17 @@ test("TEST synthesis preserves the retained prerequisite certificate even while 
     FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: "ZTHNFIXTURE", FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "false" };
   const certificate = buildThnAdminTestCertificate(source, "123456789012");
   assert.throws(() => buildThnAdminTestCertificate({ ...source, FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: "" }, "123456789012"));
-  const app = new cdk.App();
+  const app = new cdk.App({ context: { "aws:cdk:enable-path-metadata": true } });
   const environment = { ...testEnvironment, name: "test", frontendHosting: { ...testEnvironment.frontendHosting, thnAdminCertificate: certificate } };
   const template = Template.fromStack(new FrontendStack(app, "RetainedCertificateFixture", { env: { account: environment.account, region: environment.region }, environment })).toJSON();
   const resource = template.Resources.ThnAdminTestCertificate;
   const { composeTemplate } = require("../tools/thn-test-prerequisites");
   const expected = composeTemplate({ Resources: {} }, "certificate", { zoneId: "ZTHNFIXTURE", anchors: { zone: require("node:crypto").createHash("sha256").update("ZTHNFIXTURE").digest("hex") } }).Resources.ThnAdminTestCertificate;
   assert.deepEqual(resource, expected);
+  for (const id of ["ThnAdminTestCertificate", "ThnConfigTestRecoveryPolicy", "ThnConfigRuntimeInspectionPolicy"]) {
+    assert.ok(template.Resources[id], `${id} must remain in the TEST template`);
+    assert.equal(template.Resources[id].Metadata, undefined, `${id} must not acquire new CDK path metadata`);
+  }
   assert.ok(!Object.values(template.Resources).some(item => item.Type === "AWS::CloudFront::Distribution"));
   const production = { ...environment, name: "production" };
   assert.throws(() => new FrontendStack(new cdk.App(), "NoProductionCertificate", { env: { account: environment.account, region: environment.region }, environment: production }), /THN.*TEST/);
