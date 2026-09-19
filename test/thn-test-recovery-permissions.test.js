@@ -164,7 +164,7 @@ test("Auth managed-policy reads cannot select another policy, version or mutate 
   const PolicyArn = `arn:aws:iam::${v.config.account}:policy/ThnTestAuthEnableV1`;
   assert.equal(client("lookup","iam","get-policy",{PolicyArn}).Policy.Arn, PolicyArn);
   for (const [action,input] of [["get-policy",{PolicyArn:PolicyArn+"foreign"}],
-    ["get-policy-version",{PolicyArn,VersionId:"v3"}], ["attach-role-policy",{PolicyArn,RoleName:"foreign"}],
+    ["get-policy-version",{PolicyArn,VersionId:"v4"}], ["attach-role-policy",{PolicyArn,RoleName:"foreign"}],
     ["list-entities-for-policy",{PolicyArn,EntityFilter:"Role"}]])
     assert.throws(()=>client("lookup","iam",action,input));
 });
@@ -189,14 +189,14 @@ function authEnableModifySetup() {
   aws.aws = (...args) => {
     const [, action, input] = args;
     if (action === "get-policy") return {Policy: {Arn: arn, PolicyName: selected.policyName, Path: "/",
-      DefaultVersionId: aws.executed ? "v2" : "v1", AttachmentCount: 1, PermissionsBoundaryUsageCount: 0}};
+      DefaultVersionId: aws.executed ? "v3" : "v2", AttachmentCount: 1, PermissionsBoundaryUsageCount: 0}};
     if (action === "get-policy-version") return {PolicyVersion: {VersionId: input.VersionId, IsDefaultVersion: true,
       Document: structuredClone(aws.executed ? next : previous)}};
     if (action === "list-entities-for-policy") return {PolicyRoles: [{RoleName: selected.role, RoleId: aws.role.Role.RoleId}],
       PolicyUsers: [], PolicyGroups: [], IsTruncated: false};
     const result = delegate(...args);
     if (action === "describe-stacks" && input.StackName === v.binding.stackId) Object.assign(result.Stacks[0], {
-      StackStatus: "UPDATE_ROLLBACK_FAILED", EnableTerminationProtection: true,
+      StackStatus: "UPDATE_ROLLBACK_COMPLETE", EnableTerminationProtection: true,
       Parameters: [{ParameterKey: "ProvisionThnAuthAdminV2State", ParameterValue: "true"},
         {ParameterKey: "EnableThnAuthAdminV2", ParameterValue: "false"}]});
     if (action === "list-attached-role-policies") result.AttachedPolicies = structuredClone(v.role.attached);
@@ -210,7 +210,7 @@ function authEnableModifySetup() {
   return {v, aws};
 }
 
-test("Auth managed-policy correction updates one existing version while Auth rollback is failed", async () => {
+test("Auth managed-policy logging correction updates only v2 to v3 while Auth stays disabled", async () => {
   const {v, aws} = authEnableModifySetup(), before = structuredClone(aws.role);
   const config = {...v.config, aws: aws.aws, authenticate: () => true, execute: false, delay: async () => {}, maxPolls: 3};
   assert.equal((await api().runRevision(v.ledger, v.binding, v.authority, config)).status, "verified");
@@ -225,7 +225,7 @@ test("Auth managed-policy correction updates one existing version while Auth rol
 test("Auth repair stops before writes on another attachment, policy version or service state", async () => {
   for (const mutate of [
     (r, a) => {if (a === "list-attached-role-policies") r.AttachedPolicies.push({PolicyName: "Foreign", PolicyArn: "foreign"});},
-    (r, a) => {if (a === "get-policy") r.Policy.DefaultVersionId = "v3";},
+    (r, a) => {if (a === "get-policy") r.Policy.DefaultVersionId = "v1";},
     (r, a) => {if (a === "describe-stacks" && r.Stacks?.[0]?.StackName === "zoolanding-auth-admin-test") r.Stacks[0].Parameters[0].ParameterValue = "false";},
   ]) {
     const {v, aws} = authEnableModifySetup(), delegate = aws.aws;

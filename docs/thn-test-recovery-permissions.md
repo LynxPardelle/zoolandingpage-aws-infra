@@ -162,19 +162,39 @@ immutable Auth templates. No trust, PassRole, Cognito user administration or dat
 write permission is granted. Alarm names are provider-generated under the Auth
 stack's `ThnAuthAdminV2` prefix; no shared alarm namespace is included.
 
+The proposed `v2 -> v3` revision also covers HTTP API access-log activation.
+The TEST Auth stage's log group is still one of the four exact log-group
+ARNs in `auth-provision`. AWS evaluates the log-delivery and resource-policy
+actions without a resource ARN, so this single managed-policy statement must use
+`Resource: "*"`. It includes only `CreateLogDelivery`, `UpdateLogDelivery`,
+`DeleteLogDelivery`, `GetLogDelivery`, `ListLogDeliveries`,
+`PutResourcePolicy` and `DescribeResourcePolicies`. Every action requires both
+`aws:CalledViaFirst=cloudformation.amazonaws.com` and
+`aws:RequestedRegion=us-east-1`. Direct calls by the GitHub session do not
+match. No log-event read, log deletion, extra role attachment or production
+permission is added. The account-level `PutResourcePolicy` authority is a
+residual risk even with those conditions; it needs exact-template review and
+live verification before enabling Auth. See AWS's
+[HTTP API logging permissions](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-logging.html),
+[CloudWatch Logs action scopes](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html)
+and [CloudFormation FAS behavior](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/fas-requests-and-permission-evaluation.html).
+
 The initial Add baseline must be UPDATE_COMPLETE, protected, provisioned and
 disabled, with no separate Auth stack service role or existing managed attachment
-on its deploy role. The repair path accepts the one existing, exact IaC-owned
-managed policy and a protected, provisioned, disabled Auth stack in
-`UPDATE_ROLLBACK_FAILED`. It modifies only that policy's document in place, with
-no replacement or changes to roles, trust, attachments or other resources.
+on its deploy role. The current revision path accepts only the exact deployed
+`v2` document of the one IaC-owned managed policy and a protected, provisioned,
+disabled Auth stack in `UPDATE_COMPLETE`, `UPDATE_ROLLBACK_FAILED` or
+`UPDATE_ROLLBACK_COMPLETE`. The earlier `v1 -> v2` authorizer correction is
+historical; this source cannot replay it.
+The current path modifies only that policy's document in place, with no
+replacement or changes to roles, trust, attachments or other resources.
 Any different existing policy, document, attachment or service state fails closed.
 Use an independently reviewed public hash ledger and private binding; run verify
 before execute. Before dispatch, confirm that IaC can update and read back the
 exact policy and that Auth stack recovery remains a separate, later operation.
 
-After execution, read back the exact ARN, default version `v1` for Add or `v2`
-for the exact one-time repair, document, sole
+After execution, read back the exact ARN, default version `v1` for Add or `v3`
+for the exact `v2 -> v3` revision, document, sole
 role attachment, no user/group attachment or boundary usage, and unchanged role
 and inline policies. A failed readback requires reconciliation, not an automatic
 retry. Source promotion alone grants no permissions and enables no service.

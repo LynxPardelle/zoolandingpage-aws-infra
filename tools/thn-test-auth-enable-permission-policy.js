@@ -11,7 +11,8 @@ function policyArn(account) {return `arn:aws:iam::${account}:policy/${TARGET.pol
 function parameterDefinitions() {
   return Object.fromEntries(PARAMS.map(n => [TARGET.prefix + n, {Type: "String", NoEcho: true, MinLength: 1, MaxLength: 2048}]));
 }
-function policyResource(includeAuthorizerConfiguration = true) {
+function policyResource(version = "v3") {
+  if (!["v1", "v2", "v3"].includes(version)) fail();
   const via = {StringEquals: {"aws:CalledViaFirst": "cloudformation.amazonaws.com"}};
   const grant = (Action, name, write = false) => ({Effect: "Allow", Action, Resource: ref(name), ...(write ? {Condition: via} : {})});
   return {Type: "AWS::IAM::ManagedPolicy", Properties: {ManagedPolicyName: TARGET.policyName, Path: "/", Roles: [TARGET.role],
@@ -19,7 +20,7 @@ function policyResource(includeAuthorizerConfiguration = true) {
       grant(["lambda:CreateFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "lambda:DeleteFunctionUrlConfig"], "OwnerAliasArn", true),
       grant(["lambda:GetFunctionUrlConfig"], "OwnerAliasArn"),
       grant(["lambda:AddPermission", "lambda:RemovePermission"], "AuthorizerArn", true),
-      ...(includeAuthorizerConfiguration ? [
+      ...(version !== "v1" ? [
         grant(["lambda:GetFunctionConfiguration"], "AuthorizerArn"),
         grant(["lambda:UntagResource", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration"], "AuthorizerArn", true),
       ] : []),
@@ -28,9 +29,16 @@ function policyResource(includeAuthorizerConfiguration = true) {
       grant(["iam:GetRolePolicy"], "OperatorArn"),
       grant(["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource"], "AlarmScopeArn", true),
       grant(["cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"], "AlarmScopeArn"),
+      ...(version === "v3" ? [{Effect: "Allow", Action: [
+        "logs:CreateLogDelivery", "logs:DeleteLogDelivery", "logs:DescribeResourcePolicies",
+        "logs:GetLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:UpdateLogDelivery",
+      ], Resource: "*", Condition: {StringEquals: {
+        "aws:CalledViaFirst": "cloudformation.amazonaws.com", "aws:RequestedRegion": "us-east-1",
+      }}}] : []),
     ]}}};
 }
-function previousPolicyResource() {return policyResource(false);}
+function previousPolicyResource() {return policyResource("v2");}
+function legacyPolicyResource() {return policyResource("v1");}
 function validateBindings(binding, config) {
   if (!binding || canonical(Object.keys(binding).sort()) !== canonical(["schemaVersion", "service", "environment", "account", "stackId", "releaseCommit"].sort())
     || binding.schemaVersion !== 1 || binding.service !== "auth-enable" || binding.environment !== "test"
@@ -50,10 +58,12 @@ function validateBindings(binding, config) {
 function validateServiceState(service, binding, options = {}) {
   const p = service?.Parameters;
   if (service?.StackName !== TARGET.service || service.StackId !== binding.stackId || service.RoleARN
-    || !(service.StackStatus === "UPDATE_COMPLETE" || (options.allowRollbackFailed === true && service.StackStatus === "UPDATE_ROLLBACK_FAILED"))
+    || !(service.StackStatus === "UPDATE_COMPLETE" || (options.allowRollbackState === true
+      && ["UPDATE_ROLLBACK_FAILED", "UPDATE_ROLLBACK_COMPLETE"].includes(service.StackStatus)))
     || service.EnableTerminationProtection !== true
     || !Array.isArray(p) || new Set(p.map(x => x.ParameterKey)).size !== p.length
     || p.find(x => x.ParameterKey === "ProvisionThnAuthAdminV2State")?.ParameterValue !== "true"
     || p.find(x => x.ParameterKey === "EnableThnAuthAdminV2")?.ParameterValue !== "false") fail();
 }
-module.exports = {TARGET, REVIEWED_COMMIT, policyArn, parameterDefinitions, policyResource, previousPolicyResource, validateBindings, validateServiceState};
+module.exports = {TARGET, REVIEWED_COMMIT, policyArn, parameterDefinitions, policyResource, previousPolicyResource, legacyPolicyResource,
+  validateBindings, validateServiceState};
