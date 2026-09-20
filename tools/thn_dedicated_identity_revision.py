@@ -203,7 +203,8 @@ def run_revision(operation: str, candidate: dict, expected_digest: str,
         _reject()
     initial.validate_final_policies(
         lookup_iam.list_role_policies(RoleName=github_role_name),
-        lookup_iam.list_role_policies(RoleName=execution_role_name))
+        lookup_iam.list_role_policies(RoleName=execution_role_name),
+        lookup_iam.list_attached_role_policies(RoleName=github_role_name), account)
 
     def live_policy() -> dict:
         result = lookup_iam.get_role_policy(RoleName=execution_role_name,

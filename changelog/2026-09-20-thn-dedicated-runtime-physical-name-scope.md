@@ -12,12 +12,20 @@ Locally, the Lambda, generated IAM role, and log-group policy resources now
 use the narrower common generated prefix `zoolanding-thn-auth-runti*` in the
 same account and region. The dedicated policy test covers the observed role
 shape, plausible function/log names, and exclusion of Auth Admin. The full
-local Node test suite passed (314 passed, 1 skipped). A read-only IAM policy
+local Node test suite passed (315 passed, 1 skipped). A read-only IAM policy
 simulation allowed `CreateRole`, `DeleteRolePolicy`, and `TagRole` on the
 observed role ARN.
 
+The current `dev` branch uses a separate managed GitHub policy. The revision
+keeps that policy unchanged and updates only the execution policy's five ARN
+patterns. Read-only comparison against both original and processed live TEST
+templates confirmed exactly one resource difference, and the existing IAM
+execution document matches the guarded baseline. The manual revision workflow
+requires an exact reviewed TEST source and digest, then rejects any change set
+that changes another resource or replaces the policy.
+
 This is source-only preparation. No corrected IAM policy has been published or
 applied, and no recovery or second runtime create has been attempted. The
-existing dedicated-identity workflow supports initial resource Adds; a
-separately reviewed policy revision and stack recovery are required before a
-new runtime create.
+existing dedicated-identity workflow supports initial resource Adds; the
+separately reviewed one-policy revision and stack recovery are required before
+a new runtime create.

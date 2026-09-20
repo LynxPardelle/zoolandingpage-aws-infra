@@ -58,6 +58,10 @@ test("GitHub may create and execute only the new stack with its own role", () =>
   assert.ok(packageRead, "caller needs read-back of only the dedicated package prefix");
   assert.ok(JSON.stringify(packageRead.Resource).includes("zoolanding-api-proxy-test/thn-runtime/*"));
   assert.ok(!packageRead.Action.includes("s3:PutObject"));
+  const functionRead = statements.find(value => value.Action.includes("lambda:GetFunction"));
+  assert.ok(functionRead, "caller needs the unchanged dedicated Lambda read scope");
+  assert.ok(JSON.stringify(functionRead.Resource).includes("zoolanding-thn-auth-runtime-test-*"),
+    "this revision must not modify the separate GitHub policy");
 });
 
 test("execution role's app resources stay in the dedicated stack namespace", () => {
