@@ -163,6 +163,48 @@ def review_changeset(description: dict) -> None:
         _reject()
 
 
+def changeset_diagnostic_flags(description: dict, pending_original: dict, pending_processed: dict,
+                               composed: dict, composed_processed: dict, stack_name: str, stack_id: str,
+                               name: str, parameter_names: list[str], account: str) -> str:
+    """Report only fixed booleans/counts, never template or parameter values."""
+    changes = description.get("Changes", []) if _is_object(description) else []
+    changes = changes if isinstance(changes, list) else []
+    resources = [change.get("ResourceChange", {}) for change in changes if _is_object(change)]
+    ids = [item.get("LogicalResourceId") for item in resources if _is_object(item)]
+    context = (description.get("StackName") == stack_name and description.get("StackId") == stack_id
+               and description.get("ChangeSetName") == name
+               and isinstance(description.get("ChangeSetId"), str)
+               and bool(re.fullmatch(rf"arn:aws:cloudformation:us-east-1:{account}:changeSet/{re.escape(name)}/[A-Za-z0-9-]+",
+                                     description["ChangeSetId"])))
+    try:
+        review_changeset(description)
+    except ValueError:
+        guard = False
+    else:
+        guard = True
+    observed_parameters = description.get("Parameters", [])
+    params = (isinstance(observed_parameters, list) and len(observed_parameters) == len(parameter_names)
+              and {item.get("ParameterKey") for item in observed_parameters if _is_object(item)} == set(parameter_names))
+    flags = {
+        "context": context,
+        "status": description.get("Status") == "CREATE_COMPLETE" and description.get("ExecutionStatus") == "AVAILABLE",
+        "mode": description.get("ChangeSetType", "UPDATE") == "UPDATE",
+        "count": len(changes) == len(ADDITIONS),
+        "kind": len(resources) == len(changes) and all(change.get("Type") == "Resource" for change in changes),
+        "actions": len(resources) == len(changes) and all(item.get("Action") == "Add" for item in resources),
+        "ids": len(ids) == len(ADDITIONS) and set(ids) == set(ADDITIONS),
+        "types": len(resources) == len(ADDITIONS) and all(item.get("ResourceType") == ADDITIONS.get(item.get("LogicalResourceId")) for item in resources),
+        "replacement": len(resources) == len(ADDITIONS) and all(item.get("Replacement") in (None, "False") for item in resources),
+        "metadata": len(resources) == len(ADDITIONS) and all(not item.get("ChangeSetId") and not item.get("ModuleInfo") for item in resources),
+        "nested": description.get("IncludeNestedStacks") is not True and not description.get("NextToken"),
+        "guard": guard,
+        "params": params,
+        "original": pending_original == composed,
+        "processed": pending_processed == composed_processed,
+    }
+    return "_".join(key + str(int(value)) for key, value in flags.items())
+
+
 def _template(response: dict) -> dict:
     body = response.get("TemplateBody") if _is_object(response) else None
     if isinstance(body, str):
@@ -327,21 +369,32 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
                   aws_stage("s3_bucket_encryption", lookup_s3.get_bucket_encryption,
                             Bucket=bucket, ExpectedBucketOwner=account)["ServerSideEncryptionConfiguration"], key_meta)
 
-        def probe(stage: str, operation, **kwargs) -> str:
+        def probe(stage: str, operation, **kwargs) -> tuple[str, dict | None]:
             try:
                 result = aws_stage(stage, operation, **kwargs)
             except ReleaseStageError as error:
                 code = str(error).split(":", 1)[1]
                 if code in ("404", "NoSuchKey", "ChangeSetNotFoundException"):
-                    return "absent"
-                return "error_" + code
+                    return "absent", None
+                return "error_" + code, None
             if stage == "postmortem_object":
-                return "present" if result.get("ServerSideEncryption") == "aws:kms" and result.get("ContentLength") == len(body) else "unexpected"
-            return "present_" + result.get("Status", "unknown") if result.get("Status") in ("CREATE_COMPLETE", "FAILED", "CREATE_IN_PROGRESS", "DELETE_COMPLETE", "DELETE_IN_PROGRESS") else "unexpected"
+                return ("present" if result.get("ServerSideEncryption") == "aws:kms" and result.get("ContentLength") == len(body) else "unexpected"), result
+            return ("present_" + result.get("Status", "unknown") if result.get("Status") in ("CREATE_COMPLETE", "FAILED", "CREATE_IN_PROGRESS", "DELETE_COMPLETE", "DELETE_IN_PROGRESS") else "unexpected"), result
 
-        object_status = probe("postmortem_object", lookup_s3.head_object, Bucket=bucket, Key=target["key"], ExpectedBucketOwner=account)
-        changeset_status = probe("postmortem_changeset", deploy.describe_change_set, StackName=stack_id, ChangeSetName=target["name"])
-        return f"diagnosed_object_{object_status}_changeset_{changeset_status}"
+        object_status, _ = probe("postmortem_object", lookup_s3.head_object, Bucket=bucket, Key=target["key"], ExpectedBucketOwner=account)
+        changeset_status, description = probe("postmortem_changeset", deploy.describe_change_set, StackName=stack_id, ChangeSetName=target["name"])
+        if description is None:
+            return f"diagnosed_object_{object_status}_changeset_{changeset_status}"
+        pending_original = aws_stage("postmortem_changeset", _template,
+                                     aws_stage("postmortem_changeset", deploy.get_template,
+                                               StackName=stack_id, ChangeSetName=target["name"], TemplateStage="Original"))
+        pending_processed = aws_stage("postmortem_changeset", _template,
+                                      aws_stage("postmortem_changeset", deploy.get_template,
+                                                StackName=stack_id, ChangeSetName=target["name"], TemplateStage="Processed"))
+        flags = changeset_diagnostic_flags(description, pending_original, pending_processed, composed,
+                                           composed_processed, stack_name, stack_id, target["name"],
+                                           [item["ParameterKey"] for item in parameters], account)
+        return f"diagnosed_object_{object_status}_changeset_{changeset_status}_{flags}"
 
     publisher = aws_stage("assume_publisher", _assumed_client, sts, authority, "publisher", "s3", region)
     deploy_s3 = aws_stage("assume_deploy_s3", _assumed_client, sts, authority, "deploy", "s3", region)

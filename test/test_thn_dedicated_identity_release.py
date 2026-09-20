@@ -195,6 +195,26 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         self.assertLess(source.index('if operation == "diagnose":'), source.index('publisher.put_object'))
         self.assertLess(source.index('return f"diagnosed_object_'), source.index('publisher.put_object'))
 
+    def test_diagnostic_flags_identify_processed_template_mismatch_without_values(self):
+        name = "thn-dedicated-identity-123-1"
+        stack_id = "arn:aws:cloudformation:us-east-1:123456789012:stack/example/uuid"
+        description = {"StackName": "example", "StackId": stack_id, "ChangeSetName": name,
+                       "ChangeSetId": "arn:aws:cloudformation:us-east-1:123456789012:changeSet/" + name + "/uuid",
+                       "Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE", "ChangeSetType": "UPDATE",
+                       "Parameters": [{"ParameterKey": "Opaque"}],
+                       "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Add", "LogicalResourceId": key,
+                       "ResourceType": value["Type"], "Replacement": "False"}} for key, value in self.additions.items()]}
+        expected = self.release.compose_template(self.original, self.additions)
+        flags = self.release.changeset_diagnostic_flags(description, expected, expected,
+            expected, self.original, "example", stack_id, name, ["Opaque"], "123456789012")
+        self.assertIn("context1", flags)
+        self.assertIn("guard1", flags)
+        self.assertIn("params1", flags)
+        self.assertIn("original1", flags)
+        self.assertIn("processed0", flags)
+        self.assertNotIn("Opaque", flags)
+        self.assertNotIn("example", flags)
+
 
 if __name__ == "__main__":
     unittest.main()
