@@ -85,4 +85,15 @@ function runtimeFixture() {
     expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId) } };
 }
 
-module.exports = { fixture, original, account, runtimeFixture };
+function correctedRuntimeFixture() {
+  const source = "45c6a2586a481333221fdafbbbd4e503a8560b8b", digest = "a".repeat(64);
+  const binding = { schemaVersion: 1, service: "api-runtime-corrected", environment: "test", account,
+    stackId: `arn:aws:cloudformation:us-east-1:${account}:stack/zoolanding-api-proxy-test/synthetic`,
+    sourceSha: source, packageSha256: digest,
+    package: { bucket: "synthetic-channel", key: `zoolanding-api-proxy-test/thn-runtime/${source}/git-lf/${digest}/runtime-v2.zip`, versionId: "new-package-v1" },
+    record: { bucket: "synthetic-channel", key: `zoolanding-api-proxy-test/first-provisioning/${source}/git-lf/${digest}/plan.json`, versionId: "new-plan-v1" } };
+  return { binding, config: { service: binding.service, account, channelBucket: "synthetic-channel", anchors: { account: sha(account) },
+    expectedBindingSha256: hash(binding), expectedStackSha256: sha(binding.stackId) } };
+}
+
+module.exports = { fixture, original, account, runtimeFixture, correctedRuntimeFixture };

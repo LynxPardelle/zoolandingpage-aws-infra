@@ -107,7 +107,7 @@ test("Auth canonical hook matches native composition and production is a no-op",
 });
 test("Auth dispatch is a distinct private binding and seals its source before credentials", () => {
   const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/thn-test-recovery-permissions.yml"), "utf8");
-  assert.match(workflow, /options: \[config, api, api-runtime, config-runtime, auth-provision, auth-enable, image-version, hub-version\]/);
+  assert.match(workflow, /options: \[config, api, api-runtime, api-runtime-corrected, config-runtime, auth-provision, auth-enable, image-version, hub-version\]/);
   assert.match(workflow, /inputs.service == 'auth-provision' && secrets.THN_AUTH_PROVISION_BINDING_JSON/);
   assert.match(fs.readFileSync(path.join(__dirname, "../tools/thn-test-recovery-permissions.js"), "utf8"), /"thn-test-auth-provision-permission-policy.js"/);
 });
