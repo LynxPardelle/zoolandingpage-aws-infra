@@ -36,6 +36,10 @@ See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
 Service identity scope, outputs, and independent deployment targets are in [docs/service-repository-bootstrap.md](docs/service-repository-bootstrap.md).
 The TEST frontend workflow deploys only the Frontend stack and fails closed when its immutable release ID is absent; service repository bootstrap stacks remain independent operator targets.
+The proposed standalone THN TEST runtime identity uses a separate, manual
+[three-resource bootstrap release](docs/thn-dedicated-identity-test.md); it is
+not an ordinary Frontend deployment and is not live merely because its source
+is merged.
 
 ## TEST Frontend Delivery Guardrails
 
