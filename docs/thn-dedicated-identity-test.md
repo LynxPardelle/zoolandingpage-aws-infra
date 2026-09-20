@@ -7,6 +7,7 @@ local tests do **not** establish that these resources exist in AWS.
 
 The owning workflow is `.github/workflows/thn-dedicated-identity-test.yml`.
 It accepts `verify` (read-only), `diagnose` (read-only postmortem of one failed
+`apply` change set), `inspect` (read-only CloudFormation events for one failed
 `apply`), or `apply` (one guarded update), a reviewed full
 TEST promotion SHA and an independently reviewed SHA-256 of the three CDK
 resource definitions. The workflow runs only on the exact TEST promotion merge
@@ -64,6 +65,14 @@ an AWS error code, never the service error message, template, object body, or
 credentials. Analyze that
 result and existing CloudFormation events before proposing a fix or another
 `apply`.
+
+When execution has started and the stack waiter fails, `inspect` uses the
+failed run ID, attempt, and source SHA to select only events with that run's
+CloudFormation client request token. It reports the protected stack status,
+allowlisted failing logical IDs and statuses, and fixed reason categories or
+IAM action names. It does not print the raw status reason or any event body,
+and returns before the update path. Use it before considering recovery or a
+second apply.
 
 After a successful `apply`, verify the new role ARN from the live IAM readback
 and configure `THN_DEDICATED_RUNTIME_CFN_ROLE_ARN` in the API proxy TEST
