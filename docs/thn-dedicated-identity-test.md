@@ -48,10 +48,13 @@ left for diagnosis, not automatically retried or deleted.
 For a failed `apply`, use `diagnose` with that run's ID, attempt, and source
 SHA. The source SHA must be the first parent of the new reviewed TEST promotion;
 the diagnostic cannot select an unrelated release. It checks asset encryption,
-whether the exact candidate object exists, and whether the exact change set
-exists. It never writes an object or executes a change set. Errors from guarded
-AWS calls report only an allowlisted stage and an AWS error code, never the
-service error message, template, object body, or credentials. Analyze that
+whether the exact candidate object exists, whether the exact change set exists,
+and whether its resource delta, parameters, Original template and Processed
+template match the reviewed candidate. It reports only fixed Boolean flags,
+not template or parameter values. It never writes an object or executes a
+change set. Errors from guarded AWS calls report only an allowlisted stage and
+an AWS error code, never the service error message, template, object body, or
+credentials. Analyze that
 result and existing CloudFormation events before proposing a fix or another
 `apply`.
 
