@@ -94,6 +94,11 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def templates_equivalent(expected: dict, observed: dict) -> bool:
+    """Preserve every JSON value while ignoring mapping insertion order."""
+    return canonical(expected) == canonical(observed)
+
+
 def validate_candidate(candidate: dict, expected_digest: str) -> None:
     if not _is_object(candidate) or set(candidate) != {"additions", "authority"} or not re.fullmatch(r"[a-f0-9]{64}", expected_digest or ""):
         _reject()
@@ -199,8 +204,8 @@ def changeset_diagnostic_flags(description: dict, pending_original: dict, pendin
         "nested": description.get("IncludeNestedStacks") is not True and not description.get("NextToken"),
         "guard": guard,
         "params": params,
-        "original": pending_original == composed,
-        "processed": pending_processed == composed_processed,
+        "original": templates_equivalent(pending_original, composed),
+        "processed": templates_equivalent(pending_processed, composed_processed),
     }
     return "_".join(key + str(int(value)) for key, value in flags.items())
 
@@ -497,7 +502,7 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
         review_changeset(description)
         pending_original = _template(deploy.get_template(StackName=stack_id, ChangeSetName=change_id, TemplateStage="Original"))
         pending_processed = _template(deploy.get_template(StackName=stack_id, ChangeSetName=change_id, TemplateStage="Processed"))
-        if pending_original != composed or pending_processed != composed_processed:
+        if not templates_equivalent(pending_original, composed) or not templates_equivalent(pending_processed, composed_processed):
             _reject()
 
     aws_stage("changeset_review", review)
@@ -507,8 +512,8 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     aws_stage("stack_wait", deploy.get_waiter("stack_update_complete").wait, StackName=stack_id, WaiterConfig={"Delay": 5, "MaxAttempts": 90})
     final = read_stack()
     if (final["StackId"] != stack_id or _snapshot_parameters(final) != parameters
-            or _template(lookup.get_template(StackName=stack_id, TemplateStage="Original")) != composed
-            or _template(lookup.get_template(StackName=stack_id, TemplateStage="Processed")) != composed_processed):
+            or not templates_equivalent(_template(lookup.get_template(StackName=stack_id, TemplateStage="Original")), composed)
+            or not templates_equivalent(_template(lookup.get_template(StackName=stack_id, TemplateStage="Processed")), composed_processed)):
         _reject()
     for logical, resource_type in ADDITIONS.items():
         resource = lookup.describe_stack_resource(StackName=stack_id, LogicalResourceId=logical).get("StackResourceDetail", {})

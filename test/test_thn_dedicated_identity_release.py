@@ -1,6 +1,7 @@
 """Offline safety checks for the exact THN TEST IAM addition."""
 
 import copy
+from collections import OrderedDict
 import hashlib
 import importlib.util
 import inspect
@@ -226,6 +227,16 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         self.assertNotIn("Opaque", profile)
         self.assertNotIn("private", profile)
         self.assertNotIn("ThnDedicatedRuntimeTestGithubPolicy", profile)
+
+    def test_template_equivalence_ignores_order_but_not_content(self):
+        expected = OrderedDict([("Resources", {"A": {"Type": "AWS::IAM::Role"}}),
+                                ("Parameters", {"Opaque": {"Type": "String"}})])
+        observed = OrderedDict(reversed(list(expected.items())))
+        self.assertNotEqual(expected, observed)
+        self.assertTrue(self.release.templates_equivalent(expected, observed))
+        changed = copy.deepcopy(observed)
+        changed["Resources"]["A"]["Type"] = "AWS::IAM::Policy"
+        self.assertFalse(self.release.templates_equivalent(expected, changed))
 
 
 if __name__ == "__main__":
