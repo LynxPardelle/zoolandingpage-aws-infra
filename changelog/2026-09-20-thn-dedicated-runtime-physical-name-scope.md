@@ -24,8 +24,21 @@ execution document matches the guarded baseline. The manual revision workflow
 requires an exact reviewed TEST source and digest, then rejects any change set
 that changes another resource or replaces the policy.
 
-This is source-only preparation. No corrected IAM policy has been published or
-applied, and no recovery or second runtime create has been attempted. The
-existing dedicated-identity workflow supports initial resource Adds; the
-separately reviewed one-policy revision and stack recovery are required before
-a new runtime create.
+The correction was promoted to TEST as source only. Its manual read-only
+`verify` passed. One authorized `apply` created an available change set with
+exactly one nonreplacing execution-policy modification; both pending templates
+matched the reviewed candidate. The guard then rejected the response because
+it required `ChangeSetType`, which AWS omits from `DescribeChangeSet` even
+though the request explicitly specified `UPDATE`. The change set was not
+executed: the live execution policy remains at its old baseline, the
+bootstrap stack is `UPDATE_COMPLETE`, and the runtime stack remains
+`ROLLBACK_FAILED`.
+
+The revision guard now accepts an omitted response type only in this workflow,
+whose `CreateChangeSet` request is fixed to `UPDATE`; it still rejects an
+explicit non-`UPDATE` value and any unexpected resource, property, or
+replacement. A regression test reproduces the observed response. No retry,
+recovery, or second runtime create has occurred. The existing
+dedicated-identity workflow supports initial resource Adds, not this policy
+revision; the guarded policy update and separate stack recovery are required
+before another runtime create.
