@@ -13,6 +13,7 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 - Optional Route53 alias upserts, disabled by default.
 - Retained, branch-bound GitHub OIDC and CloudFormation execution roles for Data Spaces, Commerce, Integrations, and Notifications.
 - Bounded Runtime Read deployment identities; TEST alone adds the AWS-managed `LanguageExtensions` transform and narrowly scoped alias/version permissions required by its immutable release, while production keeps its existing scope.
+- A separate TEST-only CloudFormation execution identity for the proposed THN runtime API stack; it does not grant permissions to update the shared API stack. This identity is prepared locally and is not yet deployed.
 
 ## What This Does Not Touch
 
@@ -35,6 +36,10 @@ See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
 Service identity scope, outputs, and independent deployment targets are in [docs/service-repository-bootstrap.md](docs/service-repository-bootstrap.md).
 The TEST frontend workflow deploys only the Frontend stack and fails closed when its immutable release ID is absent; service repository bootstrap stacks remain independent operator targets.
+The proposed standalone THN TEST runtime identity uses a separate, manual
+[three-resource bootstrap release](docs/thn-dedicated-identity-test.md); it is
+not an ordinary Frontend deployment and is not live merely because its source
+is merged.
 
 ## TEST Frontend Delivery Guardrails
 

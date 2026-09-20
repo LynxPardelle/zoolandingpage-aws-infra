@@ -18,6 +18,11 @@ const roles = ["zoolanding-content-hub-test-deploy", "zoolanding-deployer-image-
 
 test("TEST adds only three separate policies and preserves every pre-existing synthesized value", () => {
   const template = synth("test");
+  const newResources = Object.entries(template.Resources).filter(([logical, resource]) =>
+    logical.startsWith("ThnDedicatedRuntimeTest")
+    && (resource.Type === "AWS::IAM::Role" || resource.Type === "AWS::IAM::Policy"));
+  assert.equal(newResources.length, 3, "only the separate THN role and its two policies may be added");
+  for (const [logical] of newResources) delete template.Resources[logical];
   // The independent recovery revision is proved exactly before removing it
   // from this older three-supplement baseline assertion. Never reset the
   // original hash or weaken the initial-only dispatcher's change-set guard.
