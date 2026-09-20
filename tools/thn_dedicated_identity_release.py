@@ -21,7 +21,7 @@ GITHUB_POLICY = "ThnDedicatedRuntimeTestGithubPolicy"
 EXECUTION_POLICY = "ThnDedicatedRuntimeTestExecutionPolicy"
 ADDITIONS = {
     EXECUTION_ROLE: "AWS::IAM::Role",
-    GITHUB_POLICY: "AWS::IAM::Policy",
+    GITHUB_POLICY: "AWS::IAM::ManagedPolicy",
     EXECUTION_POLICY: "AWS::IAM::Policy",
 }
 SAFE_STAGES = frozenset({
@@ -30,7 +30,7 @@ SAFE_STAGES = frozenset({
     "candidate_read_publisher", "candidate_read_deploy", "baseline_before_changeset",
     "changeset_create", "changeset_wait", "changeset_review", "changeset_execute",
     "stack_wait", "final_readback", "postmortem_object", "postmortem_changeset",
-    "postmortem_events", "postmortem_policy", "postmortem_iam",
+    "postmortem_events", "postmortem_policy", "postmortem_iam", "preflight_role", "preflight_events",
 })
 
 
@@ -173,13 +173,15 @@ def _validate_additions(additions: dict) -> None:
     trust = role["Properties"].get("AssumeRolePolicyDocument", {}).get("Statement")
     if not isinstance(trust, list) or len(trust) != 1 or trust[0].get("Effect") != "Allow" or trust[0].get("Principal") != {"Service": "cloudformation.amazonaws.com"} or trust[0].get("Action") != "sts:AssumeRole":
         _reject()
-    for logical, name, target in (
-        (GITHUB_POLICY, "ThnDedicatedRuntimeTestGithubV1", GITHUB_ROLE),
-        (EXECUTION_POLICY, "ThnDedicatedRuntimeTestExecutionV1", EXECUTION_ROLE),
-    ):
-        properties = additions[logical]["Properties"]
-        if properties.get("PolicyName") != name or properties.get("Roles") != [{"Ref": target}] or not _is_object(properties.get("PolicyDocument")):
-            _reject()
+    github = additions[GITHUB_POLICY]["Properties"]
+    execution = additions[EXECUTION_POLICY]["Properties"]
+    if (github.get("ManagedPolicyName") != "ThnDedicatedRuntimeTestGithubV1"
+            or github.get("Roles") != [{"Ref": GITHUB_ROLE}]
+            or not _is_object(github.get("PolicyDocument"))
+            or execution.get("PolicyName") != "ThnDedicatedRuntimeTestExecutionV1"
+            or execution.get("Roles") != [{"Ref": EXECUTION_ROLE}]
+            or not _is_object(execution.get("PolicyDocument"))):
+        _reject()
 
 
 def canonical(value: object) -> bytes:
@@ -229,7 +231,10 @@ def compose_template(original: dict, additions: dict) -> dict:
         _reject()
     existing_names = [resource.get("Properties", {}).get("RoleName") for resource in original["Resources"].values() if _is_object(resource)]
     existing_policies = [resource.get("Properties", {}).get("PolicyName") for resource in original["Resources"].values() if _is_object(resource)]
-    if additions[EXECUTION_ROLE]["Properties"]["RoleName"] in existing_names or any(additions[logical]["Properties"]["PolicyName"] in existing_policies for logical in (GITHUB_POLICY, EXECUTION_POLICY)):
+    if (additions[EXECUTION_ROLE]["Properties"]["RoleName"] in existing_names
+            or additions[EXECUTION_POLICY]["Properties"]["PolicyName"] in existing_policies
+            or any(resource.get("Properties", {}).get("ManagedPolicyName") == "ThnDedicatedRuntimeTestGithubV1"
+                   for resource in original["Resources"].values() if _is_object(resource))):
         _reject()
     result = copy.deepcopy(original)
     result["Resources"].update(copy.deepcopy(additions))
@@ -237,10 +242,11 @@ def compose_template(original: dict, additions: dict) -> dict:
 
 
 def review_changeset(description: dict) -> None:
-    """Reject any native change set other than three nonreplacing Adds."""
+    """Accept only the retained role import and two nonreplacing policy Adds."""
     if (not _is_object(description) or description.get("Status") != "CREATE_COMPLETE"
             or description.get("ExecutionStatus") != "AVAILABLE"
             or description.get("ChangeSetType", "UPDATE") != "UPDATE"
+            or description.get("ImportExistingResources") is not True
             or description.get("IncludeNestedStacks") is True or description.get("NextToken")
             or not isinstance(description.get("Changes"), list)
             or len(description["Changes"]) != len(ADDITIONS)):
@@ -249,7 +255,8 @@ def review_changeset(description: dict) -> None:
     for change in description["Changes"]:
         resource = change.get("ResourceChange") if _is_object(change) else None
         if (change.get("Type") != "Resource" or not _is_object(resource)
-                or resource.get("Action") != "Add" or resource.get("LogicalResourceId") not in ADDITIONS
+                or resource.get("LogicalResourceId") not in ADDITIONS
+                or resource.get("Action") != ("Import" if resource["LogicalResourceId"] == EXECUTION_ROLE else "Add")
                 or resource.get("ResourceType") != ADDITIONS[resource["LogicalResourceId"]]
                 or resource.get("Replacement") not in (None, "False")
                 or resource.get("ChangeSetId") or resource.get("ModuleInfo")
@@ -288,12 +295,12 @@ def changeset_diagnostic_flags(description: dict, pending_original: dict, pendin
         "mode": description.get("ChangeSetType", "UPDATE") == "UPDATE",
         "count": len(changes) == len(ADDITIONS),
         "kind": len(resources) == len(changes) and all(change.get("Type") == "Resource" for change in changes),
-        "actions": len(resources) == len(changes) and all(item.get("Action") == "Add" for item in resources),
+        "actions": len(resources) == len(changes) and all(item.get("Action") == ("Import" if item.get("LogicalResourceId") == EXECUTION_ROLE else "Add") for item in resources),
         "ids": len(ids) == len(ADDITIONS) and set(ids) == set(ADDITIONS),
         "types": len(resources) == len(ADDITIONS) and all(item.get("ResourceType") == ADDITIONS.get(item.get("LogicalResourceId")) for item in resources),
         "replacement": len(resources) == len(ADDITIONS) and all(item.get("Replacement") in (None, "False") for item in resources),
         "metadata": len(resources) == len(ADDITIONS) and all(not item.get("ChangeSetId") and not item.get("ModuleInfo") for item in resources),
-        "nested": description.get("IncludeNestedStacks") is not True and not description.get("NextToken"),
+        "nested": description.get("IncludeNestedStacks") is not True and not description.get("NextToken") and description.get("ImportExistingResources") is True,
         "guard": guard,
         "params": params,
         "original": templates_equivalent(pending_original, composed),
@@ -308,7 +315,7 @@ def template_diff_profile(expected: dict, observed: dict) -> str:
         "AWSTemplateFormatVersion", "Description", "Metadata", "Parameters", "Mappings",
         "Conditions", "Transform", "Resources", "Outputs", "Rules", "Type",
         "Properties", "DeletionPolicy", "UpdateReplacePolicy", "Default", "NoEcho",
-        "PolicyName", "PolicyDocument", "AssumeRolePolicyDocument", "RoleName",
+        "PolicyName", "ManagedPolicyName", "PolicyDocument", "AssumeRolePolicyDocument", "RoleName",
         "Roles", "Statement", "Effect", "Action", "Resource", "Principal",
         "Condition", "StringEquals", "StringLike", "Ref", "Fn::GetAtt", "Fn::Sub",
         "Fn::Join", "Value", "Export", "DependsOn", "Tags", "Key", "Name",
@@ -410,13 +417,32 @@ def validate_asset_encryption(configuration: dict, key: dict) -> str:
     return key["Arn"]
 
 
-def validate_final_policies(github: dict, execution: dict) -> None:
+def validate_retained_execution_role(role: dict, inline: dict, attached: dict, account: str) -> None:
+    name = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+    trust = role.get("AssumeRolePolicyDocument", {}) if _is_object(role) else {}
+    statement = trust.get("Statement") if _is_object(trust) else None
+    if (not _is_object(role) or role.get("RoleName") != name
+            or role.get("Arn") != f"arn:aws:iam::{account}:role/{name}"
+            or role.get("Path") != "/" or role.get("PermissionsBoundary")
+            or role.get("Description") != "Execution identity for the standalone THN TEST runtime API stack only."
+            or statement != [{"Effect": "Allow", "Principal": {"Service": "cloudformation.amazonaws.com"},
+                              "Action": "sts:AssumeRole"}]
+            or not _is_object(inline) or inline.get("IsTruncated") or inline.get("PolicyNames") != []
+            or not _is_object(attached) or attached.get("IsTruncated") or attached.get("AttachedPolicies") != []):
+        _reject()
+
+
+def validate_final_policies(github: dict, execution: dict, attached: dict, account: str) -> None:
     for value in (github, execution):
         names = value.get("PolicyNames") if _is_object(value) else None
         if value.get("IsTruncated") or not isinstance(names, list) or len(names) != len(set(names)):
             _reject()
-    if ("ThnDedicatedRuntimeTestGithubV1" not in github["PolicyNames"]
-            or execution["PolicyNames"] != ["ThnDedicatedRuntimeTestExecutionV1"]):
+    policies = attached.get("AttachedPolicies") if _is_object(attached) else None
+    if ("ThnDedicatedRuntimeTestGithubV1" in github["PolicyNames"]
+            or execution["PolicyNames"] != ["ThnDedicatedRuntimeTestExecutionV1"]
+            or not _is_object(attached) or attached.get("IsTruncated") or not isinstance(policies, list)
+            or len(policies) != 1 or not _is_object(policies[0])
+            or policies[0].get("PolicyArn") != f"arn:aws:iam::{account}:policy/ThnDedicatedRuntimeTestGithubV1"):
         _reject()
 
 
@@ -432,7 +458,7 @@ def _assumed_client(sts, authority: dict, kind: str, service: str, region: str):
 
 
 def run_release(operation: str, candidate: dict, expected_digest: str, env: dict[str, str]) -> str:
-    """Read-only verify/postmortem, or apply only one reviewed three-Add UPDATE."""
+    """Read-only verify/postmortem, or import one retained role and add two policies."""
     if (operation not in ("verify", "diagnose", "inspect", "apply") or env.get("GITHUB_ACTIONS") != "true"
             or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
             or env.get("GITHUB_REPOSITORY") != "LynxPardelle/zoolandingpage-aws-infra"
@@ -533,12 +559,29 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     inline = lookup_iam.list_role_policies(RoleName=github_role_name)
     if inline.get("IsTruncated") or "ThnDedicatedRuntimeTestGithubV1" in inline.get("PolicyNames", []):
         _reject()
-    try:
-        lookup_iam.get_role(RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec")
-    except Exception as error:
-        if getattr(error, "response", {}).get("Error", {}).get("Code") != "NoSuchEntity":
-            raise
-    else:
+    github_attached = lookup_iam.list_attached_role_policies(RoleName=github_role_name)
+    if github_attached.get("IsTruncated") or github_attached.get("AttachedPolicies") != []:
+        _reject()
+    execution_role_name = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+    aws_stage("preflight_role", validate_retained_execution_role,
+        aws_stage("preflight_role", lookup_iam.get_role, RoleName=execution_role_name).get("Role", {}),
+        aws_stage("preflight_role", lookup_iam.list_role_policies, RoleName=execution_role_name),
+        aws_stage("preflight_role", lookup_iam.list_attached_role_policies, RoleName=execution_role_name), account)
+    role_event_found = False
+    next_token = None
+    for _ in range(3):
+        request = {"StackName": stack_id}
+        if next_token:
+            request["NextToken"] = next_token
+        event_page = aws_stage("preflight_events", deploy.describe_stack_events, **request)
+        role_event_found = role_event_found or any(
+            _is_object(event) and event.get("ClientRequestToken") == "thn-dedicated-identity-35488827664-1"
+            and event.get("LogicalResourceId") == EXECUTION_ROLE and event.get("ResourceStatus") == "CREATE_COMPLETE"
+            for event in event_page.get("StackEvents", []))
+        next_token = event_page.get("NextToken")
+        if role_event_found or not next_token:
+            break
+    if not role_event_found:
         _reject()
 
     def baseline() -> None:
@@ -619,7 +662,8 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
         ChangeSetType="UPDATE", TemplateURL=f"https://{bucket}.s3.{region}.amazonaws.com/{quote(key)}",
         RoleARN=authority["cfn"],
         Parameters=[{"ParameterKey": item["ParameterKey"], "UsePreviousValue": True} for item in parameters],
-        Capabilities=["CAPABILITY_NAMED_IAM"], IncludeNestedStacks=False, ClientToken=name)
+        Capabilities=["CAPABILITY_NAMED_IAM"], IncludeNestedStacks=False,
+        ImportExistingResources=True, ClientToken=name)
     change_id = created.get("Id", "")
     if created.get("StackId") != stack_id or not re.fullmatch(rf"arn:aws:cloudformation:{region}:{account}:changeSet/{name}/[A-Za-z0-9-]+", change_id):
         _reject()
@@ -652,14 +696,16 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     for logical, resource_type in ADDITIONS.items():
         resource = lookup.describe_stack_resource(StackName=stack_id, LogicalResourceId=logical).get("StackResourceDetail", {})
         if (resource.get("StackId") != stack_id or resource.get("LogicalResourceId") != logical
-                or resource.get("ResourceType") != resource_type or resource.get("ResourceStatus") != "CREATE_COMPLETE"):
+                or resource.get("ResourceType") != resource_type
+                or resource.get("ResourceStatus") != ("IMPORT_COMPLETE" if logical == EXECUTION_ROLE else "CREATE_COMPLETE")):
             _reject()
     created_role = lookup_iam.get_role(RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec").get("Role", {})
     if created_role.get("Arn") != f"arn:aws:iam::{account}:role/zoolanding-deployer-thn-auth-runtime-test-cfn-exec":
         _reject()
     validate_final_policies(
         lookup_iam.list_role_policies(RoleName=github_role_name),
-        lookup_iam.list_role_policies(RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec"))
+        lookup_iam.list_role_policies(RoleName=execution_role_name),
+        lookup_iam.list_attached_role_policies(RoleName=github_role_name), account)
     return "applied"
 
 
