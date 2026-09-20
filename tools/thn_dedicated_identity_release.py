@@ -30,6 +30,7 @@ SAFE_STAGES = frozenset({
     "candidate_read_publisher", "candidate_read_deploy", "baseline_before_changeset",
     "changeset_create", "changeset_wait", "changeset_review", "changeset_execute",
     "stack_wait", "final_readback", "postmortem_object", "postmortem_changeset",
+    "postmortem_events",
 })
 
 
@@ -57,6 +58,45 @@ def postmortem_target(run_id: str, attempt: str, source_sha: str, digest: str) -
         _reject()
     return {"name": f"thn-dedicated-identity-{run_id}-{attempt}",
             "key": f"thn-dedicated-identity/{run_id}/{attempt}/{source_sha}/{digest}.json"}
+
+
+def stack_event_profile(events: list[dict], token: str, existing_resources: dict) -> str:
+    """Report only fixed classifications for events belonging to one failed run."""
+    if (not isinstance(events, list) or not re.fullmatch(r"thn-dedicated-identity-[1-9][0-9]*-[1-9][0-9]*", token or "")
+            or not _is_object(existing_resources) or any(not _is_object(event) for event in events)):
+        _reject()
+    failures = []
+    for event in events:
+        if event.get("ClientRequestToken") != token:
+            continue
+        status = event.get("ResourceStatus")
+        if status not in ("CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED", "UPDATE_ROLLBACK_FAILED"):
+            continue
+        logical = event.get("LogicalResourceId")
+        resource = logical if logical in ADDITIONS or logical in existing_resources else "other"
+        reason = event.get("ResourceStatusReason", "")
+        lowered = reason.lower() if isinstance(reason, str) else ""
+        if ("accessdenied" in lowered or "access denied" in lowered or "not authorized" in lowered
+                or "insufficient permissions" in lowered):
+            category = "access_denied"
+        elif "alreadyexists" in lowered or "already exists" in lowered:
+            category = "already_exists"
+        elif "cannot be assumed" in lowered or "unable to assume" in lowered:
+            category = "role_assumption"
+        elif "malformedpolicy" in lowered or "malformed policy" in lowered:
+            category = "malformed_policy"
+        elif "limitexceeded" in lowered or "limit exceeded" in lowered or "maximum policy size" in lowered:
+            category = "limit_exceeded"
+        elif "nosuchentity" in lowered or "does not exist" in lowered:
+            category = "missing_dependency"
+        elif "invalidrequest" in lowered or "invalid request" in lowered:
+            category = "invalid_request"
+        else:
+            category = "unclassified"
+        actions = ("CreateRole", "PutRolePolicy", "PassRole", "GetRole", "DeleteRole", "AttachRolePolicy", "TagRole")
+        action = next((name for name in actions if f"iam:{name.lower()}" in lowered), "none")
+        failures.append(f"{resource}_{status}_{category}_iam_{action}")
+    return f"matched_failures{len(failures)}_" + ("__".join(failures[:5]) if failures else "none")
 
 
 def _reject() -> None:
@@ -341,7 +381,7 @@ def _assumed_client(sts, authority: dict, kind: str, service: str, region: str):
 
 def run_release(operation: str, candidate: dict, expected_digest: str, env: dict[str, str]) -> str:
     """Read-only verify/postmortem, or apply only one reviewed three-Add UPDATE."""
-    if (operation not in ("verify", "diagnose", "apply") or env.get("GITHUB_ACTIONS") != "true"
+    if (operation not in ("verify", "diagnose", "inspect", "apply") or env.get("GITHUB_ACTIONS") != "true"
             or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
             or env.get("GITHUB_REPOSITORY") != "LynxPardelle/zoolandingpage-aws-infra"
             or env.get("GITHUB_REF") != "refs/heads/test"
@@ -364,6 +404,39 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     lookup = _assumed_client(sts, authority, "lookup", "cloudformation", region)
     deploy = _assumed_client(sts, authority, "deploy", "cloudformation", region)
     lookup_iam = _assumed_client(sts, authority, "lookup", "iam", region)
+
+    if operation == "inspect":
+        target = postmortem_target(env.get("THN_FAILED_RUN_ID", ""), env.get("THN_FAILED_RUN_ATTEMPT", ""),
+                                   env.get("THN_FAILED_SOURCE_SHA", ""), expected_digest)
+        stacks = aws_stage("postmortem_events", lookup.describe_stacks, StackName=stack_name).get("Stacks", [])
+        if len(stacks) != 1:
+            _reject()
+        failed_stack = stacks[0]
+        stack_id = failed_stack.get("StackId", "")
+        if (failed_stack.get("StackName") != stack_name
+                or not re.fullmatch(rf"arn:aws:cloudformation:{region}:{account}:stack/{stack_name}/[A-Za-z0-9-]+", stack_id)
+                or failed_stack.get("RoleARN") != authority["cfn"]
+                or failed_stack.get("EnableTerminationProtection") is not True):
+            _reject()
+        status = failed_stack.get("StackStatus", "")
+        if status not in ("UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "UPDATE_ROLLBACK_FAILED", "UPDATE_ROLLBACK_IN_PROGRESS"):
+            _reject()
+        found = []
+        next_token = None
+        for _ in range(3):
+            request = {"StackName": stack_id}
+            if next_token:
+                request["NextToken"] = next_token
+            page = aws_stage("postmortem_events", deploy.describe_stack_events, **request)
+            events = page.get("StackEvents", [])
+            if not isinstance(events, list):
+                _reject()
+            found.extend(event for event in events if _is_object(event) and event.get("ClientRequestToken") == target["name"])
+            next_token = page.get("NextToken")
+            if not next_token:
+                break
+        profile = stack_event_profile(found, target["name"], {GITHUB_ROLE: True, stack_name: True})
+        return f"inspected_stack_{status}_{profile}"
 
     def read_stack() -> dict:
         stacks = lookup.describe_stacks(StackName=stack_name).get("Stacks", [])
@@ -533,7 +606,7 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--operation", choices=("verify", "diagnose", "apply"), required=True)
+    parser.add_argument("--operation", choices=("verify", "diagnose", "inspect", "apply"), required=True)
     parser.add_argument("--candidate", required=True)
     args = parser.parse_args()
     try:

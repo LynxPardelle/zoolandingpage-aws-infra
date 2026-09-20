@@ -6,7 +6,7 @@ on:
       operation:
         description: Read-only verification/postmortem or the exact reviewed three-resource IAM addition
         type: choice
-        options: [verify, diagnose, apply]
+        options: [verify, diagnose, inspect, apply]
         default: verify
         required: true
       reviewed_source_sha:
@@ -78,7 +78,7 @@ jobs:
           test "$GITHUB_SHA" = "$REVIEWED_SOURCE_SHA"
           [[ "$REVIEWED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$REVIEWED_ADDITIONS_SHA256" =~ ^[a-f0-9]{64}$ ]]
-          if test "$THN_OPERATION" = diagnose; then
+          if test "$THN_OPERATION" = diagnose || test "$THN_OPERATION" = inspect; then
             [[ "$THN_FAILED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
             [[ "$THN_FAILED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
             [[ "$THN_FAILED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
@@ -93,7 +93,7 @@ jobs:
           test -n "$first_parent"
           test -n "$second_parent"
           test -z "${extra:-}"
-          if test "$THN_OPERATION" = diagnose; then
+          if test "$THN_OPERATION" = diagnose || test "$THN_OPERATION" = inspect; then
             git rev-list --first-parent -n 5 "$first_parent" | grep -Fqx "$THN_FAILED_SOURCE_SHA"
           fi
           test "$second_parent" = "$(git rev-parse refs/remotes/origin/dev)"

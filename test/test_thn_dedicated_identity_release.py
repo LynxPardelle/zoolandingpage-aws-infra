@@ -238,6 +238,32 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         changed["Resources"]["A"]["Type"] = "AWS::IAM::Policy"
         self.assertFalse(self.release.templates_equivalent(expected, changed))
 
+    def test_stack_event_profile_is_bound_to_run_and_redacts_reason(self):
+        token = "thn-dedicated-identity-35488827664-1"
+        secret = "private-customer-value"
+        events = [
+            {"ClientRequestToken": "unrelated", "LogicalResourceId": self.role,
+             "ResourceStatus": "CREATE_FAILED", "ResourceStatusReason": secret},
+            {"ClientRequestToken": token, "LogicalResourceId": self.role,
+             "ResourceStatus": "CREATE_FAILED",
+             "ResourceStatusReason": "User is not authorized to perform iam:CreateRole on " + secret},
+        ]
+        profile = self.release.stack_event_profile(events, token, self.original["Resources"])
+        self.assertIn("CREATE_FAILED", profile)
+        self.assertIn("access_denied", profile)
+        self.assertIn("iam_CreateRole", profile)
+        self.assertNotIn(secret, profile)
+        self.assertEqual(profile.count("CREATE_FAILED"), 1)
+
+    def test_stack_event_profile_rejects_unexpected_shape(self):
+        with self.assertRaises(ValueError):
+            self.release.stack_event_profile("not-events", "thn-dedicated-identity-1-1", {})
+
+    def test_inspect_returns_before_mutating_aws_call(self):
+        source = inspect.getsource(self.release.run_release)
+        self.assertLess(source.index('if operation == "inspect":'), source.index('stack = read_stack()'))
+        self.assertLess(source.index('if operation == "inspect":'), source.index('publisher.put_object'))
+
 
 if __name__ == "__main__":
     unittest.main()
