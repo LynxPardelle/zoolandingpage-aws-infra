@@ -46,7 +46,7 @@ test("CLI reads only environment selection, emits one mode and sanitizes failure
   }
 });
 test("selected workflow cannot transport an ordinary assembly or obtain deploy credentials", () => {
-  const workflow = fs.readFileSync(path.join(root, ".github/workflows/deploy-test.yml"), "utf8");
+  const workflow = fs.readFileSync(path.join(root, ".github/workflows/deploy-test.yml"), "utf8").replace(/\r\n/g, "\n");
   const validate = workflow.split("  validate:\n")[1].split("  deploy:\n")[0];
   const deploy = workflow.split("  deploy:\n")[1];
   assert.match(deploy.split("    steps:")[0], /if: needs.validate.outputs.promotion_mode == 'legacy'/);

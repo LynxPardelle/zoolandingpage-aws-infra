@@ -2,14 +2,15 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path");
 const { sha, canonical } = require("../tools/thn-test-prerequisites");
 const policy = require("../tools/thn-test-recovery-permission-policy");
-const { fixture, original, runtimeFixture } = require("./fixtures/thn-recovery-bindings");
+const { fixture, original, runtimeFixture, correctedRuntimeFixture } = require("./fixtures/thn-recovery-bindings");
 const file = path.join(__dirname, "../tools/thn-test-recovery-permissions.js");
 const api = () => { assert.ok(fs.existsSync(file), "missing exact recovery permission revision runner"); return require(file); };
 const hash = value => sha(canonical(value));
 const resolved = (document, values, service, account) => ["image-version", "hub-version"].includes(service)
   ? require("../tools/thn-test-permissions").resolvedPolicy(document, account) : policy.resolve(document, values);
 function setup(service = "config") {
-  const { binding, config } = service === "api-runtime" ? runtimeFixture() : fixture(service), p = policy.TARGETS[service];
+  const { binding, config } = service === "api-runtime" ? runtimeFixture()
+    : service === "api-runtime-corrected" ? correctedRuntimeFixture() : fixture(service), p = policy.TARGETS[service];
   config.sourceSha = "1".repeat(40); config.runId = "123"; config.runAttempt = "1";
   const stackName = "ZoolandingTest-Zoolandingpage-test-" + (service.startsWith("config") ? "Frontend" : "ServiceRepositoryBootstrap");
   const stackId = `arn:aws:cloudformation:us-east-1:${config.account}:stack/${stackName}/synthetic`;
@@ -22,10 +23,16 @@ function setup(service = "config") {
     RoleId: "AROA" + "Q".repeat(16), AssumeRolePolicyDocument: { Statement: [] } }, inline: { Existing: { Statement: [] } }, attached: [] };
   const before = original(service);
   if (["image-version", "hub-version"].includes(service)) role.inline[p.policyName] = resolved(before.Resources[p.logical].Properties.PolicyDocument, {}, service, config.account);
-  if (["api-runtime", "config-runtime"].includes(service)) {
+  if (["api-runtime", "api-runtime-corrected", "config-runtime"].includes(service)) {
     before.Resources.PriorRecovery = { Type: "AWS::IAM::RolePolicy", Properties: {
       RoleName: p.role, PolicyName: policy.POLICY_NAME, PolicyDocument: { Statement: [] } } };
     role.inline[policy.POLICY_NAME] = { Statement: [] };
+  }
+  if (service === "api-runtime-corrected") {
+    Object.assign(before.Parameters, policy.parameterDefinitions("api-runtime"));
+    before.Resources.ThnApiRuntimeProvisioningPolicy = { Type: "AWS::IAM::RolePolicy", Properties: {
+      RoleName: p.role, PolicyName: "ThnTestRuntimeProvisioningV1", PolicyDocument: { Statement: [] } } };
+    role.inline.ThnTestRuntimeProvisioningV1 = { Statement: [] };
   }
   const after = policy.composeTemplate(before, service);
   const ledger = { schemaVersion: 1, service, environment: "test", domain: "thehairnarrative.com", sourceSha: config.sourceSha,
@@ -242,7 +249,7 @@ function revisionAWS(v) {
   v.config.authorityAnchors.kmsKey = sha(kms); v.config.authorityAnchors.bucketPolicy = hash(bucketPolicy);
   const state = { writes: [], owner: { StackName: v.authority.stackName, StackId: v.stackId,
     StackStatus: "UPDATE_COMPLETE", RoleARN: v.authority.cfn, EnableTerminationProtection: true,
-    Parameters: [{ ParameterKey: "ExistingSecret", ParameterValue: "****" }] },
+    Parameters: Object.keys(v.before.Parameters).map(ParameterKey => ({ ParameterKey, ParameterValue: "****" })) },
     template: structuredClone(v.before), role: structuredClone(v.role), object: null, executed: false, hook: null };
   state.aws = (service, action, input, env, outputFile) => {
     if (service === "sts") return { AssumedRoleUser: { Arn: `arn:aws:sts::${v.config.account}:assumed-role/${input.RoleArn.split("/").at(-1)}/${input.RoleSessionName}` },
@@ -439,7 +446,7 @@ test("Auth tagging Modify rejects replacement, wrong identity, unrelated changes
   }
 });
 
-for (const service of ["config", "api", "api-runtime", "config-runtime", "auth-provision"]) {
+for (const service of ["config", "api", "api-runtime", "api-runtime-corrected", "config-runtime", "auth-provision"]) {
   test(`${service}: real revision orchestration adds one policy and preserves prior trust and masked values`, async () => {
     assert.equal(typeof api().runRevision, "function");
     const v = setup(service), aws = revisionAWS(v), before = structuredClone(aws.role);

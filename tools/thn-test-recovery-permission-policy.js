@@ -1,6 +1,7 @@
 "use strict";
 const { canonical, sha } = require("./thn-test-prerequisites");
 const runtime = require("./thn-test-api-runtime-permission-policy");
+const runtimeCorrected = require("./thn-test-api-runtime-package-correction-policy");
 const auth = require("./thn-test-auth-provision-permission-policy");
 const image = require("./thn-test-image-version-permission-policy");
 const hub = require("./thn-test-hub-version-permission-policy");
@@ -11,6 +12,7 @@ const TARGETS = Object.freeze({
   "hub-version": hub.TARGET,
   "auth-provision": auth.TARGET,
   "api-runtime": runtime.TARGET,
+  "api-runtime-corrected": runtimeCorrected.TARGET,
   "config-runtime": { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigRuntimeInspectionPolicy",
     prefix: "ThnConfigRuntime", service: "zoolanding-config-authoring-test", owner: "certificate", policyName: "ThnTestRuntimeInspectionV1" },
   config: { role: "zoolanding-config-authoring-test-deploy", logical: "ThnConfigTestRecoveryPolicy",
@@ -54,6 +56,7 @@ function parameterDefinitions(service) {
   if (service === "hub-version") return {};
   if (service === "auth-provision") return auth.parameterDefinitions();
   if (service === "api-runtime") return runtime.parameterDefinitions();
+  if (service === "api-runtime-corrected") return runtimeCorrected.parameterDefinitions();
   if (service === "config-runtime") return { ThnConfigRuntimeFunctionArn: { Type: "String", NoEcho: true, MinLength: 1, MaxLength: 2048 } };
   const { prefix } = target(service);
   return Object.fromEntries(["StackArn", "PackageObjectArn", "PackageVersionId", "RecordObjectArn", "RecordVersionId",
@@ -67,6 +70,7 @@ function policyResource(service) {
   if (service === "hub-version") return hub.policyResource();
   if (service === "auth-provision") return auth.policyResource();
   if (service === "api-runtime") return runtime.policyResource();
+  if (service === "api-runtime-corrected") return runtimeCorrected.policyResource();
   const { role, prefix } = target(service);
   const statement = (Action, Resource, Condition) => ({ Effect: "Allow", Action, Resource, ...(Condition ? { Condition } : {}) });
   if (service === "config-runtime") return { Type: "AWS::IAM::RolePolicy", Properties: { RoleName: role,
@@ -93,6 +97,7 @@ function validateBindings(binding, config) {
   if (config.service === "hub-version") return hub.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   if (config.service === "auth-provision") return auth.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   if (config.service === "api-runtime") return runtime.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
+  if (config.service === "api-runtime-corrected") return runtimeCorrected.validateBindings(binding, {...config, anchors: config.anchors || BINDING_ANCHORS});
   try {
     const service = config.service, selected = target(service), anchors = config.anchors || BINDING_ANCHORS;
     const recoveryService = service === "config-runtime" ? "config" : service, functions = functionNames(service);
@@ -157,6 +162,12 @@ function composeTemplate(original, service) {
   if (service === "hub-version") return hub.composeTemplate(original);
   const selected = target(service), definitions = parameterDefinitions(service);
   if (!object(original) || !object(original.Resources) || original.Transform) fail();
+  if (service === "api-runtime-corrected") {
+    const prior = original.Resources[runtime.TARGET.logical];
+    if (prior?.Type !== "AWS::IAM::RolePolicy" || prior.Properties?.RoleName !== runtime.TARGET.role
+      || prior.Properties?.PolicyName !== runtime.TARGET.policyName
+      || Object.entries(runtime.parameterDefinitions()).some(([name, definition]) => !same(original.Parameters?.[name], definition))) fail();
+  }
   const modify = revisionAction(original, service) === "Modify";
   if ((!modify && (original.Resources[selected.logical]
     || Object.keys(definitions).some(name => Object.hasOwn(original.Parameters || {}, name))))
@@ -186,6 +197,7 @@ function roleSnapshot(input, service, account, newDocument, previousDocument) {
   const selected = target(service), role = input?.Role;
   const modify = previousDocument !== undefined;
   const managed = service === "auth-enable";
+  if (service === "api-runtime-corrected" && !object(input?.inline?.[runtime.TARGET.policyName])) fail();
   if (managed && JSON.stringify(newDocument).length > 6144) fail();
   if (modify && (!["auth-enable", "auth-provision", "image-version", "hub-version"].includes(service)
     || (managed ? !object(previousDocument) : !same(input?.inline?.[policyName(service)], previousDocument)))) fail();

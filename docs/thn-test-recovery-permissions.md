@@ -43,6 +43,7 @@ use requires separate evidence from the exact provider/property path.
 | `config-runtime` | `createBackendSamDeployRoles`, Frontend | Separate `ThnTestRuntimeInspectionV1` policy: only `lambda:GetRuntimeManagementConfig` on the independently anchored, unqualified existing Config TEST function |
 | `api` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Exact versioned ZIP/record reads; exact API TEST stack template and `aws-recovery-*` change-set creation without a role argument; inspection and CloudFormation-mediated code updates of exactly three existing functions |
 | `api-runtime` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Separate `ThnTestRuntimeProvisioningV1` policy: exact forward package/plan and retained-route capture reads, dedicated Auth resource metadata, and narrowly bounded provider access for first provisioning/retained route transitions |
+| `api-runtime-corrected` | `thn-test-deploy-identities`, ServiceRepositoryBootstrap | Separate `ThnTestRuntimePackageCorrectionV1` policy: only two version-pinned S3 reads for the corrected Git-blob ZIP and its first-provisioning plan; the earlier runtime policy remains unchanged for rollback |
 | `auth-provision` | ServiceRepositoryBootstrap, external existing Auth deploy role | Separate `ThnTestClosedProvisioningV1` policy: only the reviewed dedicated Auth TEST pool, functions, execution roles, table configuration and log groups |
 
 `tools/thn-test-recovery-permission-policy.js` supplies both the canonical TEST
@@ -113,6 +114,22 @@ controller must pin and verify its precise version and digest before using it.
 Store this binding/channel only in TEST secrets `THN_API_RUNTIME_BINDING_JSON`
 and `THN_API_RUNTIME_CHANNEL_BUCKET`. The observed API physical ID must match
 the existing API stack resource before any permission revision is applied.
+
+For `api-runtime-corrected`, use a separate canonical TEST binding with exactly
+`schemaVersion`, `service`, `environment`, `account`, `stackId`, `sourceSha`,
+`packageSha256`, `package`, and `record`. The source is the approved API TEST
+commit; both object keys must contain the same SHA-256 segment beneath their
+respective `git-lf` paths. Both versions must exist in the same private API
+runtime channel. Store the binding only in the TEST secret
+`THN_API_RUNTIME_CORRECTED_BINDING_JSON`; reuse
+`THN_API_RUNTIME_CHANNEL_BUCKET`. This adds four NoEcho parameters and one
+inline policy with exactly two version-conditioned `s3:GetObjectVersion`
+statements. It never replaces the prior policy, changes its object selectors,
+or grants a prefix. The reviewed ledger and owner-stack checks still apply.
+Publish the corrected objects without selecting the new API plan. Verify this
+one-policy addition first, execute it only after review, then verify the plan
+and exact IAM readback before changing the API TEST plan selector. Never run
+the API first-provisioning workflow until all those checks pass.
 
 `tools/thn-test-api-runtime-permission-policy.js` defines 14 required NoEcho
 parameters and only the bounded runtime grants. Native generated function and
