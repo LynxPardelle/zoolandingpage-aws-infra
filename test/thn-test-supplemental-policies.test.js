@@ -16,11 +16,11 @@ function synth(name) {
 const ids = ["ThnTestHubSupplementalPolicy", "ThnTestImageCallerSupplementalPolicy", "ThnTestImageExecutorSupplementalPolicy"];
 const roles = ["zoolanding-content-hub-test-deploy", "zoolanding-deployer-image-upload-test-github-deploy", "zoolanding-deployer-image-upload-test-cfn-exec"];
 
-test("TEST adds only three separate policies and preserves every pre-existing synthesized value", () => {
+test("TEST adds only three separate identity resources and preserves every pre-existing synthesized value", () => {
   const template = synth("test");
   const newResources = Object.entries(template.Resources).filter(([logical, resource]) =>
     logical.startsWith("ThnDedicatedRuntimeTest")
-    && (resource.Type === "AWS::IAM::Role" || resource.Type === "AWS::IAM::Policy"));
+    && ["AWS::IAM::Role", "AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"].includes(resource.Type));
   assert.equal(newResources.length, 3, "only the separate THN role and its two policies may be added");
   for (const [logical] of newResources) delete template.Resources[logical];
   // The independent recovery revision is proved exactly before removing it

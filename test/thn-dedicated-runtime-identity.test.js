@@ -20,7 +20,8 @@ function namedResource(template, name) {
 }
 
 function namedPolicy(template, name) {
-  return Object.values(template.Resources).find(value => value.Properties?.PolicyName === name);
+  return Object.values(template.Resources).find(value =>
+    value.Properties?.PolicyName === name || value.Properties?.ManagedPolicyName === name);
 }
 
 test("dedicated runtime has a separate CloudFormation execution role only in TEST", () => {
@@ -41,7 +42,7 @@ test("GitHub may create and execute only the new stack with its own role", () =>
   const role = namedResource(template, "zoolanding-deployer-thn-auth-runtime-test-cfn-exec");
   const policy = namedPolicy(template, "ThnDedicatedRuntimeTestGithubV1");
   assert.ok(role && policy);
-  assert.equal(policy.Type, "AWS::IAM::Policy");
+  assert.equal(policy.Type, "AWS::IAM::ManagedPolicy");
   const statements = policy.Properties.PolicyDocument.Statement;
   const create = statements.find(value => value.Action.includes("cloudformation:CreateChangeSet"));
   assert.ok(create);

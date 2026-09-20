@@ -12,7 +12,7 @@ import json
 import os
 import re
 import sys
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 
 GITHUB_ROLE = "ApiProxyThnTestGithubRole812293BE"
@@ -21,9 +21,154 @@ GITHUB_POLICY = "ThnDedicatedRuntimeTestGithubPolicy"
 EXECUTION_POLICY = "ThnDedicatedRuntimeTestExecutionPolicy"
 ADDITIONS = {
     EXECUTION_ROLE: "AWS::IAM::Role",
-    GITHUB_POLICY: "AWS::IAM::Policy",
+    GITHUB_POLICY: "AWS::IAM::ManagedPolicy",
     EXECUTION_POLICY: "AWS::IAM::Policy",
 }
+SAFE_STAGES = frozenset({
+    "assume_publisher", "assume_deploy_s3", "assume_lookup_s3", "assume_lookup_kms",
+    "kms_describe_key", "s3_bucket_encryption", "candidate_upload",
+    "candidate_read_publisher", "candidate_read_deploy", "baseline_before_changeset",
+    "changeset_create", "changeset_wait", "changeset_review", "changeset_execute",
+    "stack_wait", "final_readback", "postmortem_object", "postmortem_changeset",
+    "postmortem_events", "postmortem_policy", "postmortem_iam", "postmortem_resources",
+    "preflight_role", "preflight_events",
+})
+
+
+class ReleaseStageError(Exception):
+    """An allowlisted stage and AWS code, never an AWS error message."""
+
+
+def aws_stage(stage: str, operation, *args, **kwargs):
+    if stage not in SAFE_STAGES:
+        raise ValueError("unreviewed_release_stage")
+    try:
+        return operation(*args, **kwargs)
+    except Exception as error:
+        response = getattr(error, "response", {})
+        raw_code = response.get("Error", {}).get("Code", "") if isinstance(response, dict) else ""
+        code = raw_code if isinstance(raw_code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", raw_code) else "GuardRejected"
+        raise ReleaseStageError(f"{stage}:{code}") from None
+
+
+def postmortem_target(run_id: str, attempt: str, source_sha: str, digest: str) -> dict:
+    if (not re.fullmatch(r"[1-9][0-9]*", run_id or "")
+            or not re.fullmatch(r"[1-9][0-9]*", attempt or "")
+            or not re.fullmatch(r"[a-f0-9]{40}", source_sha or "")
+            or not re.fullmatch(r"[a-f0-9]{64}", digest or "")):
+        _reject()
+    return {"name": f"thn-dedicated-identity-{run_id}-{attempt}",
+            "key": f"thn-dedicated-identity/{run_id}/{attempt}/{source_sha}/{digest}.json"}
+
+
+def stack_event_profile(events: list[dict], token: str, existing_resources: dict) -> str:
+    """Report only fixed classifications for events belonging to one failed run."""
+    if (not isinstance(events, list) or not re.fullmatch(r"thn-dedicated-identity-[1-9][0-9]*-[1-9][0-9]*", token or "")
+            or not _is_object(existing_resources) or any(not _is_object(event) for event in events)):
+        _reject()
+    failures = []
+    for event in events:
+        if event.get("ClientRequestToken") != token:
+            continue
+        status = event.get("ResourceStatus")
+        if status not in ("CREATE_FAILED", "UPDATE_FAILED", "DELETE_FAILED", "UPDATE_ROLLBACK_FAILED"):
+            continue
+        logical = event.get("LogicalResourceId")
+        resource = logical if logical in ADDITIONS or logical in existing_resources else "other"
+        reason = event.get("ResourceStatusReason", "")
+        lowered = reason.lower() if isinstance(reason, str) else ""
+        if ("accessdenied" in lowered or "access denied" in lowered or "not authorized" in lowered
+                or "insufficient permissions" in lowered):
+            category = "access_denied"
+        elif "alreadyexists" in lowered or "already exists" in lowered:
+            category = "already_exists"
+        elif "cannot be assumed" in lowered or "unable to assume" in lowered:
+            category = "role_assumption"
+        elif "malformedpolicy" in lowered or "malformed policy" in lowered:
+            category = "malformed_policy"
+        elif "policy size" in lowered or "policysize" in lowered or "size quota" in lowered:
+            category = "inline_policy_size"
+        elif "limitexceeded" in lowered or "limit exceeded" in lowered:
+            category = "limit_exceeded"
+        elif "nosuchentity" in lowered or "does not exist" in lowered:
+            category = "missing_dependency"
+        elif "invalidrequest" in lowered or "invalid request" in lowered:
+            category = "invalid_request"
+        else:
+            category = "unclassified"
+        actions = ("CreateRole", "PutRolePolicy", "PassRole", "GetRole", "DeleteRole", "AttachRolePolicy", "TagRole")
+        action = next((name for name in actions if f"iam:{name.lower()}" in lowered), "none")
+        failures.append(f"{resource}_{status}_{category}_iam_{action}")
+    return f"matched_failures{len(failures)}_" + ("__".join(failures[:5]) if failures else "none")
+
+
+def inline_policy_footprint(iam_client, role_name: str) -> str:
+    """Compute a count and aggregate size without exposing IAM policy bodies."""
+    if role_name != "zoolanding-deployer-api-proxy-test-github-deploy":
+        _reject()
+    listing = iam_client.list_role_policies(RoleName=role_name)
+    names = listing.get("PolicyNames") if _is_object(listing) else None
+    if (not _is_object(listing) or listing.get("IsTruncated") or not isinstance(names, list)
+            or len(names) > 20 or any(not isinstance(name, str) for name in names)
+            or len(names) != len(set(names))):
+        _reject()
+    total = 0
+    for name in sorted(names):
+        result = iam_client.get_role_policy(RoleName=role_name, PolicyName=name)
+        document = result.get("PolicyDocument") if _is_object(result) else None
+        if isinstance(document, str):
+            document = json.loads(unquote(document))
+        if not _is_object(document):
+            _reject()
+        total += sum(not character.isspace() for character in canonical(document).decode("utf-8"))
+    return f"count{len(names)}_chars{total}_new_present{int('ThnDedicatedRuntimeTestGithubV1' in names)}"
+
+
+def rollback_iam_profile(iam_client, account: str) -> str:
+    """Check attachment quota and retained role presence without returning IAM data."""
+    if not re.fullmatch(r"[0-9]{12}", account or ""):
+        _reject()
+    github_role = "zoolanding-deployer-api-proxy-test-github-deploy"
+    execution_role = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+    listing = iam_client.list_attached_role_policies(RoleName=github_role)
+    attachments = listing.get("AttachedPolicies") if _is_object(listing) else None
+    if (not _is_object(listing) or listing.get("IsTruncated") or not isinstance(attachments, list)
+            or len(attachments) > 30 or any(not _is_object(item) for item in attachments)):
+        _reject()
+    try:
+        result = iam_client.get_role(RoleName=execution_role)
+    except Exception as error:
+        response = getattr(error, "response", {})
+        code = response.get("Error", {}).get("Code") if _is_object(response) else None
+        if code != "NoSuchEntity":
+            raise
+        present = False
+    else:
+        role = result.get("Role") if _is_object(result) else None
+        if (not _is_object(role) or role.get("RoleName") != execution_role
+                or role.get("Arn") != f"arn:aws:iam::{account}:role/{execution_role}"):
+            _reject()
+        present = True
+    return f"attached_count{len(attachments)}_execution_role_present{int(present)}"
+
+
+def resource_readback_profile(resources: dict, stack_id: str) -> str:
+    """Describe only the exact resource statuses, never physical IDs or properties."""
+    labels = {EXECUTION_ROLE: "role", GITHUB_POLICY: "github", EXECUTION_POLICY: "execution"}
+    statuses = {"CREATE_COMPLETE", "CREATE_FAILED", "IMPORT_COMPLETE", "IMPORT_FAILED",
+                "UPDATE_COMPLETE", "UPDATE_FAILED", "UPDATE_ROLLBACK_COMPLETE"}
+    profile = []
+    for logical, kind in ADDITIONS.items():
+        response = resources.get(logical) if _is_object(resources) else None
+        detail = response.get("StackResourceDetail") if _is_object(response) else None
+        if (not _is_object(detail) or detail.get("StackId") != stack_id
+                or detail.get("LogicalResourceId") != logical or detail.get("ResourceType") != kind):
+            status = "mismatch"
+        else:
+            status = detail.get("ResourceStatus")
+            status = status if status in statuses else "other"
+        profile.append(f"{labels[logical]}_{status}")
+    return "_".join(profile)
 
 
 def _reject() -> None:
@@ -48,17 +193,24 @@ def _validate_additions(additions: dict) -> None:
     trust = role["Properties"].get("AssumeRolePolicyDocument", {}).get("Statement")
     if not isinstance(trust, list) or len(trust) != 1 or trust[0].get("Effect") != "Allow" or trust[0].get("Principal") != {"Service": "cloudformation.amazonaws.com"} or trust[0].get("Action") != "sts:AssumeRole":
         _reject()
-    for logical, name, target in (
-        (GITHUB_POLICY, "ThnDedicatedRuntimeTestGithubV1", GITHUB_ROLE),
-        (EXECUTION_POLICY, "ThnDedicatedRuntimeTestExecutionV1", EXECUTION_ROLE),
-    ):
-        properties = additions[logical]["Properties"]
-        if properties.get("PolicyName") != name or properties.get("Roles") != [{"Ref": target}] or not _is_object(properties.get("PolicyDocument")):
-            _reject()
+    github = additions[GITHUB_POLICY]["Properties"]
+    execution = additions[EXECUTION_POLICY]["Properties"]
+    if (github.get("ManagedPolicyName") != "ThnDedicatedRuntimeTestGithubV1"
+            or github.get("Roles") != [{"Ref": GITHUB_ROLE}]
+            or not _is_object(github.get("PolicyDocument"))
+            or execution.get("PolicyName") != "ThnDedicatedRuntimeTestExecutionV1"
+            or execution.get("Roles") != [{"Ref": EXECUTION_ROLE}]
+            or not _is_object(execution.get("PolicyDocument"))):
+        _reject()
 
 
 def canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def templates_equivalent(expected: dict, observed: dict) -> bool:
+    """Preserve every JSON value while ignoring mapping insertion order."""
+    return canonical(expected) == canonical(observed)
 
 
 def validate_candidate(candidate: dict, expected_digest: str) -> None:
@@ -99,7 +251,10 @@ def compose_template(original: dict, additions: dict) -> dict:
         _reject()
     existing_names = [resource.get("Properties", {}).get("RoleName") for resource in original["Resources"].values() if _is_object(resource)]
     existing_policies = [resource.get("Properties", {}).get("PolicyName") for resource in original["Resources"].values() if _is_object(resource)]
-    if additions[EXECUTION_ROLE]["Properties"]["RoleName"] in existing_names or any(additions[logical]["Properties"]["PolicyName"] in existing_policies for logical in (GITHUB_POLICY, EXECUTION_POLICY)):
+    if (additions[EXECUTION_ROLE]["Properties"]["RoleName"] in existing_names
+            or additions[EXECUTION_POLICY]["Properties"]["PolicyName"] in existing_policies
+            or any(resource.get("Properties", {}).get("ManagedPolicyName") == "ThnDedicatedRuntimeTestGithubV1"
+                   for resource in original["Resources"].values() if _is_object(resource))):
         _reject()
     result = copy.deepcopy(original)
     result["Resources"].update(copy.deepcopy(additions))
@@ -107,10 +262,11 @@ def compose_template(original: dict, additions: dict) -> dict:
 
 
 def review_changeset(description: dict) -> None:
-    """Reject any native change set other than three nonreplacing Adds."""
+    """Accept only the retained role import and two nonreplacing policy Adds."""
     if (not _is_object(description) or description.get("Status") != "CREATE_COMPLETE"
             or description.get("ExecutionStatus") != "AVAILABLE"
             or description.get("ChangeSetType", "UPDATE") != "UPDATE"
+            or description.get("ImportExistingResources") is not True
             or description.get("IncludeNestedStacks") is True or description.get("NextToken")
             or not isinstance(description.get("Changes"), list)
             or len(description["Changes"]) != len(ADDITIONS)):
@@ -119,7 +275,8 @@ def review_changeset(description: dict) -> None:
     for change in description["Changes"]:
         resource = change.get("ResourceChange") if _is_object(change) else None
         if (change.get("Type") != "Resource" or not _is_object(resource)
-                or resource.get("Action") != "Add" or resource.get("LogicalResourceId") not in ADDITIONS
+                or resource.get("LogicalResourceId") not in ADDITIONS
+                or resource.get("Action") != ("Import" if resource["LogicalResourceId"] == EXECUTION_ROLE else "Add")
                 or resource.get("ResourceType") != ADDITIONS[resource["LogicalResourceId"]]
                 or resource.get("Replacement") not in (None, "False")
                 or resource.get("ChangeSetId") or resource.get("ModuleInfo")
@@ -128,6 +285,105 @@ def review_changeset(description: dict) -> None:
         seen.add(resource["LogicalResourceId"])
     if seen != set(ADDITIONS):
         _reject()
+
+
+def changeset_diagnostic_flags(description: dict, pending_original: dict, pending_processed: dict,
+                               composed: dict, composed_processed: dict, stack_name: str, stack_id: str,
+                               name: str, parameter_names: list[str], account: str) -> str:
+    """Report only fixed booleans/counts, never template or parameter values."""
+    changes = description.get("Changes", []) if _is_object(description) else []
+    changes = changes if isinstance(changes, list) else []
+    resources = [change.get("ResourceChange", {}) for change in changes if _is_object(change)]
+    ids = [item.get("LogicalResourceId") for item in resources if _is_object(item)]
+    context = (description.get("StackName") == stack_name and description.get("StackId") == stack_id
+               and description.get("ChangeSetName") == name
+               and isinstance(description.get("ChangeSetId"), str)
+               and bool(re.fullmatch(rf"arn:aws:cloudformation:us-east-1:{account}:changeSet/{re.escape(name)}/[A-Za-z0-9-]+",
+                                     description["ChangeSetId"])))
+    try:
+        review_changeset(description)
+    except ValueError:
+        guard = False
+    else:
+        guard = True
+    observed_parameters = description.get("Parameters", [])
+    params = (isinstance(observed_parameters, list) and len(observed_parameters) == len(parameter_names)
+              and {item.get("ParameterKey") for item in observed_parameters if _is_object(item)} == set(parameter_names))
+    flags = {
+        "context": context,
+        "status": description.get("Status") == "CREATE_COMPLETE" and description.get("ExecutionStatus") == "AVAILABLE",
+        "mode": description.get("ChangeSetType", "UPDATE") == "UPDATE",
+        "count": len(changes) == len(ADDITIONS),
+        "kind": len(resources) == len(changes) and all(change.get("Type") == "Resource" for change in changes),
+        "actions": len(resources) == len(changes) and all(item.get("Action") == ("Import" if item.get("LogicalResourceId") == EXECUTION_ROLE else "Add") for item in resources),
+        "ids": len(ids) == len(ADDITIONS) and set(ids) == set(ADDITIONS),
+        "types": len(resources) == len(ADDITIONS) and all(item.get("ResourceType") == ADDITIONS.get(item.get("LogicalResourceId")) for item in resources),
+        "replacement": len(resources) == len(ADDITIONS) and all(item.get("Replacement") in (None, "False") for item in resources),
+        "metadata": len(resources) == len(ADDITIONS) and all(not item.get("ChangeSetId") and not item.get("ModuleInfo") for item in resources),
+        "nested": description.get("IncludeNestedStacks") is not True and not description.get("NextToken") and description.get("ImportExistingResources") is True,
+        "guard": guard,
+        "params": params,
+        "original": templates_equivalent(pending_original, composed),
+        "processed": templates_equivalent(pending_processed, composed_processed),
+    }
+    return "_".join(key + str(int(value)) for key, value in flags.items())
+
+
+def template_diff_profile(expected: dict, observed: dict) -> str:
+    """Show bounded structural paths only; redact identifiers and all values."""
+    safe_fields = frozenset({
+        "AWSTemplateFormatVersion", "Description", "Metadata", "Parameters", "Mappings",
+        "Conditions", "Transform", "Resources", "Outputs", "Rules", "Type",
+        "Properties", "DeletionPolicy", "UpdateReplacePolicy", "Default", "NoEcho",
+        "PolicyName", "ManagedPolicyName", "PolicyDocument", "AssumeRolePolicyDocument", "RoleName",
+        "Roles", "Statement", "Effect", "Action", "Resource", "Principal",
+        "Condition", "StringEquals", "StringLike", "Ref", "Fn::GetAtt", "Fn::Sub",
+        "Fn::Join", "Value", "Export", "DependsOn", "Tags", "Key", "Name",
+    })
+    differences: list[tuple] = []
+
+    def walk(left, right, path: tuple) -> None:
+        if left == right:
+            return
+        if len(path) >= 12 or type(left) is not type(right):
+            differences.append(path)
+        elif isinstance(left, dict):
+            for key in sorted(set(left) | set(right), key=str):
+                next_path = path + (key,)
+                if key not in left or key not in right:
+                    differences.append(next_path)
+                else:
+                    walk(left[key], right[key], next_path)
+        elif isinstance(left, list):
+            for index in range(max(len(left), len(right))):
+                next_path = path + (index,)
+                if index >= len(left) or index >= len(right):
+                    differences.append(next_path)
+                else:
+                    walk(left[index], right[index], next_path)
+        else:
+            differences.append(path)
+
+    def safe_path(path: tuple) -> str:
+        result = []
+        for index, item in enumerate(path):
+            if index == 1 and path[0] == "Resources":
+                item = {EXECUTION_ROLE: "execution_role", GITHUB_POLICY: "github_policy",
+                        EXECUTION_POLICY: "execution_policy"}.get(item, "existing")
+            elif index == 1 and path[0] == "Parameters":
+                item = "parameter"
+            elif index == 1 and path[0] == "Outputs":
+                item = "output"
+            elif isinstance(item, int):
+                item = "item"
+            elif item not in safe_fields:
+                item = "field"
+            result.append(item)
+        return "/".join(result) or "root"
+
+    walk(expected, observed, ())
+    paths = list(dict.fromkeys(safe_path(path) for path in differences))[:20]
+    return "count" + str(min(len(differences), 9999)) + "_paths" + (",".join(paths) if paths else "none")
 
 
 def _template(response: dict) -> dict:
@@ -181,13 +437,32 @@ def validate_asset_encryption(configuration: dict, key: dict) -> str:
     return key["Arn"]
 
 
-def validate_final_policies(github: dict, execution: dict) -> None:
+def validate_retained_execution_role(role: dict, inline: dict, attached: dict, account: str) -> None:
+    name = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+    trust = role.get("AssumeRolePolicyDocument", {}) if _is_object(role) else {}
+    statement = trust.get("Statement") if _is_object(trust) else None
+    if (not _is_object(role) or role.get("RoleName") != name
+            or role.get("Arn") != f"arn:aws:iam::{account}:role/{name}"
+            or role.get("Path") != "/" or role.get("PermissionsBoundary")
+            or role.get("Description") != "Execution identity for the standalone THN TEST runtime API stack only."
+            or statement != [{"Effect": "Allow", "Principal": {"Service": "cloudformation.amazonaws.com"},
+                              "Action": "sts:AssumeRole"}]
+            or not _is_object(inline) or inline.get("IsTruncated") or inline.get("PolicyNames") != []
+            or not _is_object(attached) or attached.get("IsTruncated") or attached.get("AttachedPolicies") != []):
+        _reject()
+
+
+def validate_final_policies(github: dict, execution: dict, attached: dict, account: str) -> None:
     for value in (github, execution):
         names = value.get("PolicyNames") if _is_object(value) else None
         if value.get("IsTruncated") or not isinstance(names, list) or len(names) != len(set(names)):
             _reject()
-    if ("ThnDedicatedRuntimeTestGithubV1" not in github["PolicyNames"]
-            or execution["PolicyNames"] != ["ThnDedicatedRuntimeTestExecutionV1"]):
+    policies = attached.get("AttachedPolicies") if _is_object(attached) else None
+    if ("ThnDedicatedRuntimeTestGithubV1" in github["PolicyNames"]
+            or execution["PolicyNames"] != ["ThnDedicatedRuntimeTestExecutionV1"]
+            or not _is_object(attached) or attached.get("IsTruncated") or not isinstance(policies, list)
+            or len(policies) != 1 or not _is_object(policies[0])
+            or policies[0].get("PolicyArn") != f"arn:aws:iam::{account}:policy/ThnDedicatedRuntimeTestGithubV1"):
         _reject()
 
 
@@ -203,8 +478,8 @@ def _assumed_client(sts, authority: dict, kind: str, service: str, region: str):
 
 
 def run_release(operation: str, candidate: dict, expected_digest: str, env: dict[str, str]) -> str:
-    """Read-only verify, or apply only one reviewed, exact three-Add UPDATE."""
-    if (operation not in ("verify", "apply") or env.get("GITHUB_ACTIONS") != "true"
+    """Read-only verify/postmortem, or import one retained role and add two policies."""
+    if (operation not in ("verify", "diagnose", "inspect", "apply") or env.get("GITHUB_ACTIONS") != "true"
             or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
             or env.get("GITHUB_REPOSITORY") != "LynxPardelle/zoolandingpage-aws-infra"
             or env.get("GITHUB_REF") != "refs/heads/test"
@@ -227,6 +502,78 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     lookup = _assumed_client(sts, authority, "lookup", "cloudformation", region)
     deploy = _assumed_client(sts, authority, "deploy", "cloudformation", region)
     lookup_iam = _assumed_client(sts, authority, "lookup", "iam", region)
+
+    if operation == "inspect":
+        target = postmortem_target(env.get("THN_FAILED_RUN_ID", ""), env.get("THN_FAILED_RUN_ATTEMPT", ""),
+                                   env.get("THN_FAILED_SOURCE_SHA", ""), expected_digest)
+        stacks = aws_stage("postmortem_events", lookup.describe_stacks, StackName=stack_name).get("Stacks", [])
+        if len(stacks) != 1:
+            _reject()
+        failed_stack = stacks[0]
+        stack_id = failed_stack.get("StackId", "")
+        if (failed_stack.get("StackName") != stack_name
+                or not re.fullmatch(rf"arn:aws:cloudformation:{region}:{account}:stack/{stack_name}/[A-Za-z0-9-]+", stack_id)
+                or failed_stack.get("RoleARN") != authority["cfn"]
+                or failed_stack.get("EnableTerminationProtection") is not True):
+            _reject()
+        status = failed_stack.get("StackStatus", "")
+        if status not in ("UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE", "UPDATE_ROLLBACK_FAILED", "UPDATE_ROLLBACK_IN_PROGRESS"):
+            _reject()
+        found = []
+        next_token = None
+        for _ in range(3):
+            request = {"StackName": stack_id}
+            if next_token:
+                request["NextToken"] = next_token
+            page = aws_stage("postmortem_events", deploy.describe_stack_events, **request)
+            events = page.get("StackEvents", [])
+            if not isinstance(events, list):
+                _reject()
+            found.extend(event for event in events if _is_object(event) and event.get("ClientRequestToken") == target["name"])
+            next_token = page.get("NextToken")
+            if not next_token:
+                break
+        profile = stack_event_profile(found, target["name"], {GITHUB_ROLE: True, stack_name: True})
+        try:
+            footprint = aws_stage("postmortem_policy", inline_policy_footprint, lookup_iam,
+                                  "zoolanding-deployer-api-proxy-test-github-deploy")
+        except ReleaseStageError as error:
+            footprint = "unavailable_" + str(error).split(":", 1)[1]
+        try:
+            rollback = aws_stage("postmortem_iam", rollback_iam_profile, lookup_iam, account)
+        except ReleaseStageError as error:
+            rollback = "unavailable_" + str(error).split(":", 1)[1]
+        try:
+            resource_profile = resource_readback_profile({logical: aws_stage(
+                "postmortem_resources", lookup.describe_stack_resource,
+                StackName=stack_id, LogicalResourceId=logical)
+                for logical in ADDITIONS}, stack_id)
+        except ReleaseStageError as error:
+            resource_profile = "unavailable_" + str(error).split(":", 1)[1]
+        try:
+            templates = [aws_stage("postmortem_resources", _template,
+                aws_stage("postmortem_resources", lookup.get_template,
+                    StackName=stack_id, TemplateStage=stage)) for stage in ("Original", "Processed")]
+            template_profile = "exact" if all(
+                _is_object(template.get("Resources")) and all(
+                    templates_equivalent(template["Resources"].get(logical), addition)
+                    for logical, addition in candidate["additions"].items())
+                for template in templates) else "mismatch"
+        except ReleaseStageError as error:
+            template_profile = "unavailable_" + str(error).split(":", 1)[1]
+        try:
+            aws_stage("postmortem_iam", validate_final_policies,
+                aws_stage("postmortem_iam", lookup_iam.list_role_policies,
+                    RoleName="zoolanding-deployer-api-proxy-test-github-deploy"),
+                aws_stage("postmortem_iam", lookup_iam.list_role_policies,
+                    RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec"),
+                aws_stage("postmortem_iam", lookup_iam.list_attached_role_policies,
+                    RoleName="zoolanding-deployer-api-proxy-test-github-deploy"), account)
+            policy_profile = "exact"
+        except ReleaseStageError as error:
+            policy_profile = "unavailable_" + str(error).split(":", 1)[1]
+        return (f"inspected_stack_{status}_{profile}_inline_{footprint}_rollback_{rollback}"
+                f"_resources_{resource_profile}_templates_{template_profile}_policies_{policy_profile}")
 
     def read_stack() -> dict:
         stacks = lookup.describe_stacks(StackName=stack_name).get("Stacks", [])
@@ -262,12 +609,29 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     inline = lookup_iam.list_role_policies(RoleName=github_role_name)
     if inline.get("IsTruncated") or "ThnDedicatedRuntimeTestGithubV1" in inline.get("PolicyNames", []):
         _reject()
-    try:
-        lookup_iam.get_role(RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec")
-    except Exception as error:
-        if getattr(error, "response", {}).get("Error", {}).get("Code") != "NoSuchEntity":
-            raise
-    else:
+    github_attached = lookup_iam.list_attached_role_policies(RoleName=github_role_name)
+    if github_attached.get("IsTruncated") or github_attached.get("AttachedPolicies") != []:
+        _reject()
+    execution_role_name = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+    aws_stage("preflight_role", validate_retained_execution_role,
+        aws_stage("preflight_role", lookup_iam.get_role, RoleName=execution_role_name).get("Role", {}),
+        aws_stage("preflight_role", lookup_iam.list_role_policies, RoleName=execution_role_name),
+        aws_stage("preflight_role", lookup_iam.list_attached_role_policies, RoleName=execution_role_name), account)
+    role_event_found = False
+    next_token = None
+    for _ in range(3):
+        request = {"StackName": stack_id}
+        if next_token:
+            request["NextToken"] = next_token
+        event_page = aws_stage("preflight_events", deploy.describe_stack_events, **request)
+        role_event_found = role_event_found or any(
+            _is_object(event) and event.get("ClientRequestToken") == "thn-dedicated-identity-35488827664-1"
+            and event.get("LogicalResourceId") == EXECUTION_ROLE and event.get("ResourceStatus") == "CREATE_COMPLETE"
+            for event in event_page.get("StackEvents", []))
+        next_token = event_page.get("NextToken")
+        if role_event_found or not next_token:
+            break
+    if not role_event_found:
         _reject()
 
     def baseline() -> None:
@@ -281,35 +645,80 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
     if operation == "verify":
         return "verified"
 
-    publisher = _assumed_client(sts, authority, "publisher", "s3", region)
-    deploy_s3 = _assumed_client(sts, authority, "deploy", "s3", region)
-    lookup_s3 = _assumed_client(sts, authority, "lookup", "s3", region)
-    lookup_kms = _assumed_client(sts, authority, "lookup", "kms", region)
     digest = hashlib.sha256(body).hexdigest()
-    key = f"thn-dedicated-identity/{env['GITHUB_RUN_ID']}/{env['GITHUB_RUN_ATTEMPT']}/{env['GITHUB_SHA']}/{digest}.json"
     bucket = authority["bucket"]
-    key_meta = lookup_kms.describe_key(KeyId="alias/aws/s3")["KeyMetadata"]
-    key_arn = validate_asset_encryption(lookup_s3.get_bucket_encryption(Bucket=bucket, ExpectedBucketOwner=account)["ServerSideEncryptionConfiguration"], key_meta)
+    if operation == "diagnose":
+        target = postmortem_target(env.get("THN_FAILED_RUN_ID", ""), env.get("THN_FAILED_RUN_ATTEMPT", ""),
+                                   env.get("THN_FAILED_SOURCE_SHA", ""), digest)
+        lookup_s3 = aws_stage("assume_lookup_s3", _assumed_client, sts, authority, "lookup", "s3", region)
+        lookup_kms = aws_stage("assume_lookup_kms", _assumed_client, sts, authority, "lookup", "kms", region)
+        deploy = aws_stage("assume_deploy_s3", _assumed_client, sts, authority, "deploy", "cloudformation", region)
+        key_meta = aws_stage("kms_describe_key", lookup_kms.describe_key, KeyId="alias/aws/s3")["KeyMetadata"]
+        aws_stage("s3_bucket_encryption", validate_asset_encryption,
+                  aws_stage("s3_bucket_encryption", lookup_s3.get_bucket_encryption,
+                            Bucket=bucket, ExpectedBucketOwner=account)["ServerSideEncryptionConfiguration"], key_meta)
+
+        def probe(stage: str, operation, **kwargs) -> tuple[str, dict | None]:
+            try:
+                result = aws_stage(stage, operation, **kwargs)
+            except ReleaseStageError as error:
+                code = str(error).split(":", 1)[1]
+                if code in ("404", "NoSuchKey", "ChangeSetNotFoundException"):
+                    return "absent", None
+                return "error_" + code, None
+            if stage == "postmortem_object":
+                return ("present" if result.get("ServerSideEncryption") == "aws:kms" and result.get("ContentLength") == len(body) else "unexpected"), result
+            return ("present_" + result.get("Status", "unknown") if result.get("Status") in ("CREATE_COMPLETE", "FAILED", "CREATE_IN_PROGRESS", "DELETE_COMPLETE", "DELETE_IN_PROGRESS") else "unexpected"), result
+
+        object_status, _ = probe("postmortem_object", lookup_s3.head_object, Bucket=bucket, Key=target["key"], ExpectedBucketOwner=account)
+        changeset_status, description = probe("postmortem_changeset", deploy.describe_change_set, StackName=stack_id, ChangeSetName=target["name"])
+        if description is None:
+            return f"diagnosed_object_{object_status}_changeset_{changeset_status}"
+        pending_original = aws_stage("postmortem_changeset", _template,
+                                     aws_stage("postmortem_changeset", deploy.get_template,
+                                               StackName=stack_id, ChangeSetName=target["name"], TemplateStage="Original"))
+        pending_processed = aws_stage("postmortem_changeset", _template,
+                                      aws_stage("postmortem_changeset", deploy.get_template,
+                                                StackName=stack_id, ChangeSetName=target["name"], TemplateStage="Processed"))
+        flags = changeset_diagnostic_flags(description, pending_original, pending_processed, composed,
+                                           composed_processed, stack_name, stack_id, target["name"],
+                                           [item["ParameterKey"] for item in parameters], account)
+        original_profile = template_diff_profile(composed, pending_original)
+        processed_profile = template_diff_profile(composed_processed, pending_processed)
+        return f"diagnosed_object_{object_status}_changeset_{changeset_status}_{flags}_original_{original_profile}_processed_{processed_profile}"
+
+    publisher = aws_stage("assume_publisher", _assumed_client, sts, authority, "publisher", "s3", region)
+    deploy_s3 = aws_stage("assume_deploy_s3", _assumed_client, sts, authority, "deploy", "s3", region)
+    lookup_s3 = aws_stage("assume_lookup_s3", _assumed_client, sts, authority, "lookup", "s3", region)
+    lookup_kms = aws_stage("assume_lookup_kms", _assumed_client, sts, authority, "lookup", "kms", region)
+    key = f"thn-dedicated-identity/{env['GITHUB_RUN_ID']}/{env['GITHUB_RUN_ATTEMPT']}/{env['GITHUB_SHA']}/{digest}.json"
+    key_meta = aws_stage("kms_describe_key", lookup_kms.describe_key, KeyId="alias/aws/s3")["KeyMetadata"]
+    key_arn = aws_stage("s3_bucket_encryption", validate_asset_encryption,
+                        aws_stage("s3_bucket_encryption", lookup_s3.get_bucket_encryption, Bucket=bucket,
+                                  ExpectedBucketOwner=account)["ServerSideEncryptionConfiguration"], key_meta)
     checksum = base64.b64encode(bytes.fromhex(digest)).decode("ascii")
-    publisher.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ExpectedBucketOwner=account,
-                         ServerSideEncryption="aws:kms", SSEKMSKeyId=key_arn, ChecksumSHA256=checksum)
-    for client in (publisher, deploy_s3):
-        readback = client.get_object(Bucket=bucket, Key=key, ExpectedBucketOwner=account, ChecksumMode="ENABLED")
-        if (readback.get("ServerSideEncryption") != "aws:kms" or readback.get("SSEKMSKeyId") != key_arn
-                or readback.get("ChecksumSHA256") != checksum or readback["Body"].read(1_048_577) != body):
-            _reject()
+    aws_stage("candidate_upload", publisher.put_object, Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ExpectedBucketOwner=account,
+              ServerSideEncryption="aws:kms", SSEKMSKeyId=key_arn, ChecksumSHA256=checksum)
+    for stage, client in (("candidate_read_publisher", publisher), ("candidate_read_deploy", deploy_s3)):
+        readback = aws_stage(stage, client.get_object, Bucket=bucket, Key=key, ExpectedBucketOwner=account, ChecksumMode="ENABLED")
+        def validate_readback() -> None:
+            if (readback.get("ServerSideEncryption") != "aws:kms" or readback.get("SSEKMSKeyId") != key_arn
+                    or readback.get("ChecksumSHA256") != checksum or readback["Body"].read(1_048_577) != body):
+                _reject()
+        aws_stage(stage, validate_readback)
     name = f"thn-dedicated-identity-{env['GITHUB_RUN_ID']}-{env['GITHUB_RUN_ATTEMPT']}"
-    baseline()
-    created = deploy.create_change_set(StackName=stack_id, ChangeSetName=name,
+    aws_stage("baseline_before_changeset", baseline)
+    created = aws_stage("changeset_create", deploy.create_change_set, StackName=stack_id, ChangeSetName=name,
         ChangeSetType="UPDATE", TemplateURL=f"https://{bucket}.s3.{region}.amazonaws.com/{quote(key)}",
         RoleARN=authority["cfn"],
         Parameters=[{"ParameterKey": item["ParameterKey"], "UsePreviousValue": True} for item in parameters],
-        Capabilities=["CAPABILITY_NAMED_IAM"], IncludeNestedStacks=False, ClientToken=name)
+        Capabilities=["CAPABILITY_NAMED_IAM"], IncludeNestedStacks=False,
+        ImportExistingResources=True, ClientToken=name)
     change_id = created.get("Id", "")
     if created.get("StackId") != stack_id or not re.fullmatch(rf"arn:aws:cloudformation:{region}:{account}:changeSet/{name}/[A-Za-z0-9-]+", change_id):
         _reject()
-    deploy.get_waiter("change_set_create_complete").wait(StackName=stack_id, ChangeSetName=change_id,
-                                                        WaiterConfig={"Delay": 3, "MaxAttempts": 40})
+    aws_stage("changeset_wait", deploy.get_waiter("change_set_create_complete").wait, StackName=stack_id, ChangeSetName=change_id,
+              WaiterConfig={"Delay": 3, "MaxAttempts": 40})
 
     def review() -> None:
         description = deploy.describe_change_set(StackName=stack_id, ChangeSetName=change_id, IncludePropertyValues=True)
@@ -321,30 +730,32 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
         review_changeset(description)
         pending_original = _template(deploy.get_template(StackName=stack_id, ChangeSetName=change_id, TemplateStage="Original"))
         pending_processed = _template(deploy.get_template(StackName=stack_id, ChangeSetName=change_id, TemplateStage="Processed"))
-        if pending_original != composed or pending_processed != composed_processed:
+        if not templates_equivalent(pending_original, composed) or not templates_equivalent(pending_processed, composed_processed):
             _reject()
 
-    review()
-    baseline()
-    review()
-    deploy.execute_change_set(StackName=stack_id, ChangeSetName=change_id, ClientRequestToken=name)
-    deploy.get_waiter("stack_update_complete").wait(StackName=stack_id, WaiterConfig={"Delay": 5, "MaxAttempts": 90})
+    aws_stage("changeset_review", review)
+    aws_stage("baseline_before_changeset", baseline)
+    aws_stage("changeset_review", review)
+    aws_stage("changeset_execute", deploy.execute_change_set, StackName=stack_id, ChangeSetName=change_id, ClientRequestToken=name)
+    aws_stage("stack_wait", deploy.get_waiter("stack_update_complete").wait, StackName=stack_id, WaiterConfig={"Delay": 5, "MaxAttempts": 90})
     final = read_stack()
     if (final["StackId"] != stack_id or _snapshot_parameters(final) != parameters
-            or _template(lookup.get_template(StackName=stack_id, TemplateStage="Original")) != composed
-            or _template(lookup.get_template(StackName=stack_id, TemplateStage="Processed")) != composed_processed):
+            or not templates_equivalent(_template(lookup.get_template(StackName=stack_id, TemplateStage="Original")), composed)
+            or not templates_equivalent(_template(lookup.get_template(StackName=stack_id, TemplateStage="Processed")), composed_processed)):
         _reject()
     for logical, resource_type in ADDITIONS.items():
         resource = lookup.describe_stack_resource(StackName=stack_id, LogicalResourceId=logical).get("StackResourceDetail", {})
         if (resource.get("StackId") != stack_id or resource.get("LogicalResourceId") != logical
-                or resource.get("ResourceType") != resource_type or resource.get("ResourceStatus") != "CREATE_COMPLETE"):
+                or resource.get("ResourceType") != resource_type
+                or resource.get("ResourceStatus") != ("IMPORT_COMPLETE" if logical == EXECUTION_ROLE else "CREATE_COMPLETE")):
             _reject()
     created_role = lookup_iam.get_role(RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec").get("Role", {})
     if created_role.get("Arn") != f"arn:aws:iam::{account}:role/zoolanding-deployer-thn-auth-runtime-test-cfn-exec":
         _reject()
     validate_final_policies(
         lookup_iam.list_role_policies(RoleName=github_role_name),
-        lookup_iam.list_role_policies(RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec"))
+        lookup_iam.list_role_policies(RoleName=execution_role_name),
+        lookup_iam.list_attached_role_policies(RoleName=github_role_name), account)
     return "applied"
 
 
@@ -352,13 +763,16 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--operation", choices=("verify", "apply"), required=True)
+    parser.add_argument("--operation", choices=("verify", "diagnose", "inspect", "apply"), required=True)
     parser.add_argument("--candidate", required=True)
     args = parser.parse_args()
     try:
         with open(args.candidate, "r", encoding="utf-8") as source:
             candidate = json.load(source)
         result = run_release(args.operation, candidate, os.environ.get("REVIEWED_ADDITIONS_SHA256", ""), os.environ)
+    except ReleaseStageError as error:
+        print("thn_dedicated_identity_release_failed_stage=" + str(error), file=sys.stderr)
+        return 1
     except Exception:
         print("thn_dedicated_identity_release_failed; inspect the exact workflow stage before retry", file=sys.stderr)
         return 1

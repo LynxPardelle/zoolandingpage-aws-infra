@@ -1,8 +1,10 @@
 """Offline safety checks for the exact THN TEST IAM addition."""
 
 import copy
+from collections import OrderedDict
 import hashlib
 import importlib.util
+import inspect
 import json
 import unittest
 from pathlib import Path
@@ -37,8 +39,8 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
                 },
             },
             "ThnDedicatedRuntimeTestGithubPolicy": {
-                "Type": "AWS::IAM::Policy",
-                "Properties": {"PolicyName": "ThnDedicatedRuntimeTestGithubV1", "Roles": [{"Ref": self.github}], "PolicyDocument": {"Statement": []}},
+                "Type": "AWS::IAM::ManagedPolicy",
+                "Properties": {"ManagedPolicyName": "ThnDedicatedRuntimeTestGithubV1", "Roles": [{"Ref": self.github}], "PolicyDocument": {"Statement": []}},
             },
             "ThnDedicatedRuntimeTestExecutionPolicy": {
                 "Type": "AWS::IAM::Policy",
@@ -90,9 +92,10 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
             with self.subTest(variant=variant), self.assertRaises(ValueError):
                 self.release.compose_template(original, additions)
 
-    def test_review_accepts_only_exact_three_add_change_set(self):
+    def test_review_accepts_only_exact_role_import_and_two_adds(self):
         change = {"Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE", "ChangeSetType": "UPDATE", "IncludeNestedStacks": False,
-                  "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Add", "LogicalResourceId": key,
+                  "ImportExistingResources": True,
+                  "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Import" if key == self.role else "Add", "LogicalResourceId": key,
                   "ResourceType": value["Type"], "Replacement": "False"}} for key, value in self.additions.items()]}
         self.release.review_changeset(change)
         for variant in ("extra", "modify", "replace", "nested", "wrong-type", "duplicate", "pagination"):
@@ -162,12 +165,196 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
     def test_final_policy_readback_requires_both_new_attachments(self):
         self.assertTrue(hasattr(self.release, "validate_final_policies"), "final policy readback is missing")
         self.release.validate_final_policies(
-            {"PolicyNames": ["Existing", "ThnDedicatedRuntimeTestGithubV1"], "IsTruncated": False},
-            {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False})
+            {"PolicyNames": ["Existing"], "IsTruncated": False},
+            {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False},
+            {"AttachedPolicies": [{"PolicyArn": "arn:aws:iam::123456789012:policy/ThnDedicatedRuntimeTestGithubV1"}], "IsTruncated": False},
+            "123456789012")
         with self.assertRaises(ValueError):
             self.release.validate_final_policies(
                 {"PolicyNames": ["Existing"], "IsTruncated": False},
-                {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False})
+                {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False},
+                {"AttachedPolicies": [], "IsTruncated": False}, "123456789012")
+
+    def test_retained_execution_role_must_be_empty_and_exact(self):
+        account = "123456789012"
+        name = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+        role = {"RoleName": name, "Arn": f"arn:aws:iam::{account}:role/{name}",
+                "Path": "/", "Description": "Execution identity for the standalone THN TEST runtime API stack only.",
+                "AssumeRolePolicyDocument": {"Statement": [{"Effect": "Allow",
+                    "Principal": {"Service": "cloudformation.amazonaws.com"}, "Action": "sts:AssumeRole"}]}}
+        empty_inline = {"PolicyNames": [], "IsTruncated": False}
+        empty_attached = {"AttachedPolicies": [], "IsTruncated": False}
+        self.release.validate_retained_execution_role(role, empty_inline, empty_attached, account)
+        with self.assertRaises(ValueError):
+            self.release.validate_retained_execution_role(role, {"PolicyNames": ["Unexpected"]}, empty_attached, account)
+        with self.assertRaises(ValueError):
+            self.release.validate_retained_execution_role(role, empty_inline,
+                                                          {"AttachedPolicies": [{"PolicyArn": "other"}]}, account)
+        changed = copy.deepcopy(role)
+        changed["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] = {"AWS": "*"}
+        with self.assertRaises(ValueError):
+            self.release.validate_retained_execution_role(changed, empty_inline, empty_attached, account)
+
+    def test_postmortem_resource_profile_reports_only_reviewed_statuses(self):
+        stack_id = "arn:aws:cloudformation:us-east-1:123456789012:stack/Reviewed/id"
+        resources = {logical: {"StackResourceDetail": {"StackId": stack_id,
+            "LogicalResourceId": logical, "ResourceType": kind,
+            "ResourceStatus": "IMPORT_COMPLETE" if logical == self.role else "CREATE_COMPLETE"}}
+            for logical, kind in self.release.ADDITIONS.items()}
+        self.assertEqual(self.release.resource_readback_profile(resources, stack_id),
+            "role_IMPORT_COMPLETE_github_CREATE_COMPLETE_execution_CREATE_COMPLETE")
+        resources[self.role]["StackResourceDetail"]["ResourceStatus"] = "UPDATE_COMPLETE"
+        self.assertEqual(self.release.resource_readback_profile(resources, stack_id),
+            "role_UPDATE_COMPLETE_github_CREATE_COMPLETE_execution_CREATE_COMPLETE")
+        resources[self.role]["StackResourceDetail"]["PhysicalResourceId"] = "private-id"
+        resources[self.role]["StackResourceDetail"]["ResourceType"] = "Unexpected"
+        self.assertEqual(self.release.resource_readback_profile(resources, stack_id),
+            "role_mismatch_github_CREATE_COMPLETE_execution_CREATE_COMPLETE")
+
+    def test_repair_requires_auto_import_before_execution(self):
+        source = inspect.getsource(self.release.run_release)
+        self.assertIn("ImportExistingResources=True", source)
+        self.assertLess(source.index('"preflight_role", validate_retained_execution_role'), source.index('publisher.put_object'))
+
+    def test_stage_error_reports_only_allowlisted_stage_and_aws_code(self):
+        secret = "do-not-print-secret"
+        class FakeAwsError(Exception):
+            response = {"Error": {"Code": "AccessDenied", "Message": secret}}
+
+        with self.assertRaises(self.release.ReleaseStageError) as captured:
+            self.release.aws_stage("candidate_upload", lambda: (_ for _ in ()).throw(FakeAwsError(secret)))
+        self.assertEqual(str(captured.exception), "candidate_upload:AccessDenied")
+        self.assertNotIn(secret, str(captured.exception))
+        with self.assertRaises(ValueError):
+            self.release.aws_stage("unreviewed_stage", lambda: None)
+
+    def test_postmortem_target_is_fixed_to_one_previous_run(self):
+        target = self.release.postmortem_target("35486800813", "1", "a" * 40, "b" * 64)
+        self.assertEqual(target["name"], "thn-dedicated-identity-35486800813-1")
+        self.assertEqual(target["key"], "thn-dedicated-identity/35486800813/1/" + "a" * 40 + "/" + "b" * 64 + ".json")
+        for run, attempt in (("0", "1"), ("not-a-run", "1"), ("35486800813", "0")):
+            with self.subTest(run=run, attempt=attempt), self.assertRaises(ValueError):
+                self.release.postmortem_target(run, attempt, "a" * 40, "b" * 64)
+
+    def test_diagnose_returns_before_first_mutating_aws_call(self):
+        source = inspect.getsource(self.release.run_release)
+        self.assertLess(source.index('if operation == "diagnose":'), source.index('publisher.put_object'))
+        self.assertLess(source.index('return f"diagnosed_object_'), source.index('publisher.put_object'))
+
+    def test_diagnostic_flags_identify_processed_template_mismatch_without_values(self):
+        name = "thn-dedicated-identity-123-1"
+        stack_id = "arn:aws:cloudformation:us-east-1:123456789012:stack/example/uuid"
+        description = {"StackName": "example", "StackId": stack_id, "ChangeSetName": name,
+                       "ChangeSetId": "arn:aws:cloudformation:us-east-1:123456789012:changeSet/" + name + "/uuid",
+                       "Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE", "ChangeSetType": "UPDATE",
+                       "Parameters": [{"ParameterKey": "Opaque"}],
+                       "ImportExistingResources": True,
+                       "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Import" if key == self.role else "Add", "LogicalResourceId": key,
+                       "ResourceType": value["Type"], "Replacement": "False"}} for key, value in self.additions.items()]}
+        expected = self.release.compose_template(self.original, self.additions)
+        flags = self.release.changeset_diagnostic_flags(description, expected, expected,
+            expected, self.original, "example", stack_id, name, ["Opaque"], "123456789012")
+        self.assertIn("context1", flags)
+        self.assertIn("guard1", flags)
+        self.assertIn("params1", flags)
+        self.assertIn("original1", flags)
+        self.assertIn("processed0", flags)
+        self.assertNotIn("Opaque", flags)
+        self.assertNotIn("example", flags)
+
+    def test_template_diff_profile_reports_safe_paths_without_values_or_identifiers(self):
+        expected = self.release.compose_template(self.original, self.additions)
+        observed = copy.deepcopy(expected)
+        observed["Parameters"]["Opaque"]["Default"] = "private-value"
+        observed["Resources"]["ThnDedicatedRuntimeTestGithubPolicy"]["Properties"]["ManagedPolicyName"] = "private-policy-value"
+        profile = self.release.template_diff_profile(expected, observed)
+        self.assertIn("Parameters/parameter/Default", profile)
+        self.assertIn("Resources/github_policy/Properties/ManagedPolicyName", profile)
+        self.assertNotIn("Opaque", profile)
+        self.assertNotIn("private", profile)
+        self.assertNotIn("ThnDedicatedRuntimeTestGithubPolicy", profile)
+
+    def test_template_equivalence_ignores_order_but_not_content(self):
+        expected = OrderedDict([("Resources", {"A": {"Type": "AWS::IAM::Role"}}),
+                                ("Parameters", {"Opaque": {"Type": "String"}})])
+        observed = OrderedDict(reversed(list(expected.items())))
+        self.assertNotEqual(expected, observed)
+        self.assertTrue(self.release.templates_equivalent(expected, observed))
+        changed = copy.deepcopy(observed)
+        changed["Resources"]["A"]["Type"] = "AWS::IAM::Policy"
+        self.assertFalse(self.release.templates_equivalent(expected, changed))
+
+    def test_stack_event_profile_is_bound_to_run_and_redacts_reason(self):
+        token = "thn-dedicated-identity-35488827664-1"
+        secret = "private-customer-value"
+        events = [
+            {"ClientRequestToken": "unrelated", "LogicalResourceId": self.role,
+             "ResourceStatus": "CREATE_FAILED", "ResourceStatusReason": secret},
+            {"ClientRequestToken": token, "LogicalResourceId": self.role,
+             "ResourceStatus": "CREATE_FAILED",
+             "ResourceStatusReason": "User is not authorized to perform iam:CreateRole on " + secret},
+        ]
+        profile = self.release.stack_event_profile(events, token, self.original["Resources"])
+        self.assertIn("CREATE_FAILED", profile)
+        self.assertIn("access_denied", profile)
+        self.assertIn("iam_CreateRole", profile)
+        self.assertNotIn(secret, profile)
+        self.assertEqual(profile.count("CREATE_FAILED"), 1)
+
+    def test_stack_event_profile_rejects_unexpected_shape(self):
+        with self.assertRaises(ValueError):
+            self.release.stack_event_profile("not-events", "thn-dedicated-identity-1-1", {})
+
+    def test_inline_policy_footprint_reports_sizes_not_contents(self):
+        secret = "sensitive-policy-value"
+
+        class FakeIam:
+            def list_role_policies(self, **kwargs):
+                return {"PolicyNames": ["ExistingA", "ExistingB"], "IsTruncated": False}
+
+            def get_role_policy(self, **kwargs):
+                return {"PolicyDocument": {"Version": "2012-10-17", "Statement": [
+                    {"Effect": "Allow", "Action": "s3:GetObject", "Resource": secret}]}}
+
+        result = self.release.inline_policy_footprint(FakeIam(), "zoolanding-deployer-api-proxy-test-github-deploy")
+        self.assertIn("count2", result)
+        self.assertIn("new_present0", result)
+        self.assertNotIn(secret, result)
+        self.assertNotIn("ExistingA", result)
+
+    def test_inline_policy_footprint_rejects_truncated_list(self):
+        class FakeIam:
+            def list_role_policies(self, **kwargs):
+                return {"PolicyNames": [], "IsTruncated": True}
+
+        with self.assertRaises(ValueError):
+            self.release.inline_policy_footprint(FakeIam(), "zoolanding-deployer-api-proxy-test-github-deploy")
+
+    def test_rollback_iam_profile_reports_only_counts_and_role_presence(self):
+        class FakeIam:
+            def list_attached_role_policies(self, **kwargs):
+                return {"AttachedPolicies": [{"PolicyArn": "private-policy-arn"}], "IsTruncated": False}
+
+            def get_role(self, **kwargs):
+                return {"Role": {"RoleName": kwargs["RoleName"],
+                                 "Arn": "arn:aws:iam::123456789012:role/" + kwargs["RoleName"]}}
+
+        result = self.release.rollback_iam_profile(FakeIam(), "123456789012")
+        self.assertEqual(result, "attached_count1_execution_role_present1")
+        self.assertNotIn("private-policy-arn", result)
+
+    def test_rollback_iam_profile_rejects_truncated_attachment_list(self):
+        class FakeIam:
+            def list_attached_role_policies(self, **kwargs):
+                return {"AttachedPolicies": [], "IsTruncated": True}
+
+        with self.assertRaises(ValueError):
+            self.release.rollback_iam_profile(FakeIam(), "123456789012")
+
+    def test_inspect_returns_before_mutating_aws_call(self):
+        source = inspect.getsource(self.release.run_release)
+        self.assertLess(source.index('if operation == "inspect":'), source.index('stack = read_stack()'))
+        self.assertLess(source.index('if operation == "inspect":'), source.index('publisher.put_object'))
 
 
 if __name__ == "__main__":
