@@ -1,5 +1,6 @@
 # Changelog
 
+- [2026-09-19 — THN identity stack-event inspection](2026-09-19-thn-identity-stack-event-inspection.md)
 - [2026-09-19 — THN canonical template equivalence](2026-09-19-thn-canonical-template-equivalence.md)
 - [2026-09-19 — THN pending template profile](2026-09-19-thn-pending-template-profile.md)
 - [2026-09-19 — THN postmortem source ancestry](2026-09-19-thn-postmortem-source-ancestry.md)
