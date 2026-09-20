@@ -215,6 +215,18 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         self.assertNotIn("Opaque", flags)
         self.assertNotIn("example", flags)
 
+    def test_template_diff_profile_reports_safe_paths_without_values_or_identifiers(self):
+        expected = self.release.compose_template(self.original, self.additions)
+        observed = copy.deepcopy(expected)
+        observed["Parameters"]["Opaque"]["Default"] = "private-value"
+        observed["Resources"]["ThnDedicatedRuntimeTestGithubPolicy"]["Properties"]["PolicyName"] = "private-policy-value"
+        profile = self.release.template_diff_profile(expected, observed)
+        self.assertIn("Parameters/parameter/Default", profile)
+        self.assertIn("Resources/github_policy/Properties/PolicyName", profile)
+        self.assertNotIn("Opaque", profile)
+        self.assertNotIn("private", profile)
+        self.assertNotIn("ThnDedicatedRuntimeTestGithubPolicy", profile)
+
 
 if __name__ == "__main__":
     unittest.main()

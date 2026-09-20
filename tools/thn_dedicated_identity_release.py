@@ -205,6 +205,63 @@ def changeset_diagnostic_flags(description: dict, pending_original: dict, pendin
     return "_".join(key + str(int(value)) for key, value in flags.items())
 
 
+def template_diff_profile(expected: dict, observed: dict) -> str:
+    """Show bounded structural paths only; redact identifiers and all values."""
+    safe_fields = frozenset({
+        "AWSTemplateFormatVersion", "Description", "Metadata", "Parameters", "Mappings",
+        "Conditions", "Transform", "Resources", "Outputs", "Rules", "Type",
+        "Properties", "DeletionPolicy", "UpdateReplacePolicy", "Default", "NoEcho",
+        "PolicyName", "PolicyDocument", "AssumeRolePolicyDocument", "RoleName",
+        "Roles", "Statement", "Effect", "Action", "Resource", "Principal",
+        "Condition", "StringEquals", "StringLike", "Ref", "Fn::GetAtt", "Fn::Sub",
+        "Fn::Join", "Value", "Export", "DependsOn", "Tags", "Key", "Name",
+    })
+    differences: list[tuple] = []
+
+    def walk(left, right, path: tuple) -> None:
+        if left == right:
+            return
+        if len(path) >= 12 or type(left) is not type(right):
+            differences.append(path)
+        elif isinstance(left, dict):
+            for key in sorted(set(left) | set(right), key=str):
+                next_path = path + (key,)
+                if key not in left or key not in right:
+                    differences.append(next_path)
+                else:
+                    walk(left[key], right[key], next_path)
+        elif isinstance(left, list):
+            for index in range(max(len(left), len(right))):
+                next_path = path + (index,)
+                if index >= len(left) or index >= len(right):
+                    differences.append(next_path)
+                else:
+                    walk(left[index], right[index], next_path)
+        else:
+            differences.append(path)
+
+    def safe_path(path: tuple) -> str:
+        result = []
+        for index, item in enumerate(path):
+            if index == 1 and path[0] == "Resources":
+                item = {EXECUTION_ROLE: "execution_role", GITHUB_POLICY: "github_policy",
+                        EXECUTION_POLICY: "execution_policy"}.get(item, "existing")
+            elif index == 1 and path[0] == "Parameters":
+                item = "parameter"
+            elif index == 1 and path[0] == "Outputs":
+                item = "output"
+            elif isinstance(item, int):
+                item = "item"
+            elif item not in safe_fields:
+                item = "field"
+            result.append(item)
+        return "/".join(result) or "root"
+
+    walk(expected, observed, ())
+    paths = list(dict.fromkeys(safe_path(path) for path in differences))[:20]
+    return "count" + str(min(len(differences), 9999)) + "_paths" + (",".join(paths) if paths else "none")
+
+
 def _template(response: dict) -> dict:
     body = response.get("TemplateBody") if _is_object(response) else None
     if isinstance(body, str):
@@ -394,7 +451,9 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
         flags = changeset_diagnostic_flags(description, pending_original, pending_processed, composed,
                                            composed_processed, stack_name, stack_id, target["name"],
                                            [item["ParameterKey"] for item in parameters], account)
-        return f"diagnosed_object_{object_status}_changeset_{changeset_status}_{flags}"
+        original_profile = template_diff_profile(composed, pending_original)
+        processed_profile = template_diff_profile(composed_processed, pending_processed)
+        return f"diagnosed_object_{object_status}_changeset_{changeset_status}_{flags}_original_{original_profile}_processed_{processed_profile}"
 
     publisher = aws_stage("assume_publisher", _assumed_client, sts, authority, "publisher", "s3", region)
     deploy_s3 = aws_stage("assume_deploy_s3", _assumed_client, sts, authority, "deploy", "s3", region)
