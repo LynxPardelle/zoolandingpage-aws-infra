@@ -152,7 +152,7 @@ for (const [environmentName, branch] of [["test", "test"], ["production", "main"
       .flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement);
 
     assert.doesNotMatch(JSON.stringify(template), /AdministratorAccess|secretsmanager:/);
-    assert.equal(resourcesOfType(template, "AWS::IAM::Role").length, environmentName === "test" ? 13 : 8);
+    assert.equal(resourcesOfType(template, "AWS::IAM::Role").length, environmentName === "test" ? 14 : 8);
     assert.equal(Object.keys(template.Outputs).length, environmentName === "test" ? 12 : 8);
 
     for (const [repository, expected] of Object.entries(services)) {
