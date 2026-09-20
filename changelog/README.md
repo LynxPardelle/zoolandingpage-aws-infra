@@ -1,5 +1,6 @@
 # Changelog
 
+- [2026-09-19 — THN IAM rollback preflight](2026-09-19-thn-identity-rollback-preflight.md)
 - [2026-09-19 — THN identity inline-policy footprint](2026-09-19-thn-identity-inline-footprint.md)
 - [2026-09-19 — THN identity stack-event inspection](2026-09-19-thn-identity-stack-event-inspection.md)
 - [2026-09-19 — THN canonical template equivalence](2026-09-19-thn-canonical-template-equivalence.md)

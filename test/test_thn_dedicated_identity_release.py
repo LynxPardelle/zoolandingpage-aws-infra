@@ -284,6 +284,27 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.release.inline_policy_footprint(FakeIam(), "zoolanding-deployer-api-proxy-test-github-deploy")
 
+    def test_rollback_iam_profile_reports_only_counts_and_role_presence(self):
+        class FakeIam:
+            def list_attached_role_policies(self, **kwargs):
+                return {"AttachedPolicies": [{"PolicyArn": "private-policy-arn"}], "IsTruncated": False}
+
+            def get_role(self, **kwargs):
+                return {"Role": {"RoleName": kwargs["RoleName"],
+                                 "Arn": "arn:aws:iam::123456789012:role/" + kwargs["RoleName"]}}
+
+        result = self.release.rollback_iam_profile(FakeIam(), "123456789012")
+        self.assertEqual(result, "attached_count1_execution_role_present1")
+        self.assertNotIn("private-policy-arn", result)
+
+    def test_rollback_iam_profile_rejects_truncated_attachment_list(self):
+        class FakeIam:
+            def list_attached_role_policies(self, **kwargs):
+                return {"AttachedPolicies": [], "IsTruncated": True}
+
+        with self.assertRaises(ValueError):
+            self.release.rollback_iam_profile(FakeIam(), "123456789012")
+
     def test_inspect_returns_before_mutating_aws_call(self):
         source = inspect.getsource(self.release.run_release)
         self.assertLess(source.index('if operation == "inspect":'), source.index('stack = read_stack()'))

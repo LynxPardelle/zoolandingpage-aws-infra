@@ -30,7 +30,7 @@ SAFE_STAGES = frozenset({
     "candidate_read_publisher", "candidate_read_deploy", "baseline_before_changeset",
     "changeset_create", "changeset_wait", "changeset_review", "changeset_execute",
     "stack_wait", "final_readback", "postmortem_object", "postmortem_changeset",
-    "postmortem_events", "postmortem_policy",
+    "postmortem_events", "postmortem_policy", "postmortem_iam",
 })
 
 
@@ -121,6 +121,34 @@ def inline_policy_footprint(iam_client, role_name: str) -> str:
             _reject()
         total += sum(not character.isspace() for character in canonical(document).decode("utf-8"))
     return f"count{len(names)}_chars{total}_new_present{int('ThnDedicatedRuntimeTestGithubV1' in names)}"
+
+
+def rollback_iam_profile(iam_client, account: str) -> str:
+    """Check attachment quota and retained role presence without returning IAM data."""
+    if not re.fullmatch(r"[0-9]{12}", account or ""):
+        _reject()
+    github_role = "zoolanding-deployer-api-proxy-test-github-deploy"
+    execution_role = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+    listing = iam_client.list_attached_role_policies(RoleName=github_role)
+    attachments = listing.get("AttachedPolicies") if _is_object(listing) else None
+    if (not _is_object(listing) or listing.get("IsTruncated") or not isinstance(attachments, list)
+            or len(attachments) > 30 or any(not _is_object(item) for item in attachments)):
+        _reject()
+    try:
+        result = iam_client.get_role(RoleName=execution_role)
+    except Exception as error:
+        response = getattr(error, "response", {})
+        code = response.get("Error", {}).get("Code") if _is_object(response) else None
+        if code != "NoSuchEntity":
+            raise
+        present = False
+    else:
+        role = result.get("Role") if _is_object(result) else None
+        if (not _is_object(role) or role.get("RoleName") != execution_role
+                or role.get("Arn") != f"arn:aws:iam::{account}:role/{execution_role}"):
+            _reject()
+        present = True
+    return f"attached_count{len(attachments)}_execution_role_present{int(present)}"
 
 
 def _reject() -> None:
@@ -465,7 +493,11 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
                                   "zoolanding-deployer-api-proxy-test-github-deploy")
         except ReleaseStageError as error:
             footprint = "unavailable_" + str(error).split(":", 1)[1]
-        return f"inspected_stack_{status}_{profile}_inline_{footprint}"
+        try:
+            rollback = aws_stage("postmortem_iam", rollback_iam_profile, lookup_iam, account)
+        except ReleaseStageError as error:
+            rollback = "unavailable_" + str(error).split(":", 1)[1]
+        return f"inspected_stack_{status}_{profile}_inline_{footprint}_rollback_{rollback}"
 
     def read_stack() -> dict:
         stacks = lookup.describe_stacks(StackName=stack_name).get("Stacks", [])

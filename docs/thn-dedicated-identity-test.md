@@ -81,6 +81,11 @@ document is printed. An IAM read denial is reported as an allowlisted AWS code
 without suppressing the already collected stack-event profile. Compare this
 live footprint with the reviewed candidate size before changing permissions.
 
+Before changing the policy resource type or retrying after a rollback,
+`inspect` also reports only the count of existing managed-policy attachments
+on that same role and whether the proposed execution role is still present.
+No attachment ARN, role document, or policy content is emitted.
+
 After a successful `apply`, verify the new role ARN from the live IAM readback
 and configure `THN_DEDICATED_RUNTIME_CFN_ROLE_ARN` in the API proxy TEST
 Environment. That variable is not a secret. The API's separate private release
