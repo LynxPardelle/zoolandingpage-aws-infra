@@ -12,6 +12,9 @@ test("THN identity release is manual, TEST-only and checks the source before AWS
   assert.match(source, /environment: test/);
   assert.match(source, /refs\/heads\/test/);
   assert.match(source, /reviewed_additions_sha256:/);
+  assert.match(source, /options: \[verify, diagnose, apply\]/);
+  assert.match(source, /failed_source_sha:/);
+  assert.match(source, /test "\$THN_FAILED_SOURCE_SHA" = "\$first_parent"/);
   assert.match(source, /thn_dedicated_identity_release\.py/);
   assert.ok(source.indexOf("Validate source and candidate without AWS") < source.indexOf("configure-aws-credentials@"));
   assert.doesNotMatch(source, /push:|pull_request:|environment: production|cdk deploy/);

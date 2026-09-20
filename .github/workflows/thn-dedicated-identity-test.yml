@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Read-only verification or the exact reviewed three-resource IAM addition
+        description: Read-only verification/postmortem or the exact reviewed three-resource IAM addition
         type: choice
-        options: [verify, apply]
+        options: [verify, diagnose, apply]
         default: verify
         required: true
       reviewed_source_sha:
@@ -17,6 +17,18 @@ on:
         description: SHA-256 of the three reviewed CDK resource definitions
         type: string
         required: true
+      failed_run_id:
+        description: Previous failed apply run ID; required only for read-only diagnose
+        type: string
+        required: false
+      failed_run_attempt:
+        description: Previous failed apply attempt; required only for read-only diagnose
+        type: string
+        required: false
+      failed_source_sha:
+        description: Previous TEST source SHA; must equal this promotion's first parent
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -42,6 +54,9 @@ jobs:
       REVIEWED_SOURCE_SHA: ${{ inputs.reviewed_source_sha }}
       REVIEWED_ADDITIONS_SHA256: ${{ inputs.reviewed_additions_sha256 }}
       THN_OPERATION: ${{ inputs.operation }}
+      THN_FAILED_RUN_ID: ${{ inputs.failed_run_id }}
+      THN_FAILED_RUN_ATTEMPT: ${{ inputs.failed_run_attempt }}
+      THN_FAILED_SOURCE_SHA: ${{ inputs.failed_source_sha }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -63,12 +78,22 @@ jobs:
           test "$GITHUB_SHA" = "$REVIEWED_SOURCE_SHA"
           [[ "$REVIEWED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$REVIEWED_ADDITIONS_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          if test "$THN_OPERATION" = diagnose; then
+            [[ "$THN_FAILED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$THN_FAILED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+            [[ "$THN_FAILED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          else
+            test -z "$THN_FAILED_RUN_ID"
+            test -z "$THN_FAILED_RUN_ATTEMPT"
+            test -z "$THN_FAILED_SOURCE_SHA"
+          fi
           git fetch --no-tags origin refs/heads/dev:refs/remotes/origin/dev
           read -r commit first_parent second_parent extra < <(git rev-list --parents -n 1 HEAD)
           test "$commit" = "$GITHUB_SHA"
           test -n "$first_parent"
           test -n "$second_parent"
           test -z "${extra:-}"
+          if test "$THN_OPERATION" = diagnose; then test "$THN_FAILED_SOURCE_SHA" = "$first_parent"; fi
           test "$second_parent" = "$(git rev-parse refs/remotes/origin/dev)"
           test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'refs/remotes/origin/dev^{tree}')"
           test -z "$(git status --porcelain)"
