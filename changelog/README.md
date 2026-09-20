@@ -1,5 +1,6 @@
 # Changelog
 
+- [2026-09-19 — THN dedicated identity postmortem](2026-09-19-thn-dedicated-identity-postmortem.md)
 - [2026-09-19 — Preserve retained THN prerequisite metadata](2026-09-19-thn-retained-prerequisite-metadata.md)
 - [2026-09-19 — Proposed Auth TEST HTTP API logging permission revision](2026-09-19-thn-auth-http-api-logging-permissions.md)
 - [2026-09-19 — THN admin Angular hash compatibility](2026-09-19-thn-admin-angular-hash-compatibility.md)

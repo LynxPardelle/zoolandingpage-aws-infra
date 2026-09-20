@@ -6,7 +6,8 @@ stack, the API application, another draft, or production. Source preparation and
 local tests do **not** establish that these resources exist in AWS.
 
 The owning workflow is `.github/workflows/thn-dedicated-identity-test.yml`.
-It accepts `verify` (read-only) or `apply` (one guarded update), a reviewed full
+It accepts `verify` (read-only), `diagnose` (read-only postmortem of one failed
+`apply`), or `apply` (one guarded update), a reviewed full
 TEST promotion SHA and an independently reviewed SHA-256 of the three CDK
 resource definitions. The workflow runs only on the exact TEST promotion merge
 whose tree matches current `dev`. It validates its source and candidate before
@@ -43,6 +44,16 @@ fails, inspect that run's failed stage and the live stack; do not retry the same
 candidate blindly. `apply` is the only operation that writes one immutable CDK
 asset and executes the reviewed CloudFormation update. A failed change set is
 left for diagnosis, not automatically retried or deleted.
+
+For a failed `apply`, use `diagnose` with that run's ID, attempt, and source
+SHA. The source SHA must be the first parent of the new reviewed TEST promotion;
+the diagnostic cannot select an unrelated release. It checks asset encryption,
+whether the exact candidate object exists, and whether the exact change set
+exists. It never writes an object or executes a change set. Errors from guarded
+AWS calls report only an allowlisted stage and an AWS error code, never the
+service error message, template, object body, or credentials. Analyze that
+result and existing CloudFormation events before proposing a fix or another
+`apply`.
 
 After a successful `apply`, verify the new role ARN from the live IAM readback
 and configure `THN_DEDICATED_RUNTIME_CFN_ROLE_ARN` in the API proxy TEST
