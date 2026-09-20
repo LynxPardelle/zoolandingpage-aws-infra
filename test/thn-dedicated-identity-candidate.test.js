@@ -16,6 +16,7 @@ test("candidate exposes only the three TEST IAM additions and pinned bootstrap a
     "ThnDedicatedRuntimeTestExecutionPolicy",
     "ThnDedicatedRuntimeTestGithubPolicy",
   ]);
+  assert.equal(result.additions.ThnDedicatedRuntimeTestGithubPolicy.Type, "AWS::IAM::ManagedPolicy");
   assert.equal(result.authority.stackName, "ZoolandingTest-Zoolandingpage-test-ServiceRepositoryBootstrap");
   assert.equal(result.authority.region, "us-east-1");
 });

@@ -1,6 +1,6 @@
 # THN dedicated runtime identity in TEST
 
-This is a separate, manual release for the three IAM resources added to the
+This is a separate, manual release for three reviewed IAM resources in the
 existing TEST `ServiceRepositoryBootstrap` stack. It does not deploy the Frontend
 stack, the API application, another draft, or production. Source preparation and
 local tests do **not** establish that these resources exist in AWS.
@@ -18,8 +18,9 @@ obtaining GitHub OIDC credentials.
 
 - `ThnDedicatedRuntimeTestCloudFormationRoleCF799F56`: retained execution role
   for the standalone THN TEST runtime stack.
-- `ThnDedicatedRuntimeTestGithubPolicy`: adds only the dedicated-stack release
-  permissions to the existing API TEST GitHub role.
+- `ThnDedicatedRuntimeTestGithubPolicy`: attaches a dedicated managed policy
+  with only the dedicated-stack release permissions to the existing API TEST
+  GitHub role. It does not increase that role's exhausted inline-policy quota.
 - `ThnDedicatedRuntimeTestExecutionPolicy`: bounds the new execution role to
   the dedicated runtime resources.
 
@@ -28,9 +29,13 @@ rejects a different resource set. The release guard compares the digest with
 the separately selected input, checks the live GitHub role's exact TEST OIDC
 trust, requires stable and termination-protected bootstrap state, and composes
 the change from the live Original and Processed templates. Existing parameters
-are reused, not read as plaintext or replaced. A change set must report exactly
-three nonreplacing resource Adds before execution. The final stack template and
-all three resource statuses are read back.
+are reused, not read as plaintext or replaced. After the first guarded update
+rolled back, its retained execution role remained in IAM outside the stack.
+The repair requires the exact role trust, description, empty policy sets,
+stable stack, and a `CREATE_COMPLETE` event from that failed run. The reviewed
+change set must report exactly one import of this existing role and two
+nonreplacing policy Adds; any other action stops before execution. The final
+stack template and all three resource statuses are read back.
 
 Pending and final templates are compared as canonical JSON (sorted object keys,
 unchanged values). Raw Python mapping equality can reject equivalent
@@ -48,7 +53,8 @@ An automatically calculated digest is not an independent review. Compare the
 PR's exact resources and source SHA before dispatch. Run `verify` first. If it
 fails, inspect that run's failed stage and the live stack; do not retry the same
 candidate blindly. `apply` is the only operation that writes one immutable CDK
-asset and executes the reviewed CloudFormation update. A failed change set is
+asset and executes the reviewed CloudFormation update with automatic import of
+the retained, named role. A failed change set is
 left for diagnosis, not automatically retried or deleted.
 
 For a failed `apply`, use `diagnose` with that run's ID, attempt, and source
@@ -86,7 +92,7 @@ Before changing the policy resource type or retrying after a rollback,
 on that same role and whether the proposed execution role is still present.
 No attachment ARN, role document, or policy content is emitted.
 
-After a successful `apply`, verify the new role ARN from the live IAM readback
+After a successful `apply`, verify the imported role ARN from the live IAM readback
 and configure `THN_DEDICATED_RUNTIME_CFN_ROLE_ARN` in the API proxy TEST
 Environment. That variable is not a secret. The API's separate private release
 plan and immutable, versioned runtime package are still required before its own

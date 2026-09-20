@@ -36,7 +36,8 @@ test("THN GitHub roles pass only their matching CloudFormation roles", () => {
     const entry = Object.entries(template.Resources).find(([,r]) => r.Properties?.RoleName === `zoolanding-deployer-${service}-test-github-deploy`);
     assert.ok(entry);
     const statements = Object.values(template.Resources)
-      .filter(r => r.Type === "AWS::IAM::Policy" && r.Properties.Roles.some(v => v.Ref === entry[0]))
+      .filter(r => ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"].includes(r.Type)
+        && r.Properties.Roles.some(v => v.Ref === entry[0]))
       .flatMap(r => r.Properties.PolicyDocument.Statement);
     const actions = s => Array.isArray(s.Action) ? s.Action : [s.Action];
     const pass = statements.filter(s => actions(s).includes("iam:PassRole"));

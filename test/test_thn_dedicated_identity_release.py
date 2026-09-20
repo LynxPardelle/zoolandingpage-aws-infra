@@ -39,8 +39,8 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
                 },
             },
             "ThnDedicatedRuntimeTestGithubPolicy": {
-                "Type": "AWS::IAM::Policy",
-                "Properties": {"PolicyName": "ThnDedicatedRuntimeTestGithubV1", "Roles": [{"Ref": self.github}], "PolicyDocument": {"Statement": []}},
+                "Type": "AWS::IAM::ManagedPolicy",
+                "Properties": {"ManagedPolicyName": "ThnDedicatedRuntimeTestGithubV1", "Roles": [{"Ref": self.github}], "PolicyDocument": {"Statement": []}},
             },
             "ThnDedicatedRuntimeTestExecutionPolicy": {
                 "Type": "AWS::IAM::Policy",
@@ -92,9 +92,10 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
             with self.subTest(variant=variant), self.assertRaises(ValueError):
                 self.release.compose_template(original, additions)
 
-    def test_review_accepts_only_exact_three_add_change_set(self):
+    def test_review_accepts_only_exact_role_import_and_two_adds(self):
         change = {"Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE", "ChangeSetType": "UPDATE", "IncludeNestedStacks": False,
-                  "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Add", "LogicalResourceId": key,
+                  "ImportExistingResources": True,
+                  "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Import" if key == self.role else "Add", "LogicalResourceId": key,
                   "ResourceType": value["Type"], "Replacement": "False"}} for key, value in self.additions.items()]}
         self.release.review_changeset(change)
         for variant in ("extra", "modify", "replace", "nested", "wrong-type", "duplicate", "pagination"):
@@ -164,12 +165,40 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
     def test_final_policy_readback_requires_both_new_attachments(self):
         self.assertTrue(hasattr(self.release, "validate_final_policies"), "final policy readback is missing")
         self.release.validate_final_policies(
-            {"PolicyNames": ["Existing", "ThnDedicatedRuntimeTestGithubV1"], "IsTruncated": False},
-            {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False})
+            {"PolicyNames": ["Existing"], "IsTruncated": False},
+            {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False},
+            {"AttachedPolicies": [{"PolicyArn": "arn:aws:iam::123456789012:policy/ThnDedicatedRuntimeTestGithubV1"}], "IsTruncated": False},
+            "123456789012")
         with self.assertRaises(ValueError):
             self.release.validate_final_policies(
                 {"PolicyNames": ["Existing"], "IsTruncated": False},
-                {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False})
+                {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False},
+                {"AttachedPolicies": [], "IsTruncated": False}, "123456789012")
+
+    def test_retained_execution_role_must_be_empty_and_exact(self):
+        account = "123456789012"
+        name = "zoolanding-deployer-thn-auth-runtime-test-cfn-exec"
+        role = {"RoleName": name, "Arn": f"arn:aws:iam::{account}:role/{name}",
+                "Path": "/", "Description": "Execution identity for the standalone THN TEST runtime API stack only.",
+                "AssumeRolePolicyDocument": {"Statement": [{"Effect": "Allow",
+                    "Principal": {"Service": "cloudformation.amazonaws.com"}, "Action": "sts:AssumeRole"}]}}
+        empty_inline = {"PolicyNames": [], "IsTruncated": False}
+        empty_attached = {"AttachedPolicies": [], "IsTruncated": False}
+        self.release.validate_retained_execution_role(role, empty_inline, empty_attached, account)
+        with self.assertRaises(ValueError):
+            self.release.validate_retained_execution_role(role, {"PolicyNames": ["Unexpected"]}, empty_attached, account)
+        with self.assertRaises(ValueError):
+            self.release.validate_retained_execution_role(role, empty_inline,
+                                                          {"AttachedPolicies": [{"PolicyArn": "other"}]}, account)
+        changed = copy.deepcopy(role)
+        changed["AssumeRolePolicyDocument"]["Statement"][0]["Principal"] = {"AWS": "*"}
+        with self.assertRaises(ValueError):
+            self.release.validate_retained_execution_role(changed, empty_inline, empty_attached, account)
+
+    def test_repair_requires_auto_import_before_execution(self):
+        source = inspect.getsource(self.release.run_release)
+        self.assertIn("ImportExistingResources=True", source)
+        self.assertLess(source.index('"preflight_role", validate_retained_execution_role'), source.index('publisher.put_object'))
 
     def test_stage_error_reports_only_allowlisted_stage_and_aws_code(self):
         secret = "do-not-print-secret"
@@ -203,7 +232,8 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
                        "ChangeSetId": "arn:aws:cloudformation:us-east-1:123456789012:changeSet/" + name + "/uuid",
                        "Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE", "ChangeSetType": "UPDATE",
                        "Parameters": [{"ParameterKey": "Opaque"}],
-                       "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Add", "LogicalResourceId": key,
+                       "ImportExistingResources": True,
+                       "Changes": [{"Type": "Resource", "ResourceChange": {"Action": "Import" if key == self.role else "Add", "LogicalResourceId": key,
                        "ResourceType": value["Type"], "Replacement": "False"}} for key, value in self.additions.items()]}
         expected = self.release.compose_template(self.original, self.additions)
         flags = self.release.changeset_diagnostic_flags(description, expected, expected,
@@ -220,10 +250,10 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         expected = self.release.compose_template(self.original, self.additions)
         observed = copy.deepcopy(expected)
         observed["Parameters"]["Opaque"]["Default"] = "private-value"
-        observed["Resources"]["ThnDedicatedRuntimeTestGithubPolicy"]["Properties"]["PolicyName"] = "private-policy-value"
+        observed["Resources"]["ThnDedicatedRuntimeTestGithubPolicy"]["Properties"]["ManagedPolicyName"] = "private-policy-value"
         profile = self.release.template_diff_profile(expected, observed)
         self.assertIn("Parameters/parameter/Default", profile)
-        self.assertIn("Resources/github_policy/Properties/PolicyName", profile)
+        self.assertIn("Resources/github_policy/Properties/ManagedPolicyName", profile)
         self.assertNotIn("Opaque", profile)
         self.assertNotIn("private", profile)
         self.assertNotIn("ThnDedicatedRuntimeTestGithubPolicy", profile)
