@@ -89,6 +89,18 @@ class DedicatedIdentityRevisionTests(unittest.TestCase):
             with self.subTest(variant=variant), self.assertRaises(ValueError):
                 self.revision.review_revision_changeset(bad)
 
+    def test_describe_change_set_omits_request_owned_type(self):
+        description = {"Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE",
+                       "Changes": [{"Type": "Resource", "ResourceChange": {
+                           "Action": "Modify", "LogicalResourceId": self.execution,
+                           "ResourceType": "AWS::IAM::Policy", "Replacement": "False",
+                           "Scope": ["Properties"], "Details": [{"Target": {
+                               "Attribute": "Properties", "Name": "PolicyDocument"}}]}}]}
+        self.revision.review_revision_changeset(description)
+        description["ChangeSetType"] = "CREATE"
+        with self.assertRaises(ValueError):
+            self.revision.review_revision_changeset(description)
+
     def test_live_policy_readback_must_match_previous_policy_exactly(self):
         self.assertTrue(hasattr(self.revision, "validate_live_policy"), "live policy guard is missing")
         previous = self.original["Resources"][self.execution]["Properties"]["PolicyDocument"]

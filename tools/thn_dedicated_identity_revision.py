@@ -119,7 +119,7 @@ def review_revision_changeset(description: dict) -> None:
 
     if (not isinstance(description, dict) or description.get("Status") != "CREATE_COMPLETE"
             or description.get("ExecutionStatus") != "AVAILABLE"
-            or description.get("ChangeSetType") != "UPDATE"
+            or description.get("ChangeSetType", "UPDATE") != "UPDATE"
             or description.get("IncludeNestedStacks") is True or description.get("NextToken")
             or not isinstance(description.get("Changes"), list)
             or len(description["Changes"]) != 1):
