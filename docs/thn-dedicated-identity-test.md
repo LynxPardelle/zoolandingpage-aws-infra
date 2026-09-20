@@ -52,6 +52,7 @@ select an unrelated release. It checks asset encryption,
 whether the exact candidate object exists, whether the exact change set exists,
 and whether its resource delta, parameters, Original template and Processed
 template match the reviewed candidate. It reports only fixed Boolean flags,
+plus at most twenty redacted structural paths and a bounded difference count,
 not template or parameter values. It never writes an object or executes a
 change set. Errors from guarded AWS calls report only an allowlisted stage and
 an AWS error code, never the service error message, template, object body, or
