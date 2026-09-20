@@ -91,6 +91,7 @@ function reviewChangeSet(description, original, processed, expected) {
 const FILES = ["authority.json", "coordinates.json", "ledger.json", "thn-test-recovery-permissions.js",
   "thn-test-auth-enable-permission-policy.js",
   "thn-test-recovery-permission-policy.js", "thn-test-api-runtime-permission-policy.js", "thn-test-auth-provision-permission-policy.js",
+  "thn-test-api-runtime-package-correction-policy.js",
   "thn-test-image-version-permission-policy.js", "thn-test-hub-version-permission-policy.js", "thn-test-permission-policy.js", "thn-test-prerequisites.js"];
 const bytes = value => Buffer.from(canonical(value));
 const authorityConfig = config => ({ ...config, anchors: config.authorityAnchors || ANCHORS });
