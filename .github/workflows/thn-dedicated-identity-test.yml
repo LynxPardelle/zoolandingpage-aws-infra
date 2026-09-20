@@ -26,7 +26,7 @@ on:
         type: string
         required: false
       failed_source_sha:
-        description: Previous TEST source SHA; must equal this promotion's first parent
+        description: Failed apply TEST SHA; must be among five recent first-parent commits
         type: string
         required: false
 
@@ -93,7 +93,9 @@ jobs:
           test -n "$first_parent"
           test -n "$second_parent"
           test -z "${extra:-}"
-          if test "$THN_OPERATION" = diagnose; then test "$THN_FAILED_SOURCE_SHA" = "$first_parent"; fi
+          if test "$THN_OPERATION" = diagnose; then
+            git rev-list --first-parent -n 5 "$first_parent" | grep -Fqx "$THN_FAILED_SOURCE_SHA"
+          fi
           test "$second_parent" = "$(git rev-parse refs/remotes/origin/dev)"
           test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'refs/remotes/origin/dev^{tree}')"
           test -z "$(git status --porcelain)"

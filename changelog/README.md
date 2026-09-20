@@ -1,5 +1,6 @@
 # Changelog
 
+- [2026-09-19 — THN postmortem source ancestry](2026-09-19-thn-postmortem-source-ancestry.md)
 - [2026-09-19 — THN pending IAM change-set review](2026-09-19-thn-dedicated-identity-changeset-review.md)
 - [2026-09-19 — THN dedicated identity postmortem](2026-09-19-thn-dedicated-identity-postmortem.md)
 - [2026-09-19 — Preserve retained THN prerequisite metadata](2026-09-19-thn-retained-prerequisite-metadata.md)
