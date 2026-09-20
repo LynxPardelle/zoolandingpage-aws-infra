@@ -31,6 +31,11 @@ are reused, not read as plaintext or replaced. A change set must report exactly
 three nonreplacing resource Adds before execution. The final stack template and
 all three resource statuses are read back.
 
+Pending and final templates are compared as canonical JSON (sorted object keys,
+unchanged values). Raw Python mapping equality can reject equivalent
+order-sensitive mappings returned by CloudFormation. Canonical comparison
+does not permit a changed resource, parameter, or value.
+
 To calculate the digest for review from the pinned source, without writing a
 private binding, use the candidate exporter and canonical JSON helper:
 
