@@ -72,8 +72,29 @@ test("execution role's app resources stay in the dedicated stack namespace", () 
   for (const statement of statements) {
     const actions = statement.Action;
     if (actions.some(action => action.startsWith("lambda:") || action.startsWith("iam:") || action.startsWith("logs:"))) {
-      assert.ok(JSON.stringify(statement.Resource).includes("zoolanding-thn-auth-runtime-test"));
+      assert.ok(JSON.stringify(statement.Resource).includes("zoolanding-thn-auth-runti*"));
       assert.ok(!JSON.stringify(statement.Resource).includes("zoolanding-api-proxy-test"));
     }
+  }
+});
+
+test("execution resources cover CloudFormation-truncated names without covering Auth Admin", () => {
+  const policy = namedPolicy(synth("test"), "ThnDedicatedRuntimeTestExecutionV1");
+  const statements = policy.Properties.PolicyDocument.Statement;
+  const arn = statement => statement.Resource[0]["Fn::Join"][1].map(part => {
+    if (typeof part === "string") return part;
+    assert.deepEqual(part, { Ref: "AWS::Partition" });
+    return "aws";
+  }).join("");
+  const roleArn = arn(statements.find(value => value.Action.includes("iam:CreateRole")));
+  const lambdaArn = arn(statements.find(value => value.Action.includes("lambda:CreateFunction")));
+  const logArn = arn(statements.find(value => value.Action.includes("logs:CreateLogGroup")));
+  const matches = (pattern, arn) => pattern.endsWith("*") && arn.startsWith(pattern.slice(0, -1));
+
+  assert.ok(matches(roleArn, "arn:aws:iam::765932874577:role/zoolanding-thn-auth-runti-ThnAuthRuntimeV2FunctionR-example"));
+  assert.ok(matches(lambdaArn, "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-thn-auth-runtime-test-ThnAuthRuntimeV2Function-example"));
+  assert.ok(matches(logArn, "arn:aws:logs:us-east-1:765932874577:log-group:/aws/lambda/zoolanding-thn-auth-runti-ThnAuthRuntimeV2Function-example"));
+  for (const pattern of [roleArn, lambdaArn, logArn]) {
+    assert.ok(!matches(pattern, pattern.replace("zoolanding-thn-auth-runti*", "zoolanding-thn-auth-admin-test-example")));
   }
 });
