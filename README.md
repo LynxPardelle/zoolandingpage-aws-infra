@@ -13,6 +13,7 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 - Optional Route53 alias upserts, disabled by default.
 - Retained, branch-bound GitHub OIDC and CloudFormation execution roles for Data Spaces, Commerce, Integrations, and Notifications.
 - Bounded Runtime Read deployment identities; TEST alone adds the AWS-managed `LanguageExtensions` transform and narrowly scoped alias/version permissions required by its immutable release, while production keeps its existing scope.
+- A separate TEST-only CloudFormation execution identity for the proposed THN runtime API stack; it does not grant permissions to update the shared API stack. This identity is prepared locally and is not yet deployed.
 
 ## What This Does Not Touch
 

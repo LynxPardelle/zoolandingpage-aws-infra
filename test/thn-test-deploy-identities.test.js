@@ -30,7 +30,7 @@ test("THN deploy identities exist only in TEST and require exact repo, environme
   }
 });
 
-test("THN GitHub roles can only pass their matching CloudFormation role", () => {
+test("THN GitHub roles pass only their matching CloudFormation roles", () => {
   const template = synth("test");
   for (const service of ["api-proxy", "image-upload"]) {
     const entry = Object.entries(template.Resources).find(([,r]) => r.Properties?.RoleName === `zoolanding-deployer-${service}-test-github-deploy`);
@@ -39,10 +39,20 @@ test("THN GitHub roles can only pass their matching CloudFormation role", () => 
       .filter(r => r.Type === "AWS::IAM::Policy" && r.Properties.Roles.some(v => v.Ref === entry[0]))
       .flatMap(r => r.Properties.PolicyDocument.Statement);
     const actions = s => Array.isArray(s.Action) ? s.Action : [s.Action];
-    assert.equal(statements.filter(s => actions(s).includes("iam:PassRole")).length, 1);
+    const pass = statements.filter(s => actions(s).includes("iam:PassRole"));
+    assert.equal(pass.length, service === "api-proxy" ? 2 : 1);
+    const allowedLambdaReads = new Set(["lambda:GetFunction", "lambda:GetFunctionConfiguration",
+      "lambda:GetAlias", "lambda:GetPolicy", "lambda:ListVersionsByFunction"]);
     for (const s of statements) {
-      assert.ok(!actions(s).some(a => /^(lambda|dynamodb|cognito-idp|secretsmanager):/.test(a) && a !== "lambda:GetFunctionConfiguration"));
+      assert.ok(!actions(s).some(a => /^(dynamodb|cognito-idp|secretsmanager):/.test(a)
+        || (a.startsWith("lambda:") && !allowedLambdaReads.has(a))));
       assert.ok(!actions(s).some(a => a === "*" || a.endsWith(":*")));
+    }
+    if (service === "api-proxy") {
+      const dedicated = Object.entries(template.Resources).find(([, r]) =>
+        r.Properties?.RoleName === "zoolanding-deployer-thn-auth-runtime-test-cfn-exec");
+      assert.ok(dedicated);
+      assert.ok(pass.some(s => JSON.stringify(s.Resource).includes(dedicated[0])));
     }
     const create = statements.find(s => actions(s).includes("cloudformation:CreateChangeSet"));
     assert.ok(create.Condition.ArnEquals["cloudformation:RoleArn"]);
