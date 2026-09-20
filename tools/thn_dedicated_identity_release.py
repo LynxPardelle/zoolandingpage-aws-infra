@@ -12,7 +12,7 @@ import json
 import os
 import re
 import sys
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 
 GITHUB_ROLE = "ApiProxyThnTestGithubRole812293BE"
@@ -30,7 +30,7 @@ SAFE_STAGES = frozenset({
     "candidate_read_publisher", "candidate_read_deploy", "baseline_before_changeset",
     "changeset_create", "changeset_wait", "changeset_review", "changeset_execute",
     "stack_wait", "final_readback", "postmortem_object", "postmortem_changeset",
-    "postmortem_events",
+    "postmortem_events", "postmortem_policy",
 })
 
 
@@ -85,7 +85,9 @@ def stack_event_profile(events: list[dict], token: str, existing_resources: dict
             category = "role_assumption"
         elif "malformedpolicy" in lowered or "malformed policy" in lowered:
             category = "malformed_policy"
-        elif "limitexceeded" in lowered or "limit exceeded" in lowered or "maximum policy size" in lowered:
+        elif "policy size" in lowered or "policysize" in lowered or "size quota" in lowered:
+            category = "inline_policy_size"
+        elif "limitexceeded" in lowered or "limit exceeded" in lowered:
             category = "limit_exceeded"
         elif "nosuchentity" in lowered or "does not exist" in lowered:
             category = "missing_dependency"
@@ -97,6 +99,28 @@ def stack_event_profile(events: list[dict], token: str, existing_resources: dict
         action = next((name for name in actions if f"iam:{name.lower()}" in lowered), "none")
         failures.append(f"{resource}_{status}_{category}_iam_{action}")
     return f"matched_failures{len(failures)}_" + ("__".join(failures[:5]) if failures else "none")
+
+
+def inline_policy_footprint(iam_client, role_name: str) -> str:
+    """Compute a count and aggregate size without exposing IAM policy bodies."""
+    if role_name != "zoolanding-deployer-api-proxy-test-github-deploy":
+        _reject()
+    listing = iam_client.list_role_policies(RoleName=role_name)
+    names = listing.get("PolicyNames") if _is_object(listing) else None
+    if (not _is_object(listing) or listing.get("IsTruncated") or not isinstance(names, list)
+            or len(names) > 20 or any(not isinstance(name, str) for name in names)
+            or len(names) != len(set(names))):
+        _reject()
+    total = 0
+    for name in sorted(names):
+        result = iam_client.get_role_policy(RoleName=role_name, PolicyName=name)
+        document = result.get("PolicyDocument") if _is_object(result) else None
+        if isinstance(document, str):
+            document = json.loads(unquote(document))
+        if not _is_object(document):
+            _reject()
+        total += sum(not character.isspace() for character in canonical(document).decode("utf-8"))
+    return f"count{len(names)}_chars{total}_new_present{int('ThnDedicatedRuntimeTestGithubV1' in names)}"
 
 
 def _reject() -> None:
@@ -436,7 +460,12 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
             if not next_token:
                 break
         profile = stack_event_profile(found, target["name"], {GITHUB_ROLE: True, stack_name: True})
-        return f"inspected_stack_{status}_{profile}"
+        try:
+            footprint = aws_stage("postmortem_policy", inline_policy_footprint, lookup_iam,
+                                  "zoolanding-deployer-api-proxy-test-github-deploy")
+        except ReleaseStageError as error:
+            footprint = "unavailable_" + str(error).split(":", 1)[1]
+        return f"inspected_stack_{status}_{profile}_inline_{footprint}"
 
     def read_stack() -> dict:
         stacks = lookup.describe_stacks(StackName=stack_name).get("Stacks", [])

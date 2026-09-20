@@ -74,6 +74,13 @@ IAM action names. It does not print the raw status reason or any event body,
 and returns before the update path. Use it before considering recovery or a
 second apply.
 
+The same read-only inspection also counts the existing inline policies on the
+exact TEST API GitHub role and reports their aggregate non-whitespace character
+count, plus whether the proposed policy survived rollback. No policy name or
+document is printed. An IAM read denial is reported as an allowlisted AWS code
+without suppressing the already collected stack-event profile. Compare this
+live footprint with the reviewed candidate size before changing permissions.
+
 After a successful `apply`, verify the new role ARN from the live IAM readback
 and configure `THN_DEDICATED_RUNTIME_CFN_ROLE_ARN` in the API proxy TEST
 Environment. That variable is not a secret. The API's separate private release

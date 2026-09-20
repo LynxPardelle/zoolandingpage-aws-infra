@@ -259,6 +259,31 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.release.stack_event_profile("not-events", "thn-dedicated-identity-1-1", {})
 
+    def test_inline_policy_footprint_reports_sizes_not_contents(self):
+        secret = "sensitive-policy-value"
+
+        class FakeIam:
+            def list_role_policies(self, **kwargs):
+                return {"PolicyNames": ["ExistingA", "ExistingB"], "IsTruncated": False}
+
+            def get_role_policy(self, **kwargs):
+                return {"PolicyDocument": {"Version": "2012-10-17", "Statement": [
+                    {"Effect": "Allow", "Action": "s3:GetObject", "Resource": secret}]}}
+
+        result = self.release.inline_policy_footprint(FakeIam(), "zoolanding-deployer-api-proxy-test-github-deploy")
+        self.assertIn("count2", result)
+        self.assertIn("new_present0", result)
+        self.assertNotIn(secret, result)
+        self.assertNotIn("ExistingA", result)
+
+    def test_inline_policy_footprint_rejects_truncated_list(self):
+        class FakeIam:
+            def list_role_policies(self, **kwargs):
+                return {"PolicyNames": [], "IsTruncated": True}
+
+        with self.assertRaises(ValueError):
+            self.release.inline_policy_footprint(FakeIam(), "zoolanding-deployer-api-proxy-test-github-deploy")
+
     def test_inspect_returns_before_mutating_aws_call(self):
         source = inspect.getsource(self.release.run_release)
         self.assertLess(source.index('if operation == "inspect":'), source.index('stack = read_stack()'))
