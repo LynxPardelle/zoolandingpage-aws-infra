@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import importlib.util
+import inspect
 import json
 import unittest
 from pathlib import Path
@@ -168,6 +169,31 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
             self.release.validate_final_policies(
                 {"PolicyNames": ["Existing"], "IsTruncated": False},
                 {"PolicyNames": ["ThnDedicatedRuntimeTestExecutionV1"], "IsTruncated": False})
+
+    def test_stage_error_reports_only_allowlisted_stage_and_aws_code(self):
+        secret = "do-not-print-secret"
+        class FakeAwsError(Exception):
+            response = {"Error": {"Code": "AccessDenied", "Message": secret}}
+
+        with self.assertRaises(self.release.ReleaseStageError) as captured:
+            self.release.aws_stage("candidate_upload", lambda: (_ for _ in ()).throw(FakeAwsError(secret)))
+        self.assertEqual(str(captured.exception), "candidate_upload:AccessDenied")
+        self.assertNotIn(secret, str(captured.exception))
+        with self.assertRaises(ValueError):
+            self.release.aws_stage("unreviewed_stage", lambda: None)
+
+    def test_postmortem_target_is_fixed_to_one_previous_run(self):
+        target = self.release.postmortem_target("35486800813", "1", "a" * 40, "b" * 64)
+        self.assertEqual(target["name"], "thn-dedicated-identity-35486800813-1")
+        self.assertEqual(target["key"], "thn-dedicated-identity/35486800813/1/" + "a" * 40 + "/" + "b" * 64 + ".json")
+        for run, attempt in (("0", "1"), ("not-a-run", "1"), ("35486800813", "0")):
+            with self.subTest(run=run, attempt=attempt), self.assertRaises(ValueError):
+                self.release.postmortem_target(run, attempt, "a" * 40, "b" * 64)
+
+    def test_diagnose_returns_before_first_mutating_aws_call(self):
+        source = inspect.getsource(self.release.run_release)
+        self.assertLess(source.index('if operation == "diagnose":'), source.index('publisher.put_object'))
+        self.assertLess(source.index('return f"diagnosed_object_'), source.index('publisher.put_object'))
 
 
 if __name__ == "__main__":
