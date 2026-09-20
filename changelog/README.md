@@ -1,5 +1,6 @@
 # Changelog
 
+- [2026-09-19 — THN identity final-readback diagnosis](2026-09-19-thn-identity-final-readback.md)
 - [2026-09-19 — Proposed THN managed-policy import repair](2026-09-19-thn-managed-policy-import-repair.md)
 - [2026-09-19 — THN IAM rollback preflight](2026-09-19-thn-identity-rollback-preflight.md)
 - [2026-09-19 — THN identity inline-policy footprint](2026-09-19-thn-identity-inline-footprint.md)

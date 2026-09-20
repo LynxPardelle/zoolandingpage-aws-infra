@@ -30,7 +30,8 @@ SAFE_STAGES = frozenset({
     "candidate_read_publisher", "candidate_read_deploy", "baseline_before_changeset",
     "changeset_create", "changeset_wait", "changeset_review", "changeset_execute",
     "stack_wait", "final_readback", "postmortem_object", "postmortem_changeset",
-    "postmortem_events", "postmortem_policy", "postmortem_iam", "preflight_role", "preflight_events",
+    "postmortem_events", "postmortem_policy", "postmortem_iam", "postmortem_resources",
+    "preflight_role", "preflight_events",
 })
 
 
@@ -149,6 +150,25 @@ def rollback_iam_profile(iam_client, account: str) -> str:
             _reject()
         present = True
     return f"attached_count{len(attachments)}_execution_role_present{int(present)}"
+
+
+def resource_readback_profile(resources: dict, stack_id: str) -> str:
+    """Describe only the exact resource statuses, never physical IDs or properties."""
+    labels = {EXECUTION_ROLE: "role", GITHUB_POLICY: "github", EXECUTION_POLICY: "execution"}
+    statuses = {"CREATE_COMPLETE", "CREATE_FAILED", "IMPORT_COMPLETE", "IMPORT_FAILED",
+                "UPDATE_COMPLETE", "UPDATE_FAILED", "UPDATE_ROLLBACK_COMPLETE"}
+    profile = []
+    for logical, kind in ADDITIONS.items():
+        response = resources.get(logical) if _is_object(resources) else None
+        detail = response.get("StackResourceDetail") if _is_object(response) else None
+        if (not _is_object(detail) or detail.get("StackId") != stack_id
+                or detail.get("LogicalResourceId") != logical or detail.get("ResourceType") != kind):
+            status = "mismatch"
+        else:
+            status = detail.get("ResourceStatus")
+            status = status if status in statuses else "other"
+        profile.append(f"{labels[logical]}_{status}")
+    return "_".join(profile)
 
 
 def _reject() -> None:
@@ -523,7 +543,37 @@ def run_release(operation: str, candidate: dict, expected_digest: str, env: dict
             rollback = aws_stage("postmortem_iam", rollback_iam_profile, lookup_iam, account)
         except ReleaseStageError as error:
             rollback = "unavailable_" + str(error).split(":", 1)[1]
-        return f"inspected_stack_{status}_{profile}_inline_{footprint}_rollback_{rollback}"
+        try:
+            resource_profile = resource_readback_profile({logical: aws_stage(
+                "postmortem_resources", lookup.describe_stack_resource,
+                StackName=stack_id, LogicalResourceId=logical)
+                for logical in ADDITIONS}, stack_id)
+        except ReleaseStageError as error:
+            resource_profile = "unavailable_" + str(error).split(":", 1)[1]
+        try:
+            templates = [aws_stage("postmortem_resources", _template,
+                aws_stage("postmortem_resources", lookup.get_template,
+                    StackName=stack_id, TemplateStage=stage)) for stage in ("Original", "Processed")]
+            template_profile = "exact" if all(
+                _is_object(template.get("Resources")) and all(
+                    templates_equivalent(template["Resources"].get(logical), addition)
+                    for logical, addition in candidate["additions"].items())
+                for template in templates) else "mismatch"
+        except ReleaseStageError as error:
+            template_profile = "unavailable_" + str(error).split(":", 1)[1]
+        try:
+            aws_stage("postmortem_iam", validate_final_policies,
+                aws_stage("postmortem_iam", lookup_iam.list_role_policies,
+                    RoleName="zoolanding-deployer-api-proxy-test-github-deploy"),
+                aws_stage("postmortem_iam", lookup_iam.list_role_policies,
+                    RoleName="zoolanding-deployer-thn-auth-runtime-test-cfn-exec"),
+                aws_stage("postmortem_iam", lookup_iam.list_attached_role_policies,
+                    RoleName="zoolanding-deployer-api-proxy-test-github-deploy"), account)
+            policy_profile = "exact"
+        except ReleaseStageError as error:
+            policy_profile = "unavailable_" + str(error).split(":", 1)[1]
+        return (f"inspected_stack_{status}_{profile}_inline_{footprint}_rollback_{rollback}"
+                f"_resources_{resource_profile}_templates_{template_profile}_policies_{policy_profile}")
 
     def read_stack() -> dict:
         stacks = lookup.describe_stacks(StackName=stack_name).get("Stacks", [])
