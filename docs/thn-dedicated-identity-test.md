@@ -91,6 +91,10 @@ Before changing the policy resource type or retrying after a rollback,
 `inspect` also reports only the count of existing managed-policy attachments
 on that same role and whether the proposed execution role is still present.
 No attachment ARN, role document, or policy content is emitted.
+The read-only `inspect` result also reports only the three reviewed resource
+statuses and whether the current template and policy attachments match the
+reviewed candidate. Use this after an ambiguous post-execution failure; a
+failed workflow alone does not establish that the CloudFormation update failed.
 
 After a successful `apply`, verify the imported role ARN from the live IAM readback
 and configure `THN_DEDICATED_RUNTIME_CFN_ROLE_ARN` in the API proxy TEST

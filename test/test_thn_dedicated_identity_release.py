@@ -195,6 +195,22 @@ class DedicatedIdentityReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.release.validate_retained_execution_role(changed, empty_inline, empty_attached, account)
 
+    def test_postmortem_resource_profile_reports_only_reviewed_statuses(self):
+        stack_id = "arn:aws:cloudformation:us-east-1:123456789012:stack/Reviewed/id"
+        resources = {logical: {"StackResourceDetail": {"StackId": stack_id,
+            "LogicalResourceId": logical, "ResourceType": kind,
+            "ResourceStatus": "IMPORT_COMPLETE" if logical == self.role else "CREATE_COMPLETE"}}
+            for logical, kind in self.release.ADDITIONS.items()}
+        self.assertEqual(self.release.resource_readback_profile(resources, stack_id),
+            "role_IMPORT_COMPLETE_github_CREATE_COMPLETE_execution_CREATE_COMPLETE")
+        resources[self.role]["StackResourceDetail"]["ResourceStatus"] = "UPDATE_COMPLETE"
+        self.assertEqual(self.release.resource_readback_profile(resources, stack_id),
+            "role_UPDATE_COMPLETE_github_CREATE_COMPLETE_execution_CREATE_COMPLETE")
+        resources[self.role]["StackResourceDetail"]["PhysicalResourceId"] = "private-id"
+        resources[self.role]["StackResourceDetail"]["ResourceType"] = "Unexpected"
+        self.assertEqual(self.release.resource_readback_profile(resources, stack_id),
+            "role_mismatch_github_CREATE_COMPLETE_execution_CREATE_COMPLETE")
+
     def test_repair_requires_auto_import_before_execution(self):
         source = inspect.getsource(self.release.run_release)
         self.assertIn("ImportExistingResources=True", source)
