@@ -49,8 +49,37 @@ def _previous_policy(desired: dict) -> dict:
     return previous
 
 
+def _previous_attachment_policy(desired: dict) -> dict | None:
+    """Derive the exact live Basic-only condition from the reviewed two-ARN policy."""
+    policy = desired.get(POLICY) if isinstance(desired, dict) else None
+    document = policy.get("Properties", {}).get("PolicyDocument") if isinstance(policy, dict) else None
+    statements = document.get("Statement") if isinstance(document, dict) else None
+    if not isinstance(statements, list):
+        _reject()
+    matches = [item for item in statements if isinstance(item, dict)
+               and item.get("Action") == ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]]
+    if len(matches) != 1:
+        return None
+    basic = {"Fn::Join": ["", ["arn:", {"Ref": "AWS::Partition"},
+                                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"]]}
+    xray = {"Fn::Join": ["", ["arn:", {"Ref": "AWS::Partition"},
+                               ":iam::aws:policy/AWSXrayWriteOnlyAccess"]]}
+    if matches[0].get("Condition") != {"ArnEquals": {"iam:PolicyARN": [basic, xray]}}:
+        return None
+    previous = copy.deepcopy(policy)
+    for item in previous["Properties"]["PolicyDocument"]["Statement"]:
+        if isinstance(item, dict) and item.get("Action") == ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]:
+            item["Condition"]["ArnEquals"]["iam:PolicyARN"] = basic
+    return previous
+
+
+def _expected_previous_policy(desired: dict) -> dict:
+    attachment_previous = _previous_attachment_policy(desired)
+    return attachment_previous if attachment_previous is not None else _previous_policy(desired[POLICY])
+
+
 def compose_revision(original: dict, desired: dict) -> dict:
-    """Preserve every old field while replacing only five ARN patterns."""
+    """Preserve every old field while applying one exact policy transition."""
 
     if (not isinstance(original, dict) or not isinstance(original.get("Resources"), dict)
             or original.get("Transform") or not isinstance(desired, dict)
@@ -66,7 +95,7 @@ def compose_revision(original: dict, desired: dict) -> dict:
     if (not isinstance(target, dict) or target.get("Type") != "AWS::IAM::Policy"
             or target.get("Properties", {}).get("PolicyName") != "ThnDedicatedRuntimeTestExecutionV1"
             or target.get("Properties", {}).get("Roles") != [{"Ref": initial.EXECUTION_ROLE}]
-            or resources[POLICY] != _previous_policy(target)):
+            or resources[POLICY] != _expected_previous_policy(desired)):
         _reject()
     result = copy.deepcopy(original)
     result["Resources"][POLICY] = copy.deepcopy(target)
@@ -97,7 +126,7 @@ def validate_live_policy(live_document: dict, desired_resource: dict) -> None:
     if (not isinstance(live_document, dict) or not isinstance(desired_resource, dict)
             or not isinstance(desired_resource.get("Properties", {}).get("PolicyDocument"), dict)):
         _reject()
-    previous = _previous_policy(desired_resource)["Properties"]["PolicyDocument"]
+    previous = _expected_previous_policy({POLICY: desired_resource})["Properties"]["PolicyDocument"]
     if initial.canonical(live_document) != initial.canonical(_resolve_partition(previous)):
         _reject()
 
