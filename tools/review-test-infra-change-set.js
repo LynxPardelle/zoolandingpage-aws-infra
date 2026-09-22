@@ -454,6 +454,47 @@ function reviewChangeSet(changeSet, options) {
   return "execute";
 }
 
+function reviewCompleteChangeSet(detailed, summary, options) {
+  const decision = reviewChangeSet(detailed, options);
+  if (options?.adminOriginOnlyProof !== true) return decision;
+  const reject = () => { throw new ChangeSetReviewError("admin_change_summary_invalid"); };
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)
+    || detailed.NextToken || summary.NextToken
+    || ["StackId", "StackName", "ChangeSetId", "ChangeSetName", "Status", "ExecutionStatus"]
+      .some(key => detailed[key] !== summary[key])
+    || !Array.isArray(summary.Changes) || summary.Changes.length !== 3) reject();
+  const distributionId = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const expected = new Map([
+    ["FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+      ["Custom::ZoolandingFrontendAliasRecords", "Conditional", "Dynamic", "ResourceAttribute", "Create", "Conditionally"]],
+    ["FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+      ["AWS::SSM::Parameter", "False", "Dynamic", "ResourceAttribute", "Value", "Never"]],
+    [distributionId, ["AWS::CloudFront::Distribution", "False", "Static", "DirectModification", "DistributionConfig", "Never"]],
+  ]);
+  const seen = new Set();
+  for (const change of summary.Changes) {
+    const resource = change?.ResourceChange;
+    const id = resource?.LogicalResourceId;
+    const profile = expected.get(id), detail = resource?.Details?.[0], target = detail?.Target;
+    if (change?.Type !== "Resource" || !profile || seen.has(id)
+      || resource.Action !== "Modify" || resource.ResourceType !== profile[0]
+      || resource.Replacement !== profile[1] || JSON.stringify(resource.Scope) !== JSON.stringify(["Properties"])
+      || resource.Details?.length !== 1 || detail.Evaluation !== profile[2]
+      || detail.ChangeSource !== profile[3] || target?.Attribute !== "Properties"
+      || target.Name !== profile[4] || target.RequiresRecreation !== profile[5]) reject();
+    if (id === distributionId) {
+      const detailedResource = detailed.Changes?.[0]?.ResourceChange;
+      if (detailed.Changes?.length !== 1 || detailedResource?.LogicalResourceId !== id
+        || detailedResource.Action !== resource.Action || detailedResource.Replacement !== resource.Replacement
+        || detailedResource.ResourceType !== resource.ResourceType) reject();
+    } else if (detail.CausingEntity !== `${distributionId}.DomainName`
+      || target.Path != null || target.AttributeChangeType != null) reject();
+    seen.add(id);
+  }
+  if (seen.size !== expected.size) reject();
+  return decision;
+}
+
 function parseArguments(argv) {
   if (argv.length < 1) {
     throw new ChangeSetReviewError("description_path_required");
@@ -480,7 +521,7 @@ function parseApproval(value) {
 function main(argv = process.argv.slice(2)) {
   const values = parseArguments(argv);
   const payload = JSON.parse(fs.readFileSync(values.descriptionPath, "utf8"));
-  const decision = reviewChangeSet(payload, {
+  const reviewOptions = {
     expectedStackName: values['expected-stack-name'],
     expectedChangeSetName: values['expected-change-set-name'],
     expectedChangeSetArn: values['expected-change-set-arn'],
@@ -491,7 +532,13 @@ function main(argv = process.argv.slice(2)) {
     adminInfrastructureApproved: parseApproval(values['admin-infrastructure-approved']),
     adminRouteAssociationApproved: parseApproval(values['admin-route-association-approved']),
     adminOriginOnlyProof: values['admin-origin-only-proof'] === undefined ? false : parseApproval(values['admin-origin-only-proof']),
-  });
+  };
+  const summaryPath = values['summary-description-path'];
+  if (reviewOptions.adminOriginOnlyProof && !summaryPath) {
+    throw new ChangeSetReviewError("admin_change_summary_invalid");
+  }
+  const summary = summaryPath ? JSON.parse(fs.readFileSync(summaryPath, "utf8")) : undefined;
+  const decision = reviewCompleteChangeSet(payload, summary, reviewOptions);
   process.stdout.write(`${decision}\n`);
 }
 
@@ -508,4 +555,5 @@ if (require.main === module) {
 module.exports = {
   ChangeSetReviewError,
   reviewChangeSet,
+  reviewCompleteChangeSet,
 };

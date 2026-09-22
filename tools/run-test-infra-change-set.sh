@@ -74,6 +74,14 @@ change_set_arn="$(node -e '
   process.stdout.write(value);
 ' "$description")"
 
+summary_args=()
+if [ "$origin_only_proof" = "true" ]; then
+  summary="$RUNNER_TEMP/$CHANGE_SET_NAME-summary.json"
+  node "$RELEASE_ROOT/release-tools/infra-test-aws.js" describe-change-set-summary \
+    "$RELEASE_ROOT" "$CHANGE_SET_NAME" > "$summary"
+  summary_args+=(--summary-description-path "$summary")
+fi
+
 decision="$(node "$RELEASE_ROOT/release-tools/review-test-infra-change-set.js" \
   "$description" \
   --expected-stack-name "$STACK_NAME" \
@@ -85,7 +93,8 @@ decision="$(node "$RELEASE_ROOT/release-tools/review-test-infra-change-set.js" \
   --expected-host "$EXPECTED_HOST" \
   --admin-infrastructure-approved "$ADMIN_INFRASTRUCTURE_APPROVED" \
   --admin-route-association-approved "$ADMIN_ROUTE_ASSOCIATION_APPROVED" \
-  --admin-origin-only-proof "$origin_only_proof")"
+  --admin-origin-only-proof "$origin_only_proof" \
+  "${summary_args[@]}")"
 
 if [ "$decision" = "noop" ]; then
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
