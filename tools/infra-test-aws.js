@@ -132,6 +132,14 @@ function validateChangeSetIdentity(description, account, name, arn) {
     || (arn && description.ChangeSetId !== arn)) fail("test_infra_change_set_identity_invalid");
 }
 
+function reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly) {
+  try { return review(description, reviewOptions); }
+  catch (error) {
+    if (error?.message !== "admin_change_evidence_missing" || !proveOriginOnly()) throw error;
+    return review(description, { ...reviewOptions, adminOriginOnlyProof: true });
+  }
+}
+
 function main(args, options = {}) {
   const [operation, root, changeSetName, changeSetArn] = args;
   const counts = { "verify-public-release": 2, "describe-change-set": 3, "execute-change-set": 4, "wait-stack": 2, smoke: 2 };
@@ -154,10 +162,21 @@ function main(args, options = {}) {
     if (!["true", "false"].includes(env.ADMIN_INFRASTRUCTURE_APPROVED)
       || !["true", "false"].includes(env.ADMIN_ROUTE_ASSOCIATION_APPROVED)) fail("test_infra_operation_invalid");
     const review = options.review || require("./review-test-infra-change-set").reviewChangeSet;
-    const decision = review(description, { expectedStackName: STACK, expectedChangeSetName: changeSetName,
+    const reviewOptions = { expectedStackName: STACK, expectedChangeSetName: changeSetName,
       expectedChangeSetArn: changeSetArn, expectedChangeSetType: "UPDATE", expectedAccountId: account, expectedRegion: REGION,
       adminInfrastructureApproved: env.ADMIN_INFRASTRUCTURE_APPROVED === "true",
-      adminRouteAssociationApproved: env.ADMIN_ROUTE_ASSOCIATION_APPROVED === "true" });
+      adminRouteAssociationApproved: env.ADMIN_ROUTE_ASSOCIATION_APPROVED === "true" };
+    const proveOriginOnly = () => {
+      if (options.review || !reviewOptions.adminInfrastructureApproved) return false;
+      const lookup = createRoleClient(root, "lookup", options);
+      const liveResponse = JSON.parse(lookup(["cloudformation", "get-template", "--stack-name", STACK,
+        "--template-stage", "Original", "--output", "json"]));
+      const live = typeof liveResponse.TemplateBody === "string"
+        ? JSON.parse(liveResponse.TemplateBody) : liveResponse.TemplateBody;
+      const desired = JSON.parse(fs.readFileSync(path.join(artifact.assemblyRoot, artifact.stack.properties.templateFile), "utf8"));
+      return require("./thn-admin-release").verifyExactAdminOriginOnlyDiff(desired, live);
+    };
+    const decision = reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly);
     if (decision !== "execute") fail("test_infra_execution_not_approved");
     client(["cloudformation", "execute-change-set", "--stack-name", STACK, "--change-set-name", changeSetArn]);
     return;
@@ -192,4 +211,4 @@ if (require.main === module) {
   try { const result = main(process.argv.slice(2)); if (result) process.stdout.write(result); }
   catch { process.stderr.write("test_infra_aws_guard_failed\n"); process.exitCode = 1; }
 }
-module.exports = { loadArtifact, createRoleClient, validChangeSetArn, validChangeSetName, main };
+module.exports = { loadArtifact, createRoleClient, validChangeSetArn, validChangeSetName, reviewWithOriginProof, main };
