@@ -164,12 +164,32 @@ test("opaque admin evidence is retried only after an independent exact-origin pr
     if (!options.adminOriginOnlyProof) throw new Error("admin_change_evidence_missing");
     return "execute";
   };
-  assert.equal(helper.reviewWithOriginProof({}, {}, review, () => true), "execute");
-  assert.deepEqual(calls, [false, true]);
+  assert.equal(helper.reviewWithOriginProof({}, {}, review, () => true, () => { calls.push("complete-inventory"); }), "execute");
+  assert.deepEqual(calls, [false, "complete-inventory", true]);
   calls.length = 0;
-  assert.throws(() => helper.reviewWithOriginProof({}, {}, review, () => false), /admin_change_evidence_missing/);
+  assert.throws(() => helper.reviewWithOriginProof({}, {}, review, () => false, () => { throw new Error("unexpected"); }), /admin_change_evidence_missing/);
   assert.deepEqual(calls, [false]);
-  assert.throws(() => helper.reviewWithOriginProof({}, {}, () => { throw new Error("unrelated"); }, () => true), /unrelated/);
+  assert.throws(() => helper.reviewWithOriginProof({}, {}, review, () => true,
+    () => { throw new Error("admin_change_summary_invalid"); }), /admin_change_summary_invalid/);
+  assert.throws(() => helper.reviewWithOriginProof({}, {}, () => { throw new Error("unrelated"); }, () => true,
+    () => { throw new Error("unexpected"); }), /unrelated/);
+});
+
+test("summary description reads the same immutable change set without property-value filtering", t => {
+  const f = artifact(t);
+  const name = "release-123-1";
+  const description = { StackName: stackName, StackId: `arn:aws:cloudformation:us-east-1:${account}:stack/${stackName}/fixture`,
+    ChangeSetName: name, ChangeSetId: `arn:aws:cloudformation:us-east-1:${account}:changeSet/${name}/fixture`,
+    Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE", Changes: [] };
+  const calls = [];
+  const result = helper.main(["describe-change-set-summary", f.root, name], { env: f.env, seals, runAws: args => {
+    if (args[0] === "sts") return assumeResponse(roles.lookup, args[args.indexOf("--role-session-name") + 1]);
+    calls.push(args);
+    return bytes(description);
+  } });
+  assert.deepEqual(JSON.parse(result), description);
+  assert.equal(calls.length, 1);
+  assert.ok(!calls[0].includes("--include-property-values"));
 });
 
 test("public release drift remains blocked through the existing lookup chain", t => {
