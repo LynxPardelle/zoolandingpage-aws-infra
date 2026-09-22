@@ -122,6 +122,7 @@ const backendApiFrontDoors = {
     comboCatalog: { domainName: "5g5e63f3g4.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     contentHub: { domainName: "z1pub0v0c7.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+    thnAuthRuntime: { domainName: "5paiwwz4zl.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
   },
   production: {
     authAdmin: { domainName: "88fcmasim1.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
@@ -280,7 +281,7 @@ function buildThnAdminTestFrontDoor(
     throw new Error("FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID must be an exact public Route 53 hosted zone ID.");
   }
 
-  const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "apiProxy");
+  const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthRuntime");
   const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "authAdmin");
   const contentHubOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "contentHub");
   const staticRelease = selectThnAdminRelease(source);
