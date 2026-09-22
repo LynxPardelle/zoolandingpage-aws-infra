@@ -126,6 +126,32 @@ test("metadata is not evidence of an approved admin activation", () => {
   assert.throws(() => reviewChangeSet(changeSet(metadataOnlyFixture()), reviewOptions), /admin_change_evidence_missing/);
 });
 
+test("opaque CloudFormation context needs a separately verified exact private-origin diff", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const context = domain => JSON.stringify({ Properties: { DistributionConfig: domain, Tags: [{ Key: "owner", Value: "thn" }] },
+    Metadata: { "aws:cdk:path": "ZoolandingTest/Zoolandingpage-test-Frontend/FrontendDistributionThehairnarrativeAdminTest/Resource" } });
+  const resource = {
+    Action: "Modify", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution", Replacement: "False", Scope: ["Properties"],
+    BeforeContext: context("opaque-before"), AfterContext: context("opaque-after"),
+    Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: {
+      Attribute: "Properties", Name: "DistributionConfig", Path: "/Properties/DistributionConfig",
+      RequiresRecreation: "Never", AttributeChangeType: "Modify", BeforeValue: "opaque-before", AfterValue: "opaque-after",
+    } }],
+  };
+  assert.throws(() => reviewChangeSet(changeSet([resource]), reviewOptions), /admin_change_evidence_missing/);
+  assert.equal(reviewChangeSet(changeSet([resource]), { ...reviewOptions, adminOriginOnlyProof: true }), "execute");
+  for (const changed of [
+    { ...resource, Replacement: "True" },
+    { ...resource, Scope: ["Properties", "Metadata"] },
+    { ...resource, LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestFFFFFFFF" },
+    { ...resource, Details: [{ ...resource.Details[0], Evaluation: "Dynamic" }] },
+    { ...resource, AfterContext: context("opaque-before") },
+  ]) assert.throws(() => reviewChangeSet(changeSet([changed]), { ...reviewOptions, adminOriginOnlyProof: true }));
+  assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), resource]),
+    { ...reviewOptions, adminOriginOnlyProof: true }), /admin_change_evidence_missing/);
+});
+
 test("native metadata may accompany a genuine separately approved admin addition", () => {
   const { reviewChangeSet } = require(reviewerPath);
   const addition = { Action: "Add", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestAABBCCDD", ResourceType: "AWS::CloudFront::Distribution", AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }) };

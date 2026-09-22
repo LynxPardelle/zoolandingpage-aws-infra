@@ -140,6 +140,30 @@ test("ACM selection reads only the exact immutable TEST stack and admin distribu
   assert.throws(() => consumer.adminCertificateFromAssembly(assembly, () => extra), /thn_admin_release_invalid/);
 });
 
+test("private origin proof accepts only the exact dedicated API domain change in the whole template", () => {
+  assert.equal(typeof consumer.verifyExactAdminOriginOnlyDiff, "function");
+  const logical = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const oldDomain = "11zpm6wug2.execute-api.us-east-1.amazonaws.com";
+  const newDomain = "5paiwwz4zl.execute-api.us-east-1.amazonaws.com";
+  const live = { Resources: { Other: { Type: "AWS::S3::Bucket", Properties: { BucketName: "unchanged" } },
+    [logical]: { Type: "AWS::CloudFront::Distribution", Properties: { DistributionConfig: {
+      Aliases: ["admin-test.thehairnarrative.com"], Origins: [{ Id: "api-origin", DomainName: oldDomain, OriginPath: "/Prod" }],
+    } } },
+  } };
+  const desired = structuredClone(live);
+  desired.Resources[logical].Properties.DistributionConfig.Origins[0].DomainName = newDomain;
+  assert.equal(consumer.verifyExactAdminOriginOnlyDiff(desired, live), true);
+  for (const mutate of [
+    value => { value.Resources.Other.Properties.BucketName = "changed"; },
+    value => { value.Resources[logical].Properties.DistributionConfig.Aliases = ["other.example"]; },
+    value => { value.Resources[logical].Properties.DistributionConfig.Origins[0].OriginPath = "/Other"; },
+    value => { value.Resources[logical].Properties.DistributionConfig.Origins[0].DomainName = "evil.example"; },
+  ]) {
+    const changed = structuredClone(desired); mutate(changed);
+    assert.throws(() => consumer.verifyExactAdminOriginOnlyDiff(changed, live), /thn_admin_origin_only_diff_invalid/);
+  }
+});
+
 test("final transported assembly gate measures UTF-8 bytes and total cache behaviors without truncation", () => {
   assert.equal(typeof consumer.verifyAdminAssemblyQuotas, "function");
   const assembly = { artifacts: { stack: { type: "aws:cloudformation:stack", properties: {
