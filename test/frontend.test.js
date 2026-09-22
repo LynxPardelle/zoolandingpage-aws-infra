@@ -132,6 +132,7 @@ const THN_TRUSTED_TEST_API_FRONT_DOORS = {
   apiProxy: releasedTestBackendOwner("api-proxy"),
   authAdmin: releasedTestBackendOwner("auth-admin"),
   contentHub: releasedTestBackendOwner("content-hub"),
+  thnAuthRuntime: { domainName: "5paiwwz4zl.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
 };
 
 function buildFixtureThnAdminFrontDoor(
@@ -1383,6 +1384,19 @@ test("THN admin front door stays disabled until every explicit TEST input is pre
   assert.equal(frontDoor.route53RecordManagement, "create-only");
 });
 
+test("THN admin runtime route uses the dedicated TEST API without changing the public API proxy", () => {
+  const frontDoor = buildFixtureThnAdminFrontDoor();
+  const runtime = frontDoor.backendRoutes.find((route) => route.id === "thn-admin-auth-runtime-v2");
+  assert.deepEqual({ domainName: runtime.domainName, originPath: runtime.originPath }, {
+    domainName: "5paiwwz4zl.execute-api.us-east-1.amazonaws.com",
+    originPath: "/Prod",
+  });
+  assert.deepEqual(releasedTestBackendOwner("api-proxy"), {
+    domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com",
+    originPath: "/Prod",
+  });
+});
+
 test("THN admin inputs fail closed on missing or non-exact certificate coordinates", () => {
   assert.throws(
     () => buildThnAdminTestFrontDoor({ FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true" }, testEnvironment.account),
@@ -1710,6 +1724,19 @@ test("THN admin distribution routes only the exact v2 backend inventory", () => 
     "features/content-hub-v2/action",
     "features/content-hub-v2/read",
   ].sort());
+});
+
+test("THN admin CloudFront behavior targets only the dedicated runtime origin", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST).Properties.DistributionConfig;
+  const behavior = admin.CacheBehaviors.find((item) => item.PathPattern === "auth-v2/runtime-config");
+  const origin = admin.Origins.find((item) => item.Id === behavior.TargetOriginId);
+  assert.equal(origin.DomainName, "5paiwwz4zl.execute-api.us-east-1.amazonaws.com");
+  assert.equal(origin.OriginPath, "/Prod");
+  const publicConfig = distributionForAlias(template, "dev.zoolandingpage.com.mx").Properties.DistributionConfig;
+  const publicBehavior = publicConfig.CacheBehaviors.find((item) => item.PathPattern === "auth/runtime-config");
+  const publicOrigin = publicConfig.Origins.find((item) => item.Id === publicBehavior.TargetOriginId);
+  assert.equal(publicOrigin.DomainName, "11zpm6wug2.execute-api.us-east-1.amazonaws.com");
 });
 
 test("THN exact assets use selected release prefix without duplicated browser or public changes", () => {
