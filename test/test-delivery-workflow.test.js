@@ -126,11 +126,10 @@ test("metadata is not evidence of an approved admin activation", () => {
   assert.throws(() => reviewChangeSet(changeSet(metadataOnlyFixture()), reviewOptions), /admin_change_evidence_missing/);
 });
 
-test("opaque CloudFormation context needs a separately verified exact private-origin diff", () => {
-  const { reviewChangeSet } = require(reviewerPath);
+function opaquePrivateOriginResource() {
   const context = domain => JSON.stringify({ Properties: { DistributionConfig: domain, Tags: [{ Key: "owner", Value: "thn" }] },
     Metadata: { "aws:cdk:path": "ZoolandingTest/Zoolandingpage-test-Frontend/FrontendDistributionThehairnarrativeAdminTest/Resource" } });
-  const resource = {
+  return {
     Action: "Modify", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
     ResourceType: "AWS::CloudFront::Distribution", Replacement: "False", Scope: ["Properties"],
     BeforeContext: context("opaque-before"), AfterContext: context("opaque-after"),
@@ -139,6 +138,11 @@ test("opaque CloudFormation context needs a separately verified exact private-or
       RequiresRecreation: "Never", AttributeChangeType: "Modify", BeforeValue: "opaque-before", AfterValue: "opaque-after",
     } }],
   };
+}
+
+test("opaque CloudFormation context needs a separately verified exact private-origin diff", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const resource = opaquePrivateOriginResource();
   assert.throws(() => reviewChangeSet(changeSet([resource]), reviewOptions), /admin_change_evidence_missing/);
   assert.equal(reviewChangeSet(changeSet([resource]), { ...reviewOptions, adminOriginOnlyProof: true }), "execute");
   for (const changed of [
@@ -146,10 +150,49 @@ test("opaque CloudFormation context needs a separately verified exact private-or
     { ...resource, Scope: ["Properties", "Metadata"] },
     { ...resource, LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestFFFFFFFF" },
     { ...resource, Details: [{ ...resource.Details[0], Evaluation: "Dynamic" }] },
-    { ...resource, AfterContext: context("opaque-before") },
+    { ...resource, AfterContext: resource.BeforeContext },
   ]) assert.throws(() => reviewChangeSet(changeSet([changed]), { ...reviewOptions, adminOriginOnlyProof: true }));
   assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), resource]),
     { ...reviewOptions, adminOriginOnlyProof: true }), /admin_change_evidence_missing/);
+});
+
+test("origin-only proof requires the complete unvalued change inventory", () => {
+  const { reviewCompleteChangeSet } = require(reviewerPath);
+  assert.equal(typeof reviewCompleteChangeSet, "function");
+  const distributionId = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const source = `${distributionId}.DomainName`;
+  const detail = (name, recreation) => ({ Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
+    CausingEntity: source, Target: { Attribute: "Properties", Name: name, RequiresRecreation: recreation } });
+  const dynamic = [
+    { Action: "Modify", LogicalResourceId: "FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+      ResourceType: "Custom::ZoolandingFrontendAliasRecords", Replacement: "Conditional", Scope: ["Properties"],
+      Details: [detail("Create", "Conditionally")] },
+    { Action: "Modify", LogicalResourceId: "FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+      ResourceType: "AWS::SSM::Parameter", Replacement: "False", Scope: ["Properties"],
+      Details: [detail("Value", "Never")] },
+  ];
+  const detailed = changeSet([opaquePrivateOriginResource()]);
+  const staticSummary = structuredClone(opaquePrivateOriginResource());
+  delete staticSummary.BeforeContext;
+  delete staticSummary.AfterContext;
+  const summary = changeSet([...dynamic, staticSummary]);
+  const options = { ...reviewOptions, adminOriginOnlyProof: true };
+  assert.equal(reviewCompleteChangeSet(detailed, summary, options), "execute");
+  assert.throws(() => reviewCompleteChangeSet(detailed, undefined, options), /admin_change_summary_invalid/);
+  for (const mutate of [
+    value => { value.Changes.pop(); },
+    value => { value.Changes[0].ResourceChange.Details[0].CausingEntity = "Other.DomainName"; },
+    value => { value.Changes[0].ResourceChange.Replacement = "True"; },
+    value => { value.Changes[1].ResourceChange.Details[0].Target.Name = "Name"; },
+    value => { value.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Unrelated" } }); },
+    value => { value.ChangeSetId = "other"; },
+  ]) {
+    const changed = structuredClone(summary); mutate(changed);
+    assert.throws(() => reviewCompleteChangeSet(detailed, changed, options), /admin_change_summary_invalid/);
+  }
+  assert.equal(reviewCompleteChangeSet(changeSet([{ Action: "Add", LogicalResourceId: distributionId,
+    ResourceType: "AWS::CloudFront::Distribution", AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }) }]),
+  undefined, reviewOptions), "execute");
 });
 
 test("native metadata may accompany a genuine separately approved admin addition", () => {
@@ -371,6 +414,9 @@ test("TEST helpers use only sealed artifact-derived CDK roles and preserve the p
   }
   assert.match(deploy, /cp tools\/infra-test-aws\.js .release\/release-tools\//);
   assert.match(runner, /infra-test-aws\.js" describe-change-set/);
+  assert.match(runner, /if \[ "\$origin_only_proof" = "true" \]; then[\s\S]*describe-change-set-summary/);
+  assert.match(runner, /summary_args\+=\(--summary-description-path "\$summary"\)/);
+  assert.match(runner, /"\$\{summary_args\[@\]\}"\)/);
   assert.match(runner, /infra-test-aws\.js" execute-change-set/);
   assert.match(runner, /infra-test-aws\.js" wait-stack/);
   assert.doesNotMatch(runner, /aws cloudformation|export AWS_ACCESS_KEY_ID|GITHUB_ENV/);

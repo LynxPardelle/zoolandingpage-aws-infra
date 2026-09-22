@@ -132,17 +132,20 @@ function validateChangeSetIdentity(description, account, name, arn) {
     || (arn && description.ChangeSetId !== arn)) fail("test_infra_change_set_identity_invalid");
 }
 
-function reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly) {
+function reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly, reviewSummary) {
   try { return review(description, reviewOptions); }
   catch (error) {
     if (error?.message !== "admin_change_evidence_missing" || !proveOriginOnly()) throw error;
+    if (typeof reviewSummary !== "function") fail("admin_change_summary_invalid");
+    reviewSummary();
     return review(description, { ...reviewOptions, adminOriginOnlyProof: true });
   }
 }
 
 function main(args, options = {}) {
   const [operation, root, changeSetName, changeSetArn] = args;
-  const counts = { "verify-public-release": 2, "describe-change-set": 3, "execute-change-set": 4, "wait-stack": 2, smoke: 2 };
+  const counts = { "verify-public-release": 2, "describe-change-set": 3, "describe-change-set-summary": 3,
+    "execute-change-set": 4, "wait-stack": 2, smoke: 2 };
   if (args.length !== counts[operation]) fail("test_infra_operation_invalid");
   const env = options.env || process.env;
   const artifact = loadArtifact(root, env);
@@ -154,11 +157,13 @@ function main(args, options = {}) {
   const mode = ["execute-change-set", "wait-stack"].includes(operation) ? "deploy" : "lookup";
   const client = createRoleClient(root, mode, options);
   if (operation.includes("change-set")) {
-    const response = client(["cloudformation", "describe-change-set", "--stack-name", STACK,
-      "--change-set-name", changeSetArn || changeSetName, "--include-property-values", "--output", "json"]);
+    const describeArgs = ["cloudformation", "describe-change-set", "--stack-name", STACK,
+      "--change-set-name", changeSetArn || changeSetName];
+    if (operation !== "describe-change-set-summary") describeArgs.push("--include-property-values");
+    const response = client([...describeArgs, "--output", "json"]);
     const description = JSON.parse(response);
     validateChangeSetIdentity(description, account, changeSetName, changeSetArn);
-    if (operation === "describe-change-set") return response;
+    if (["describe-change-set", "describe-change-set-summary"].includes(operation)) return response;
     if (!["true", "false"].includes(env.ADMIN_INFRASTRUCTURE_APPROVED)
       || !["true", "false"].includes(env.ADMIN_ROUTE_ASSOCIATION_APPROVED)) fail("test_infra_operation_invalid");
     const review = options.review || require("./review-test-infra-change-set").reviewChangeSet;
@@ -176,7 +181,14 @@ function main(args, options = {}) {
       const desired = JSON.parse(fs.readFileSync(path.join(artifact.assemblyRoot, artifact.stack.properties.templateFile), "utf8"));
       return require("./thn-admin-release").verifyExactAdminOriginOnlyDiff(desired, live);
     };
-    const decision = reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly);
+    const reviewSummary = () => {
+      const plain = JSON.parse(client(["cloudformation", "describe-change-set", "--stack-name", STACK,
+        "--change-set-name", changeSetArn, "--output", "json"]));
+      validateChangeSetIdentity(plain, account, changeSetName, changeSetArn);
+      require("./review-test-infra-change-set").reviewCompleteChangeSet(description, plain,
+        { ...reviewOptions, adminOriginOnlyProof: true });
+    };
+    const decision = reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly, reviewSummary);
     if (decision !== "execute") fail("test_infra_execution_not_approved");
     client(["cloudformation", "execute-change-set", "--stack-name", STACK, "--change-set-name", changeSetArn]);
     return;
