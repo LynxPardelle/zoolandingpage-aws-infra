@@ -32,7 +32,8 @@ test -f "$RELEASE_ROOT/release-tools/infra-test-aws.js"
 test -f "$RELEASE_ROOT/thn-admin-selection.json"
 
 # CDK preparation can publish assets; attest the selected APP release first.
-node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json"
+origin_only_proof="$(node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json")"
+[[ "$origin_only_proof" = "true" || "$origin_only_proof" = "false" ]]
 
 cdk_parameters=()
 if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
@@ -83,7 +84,8 @@ decision="$(node "$RELEASE_ROOT/release-tools/review-test-infra-change-set.js" \
   --expected-region "$EXPECTED_AWS_REGION" \
   --expected-host "$EXPECTED_HOST" \
   --admin-infrastructure-approved "$ADMIN_INFRASTRUCTURE_APPROVED" \
-  --admin-route-association-approved "$ADMIN_ROUTE_ASSOCIATION_APPROVED")"
+  --admin-route-association-approved "$ADMIN_ROUTE_ASSOCIATION_APPROVED" \
+  --admin-origin-only-proof "$origin_only_proof")"
 
 if [ "$decision" = "noop" ]; then
   if [ -n "${GITHUB_OUTPUT:-}" ]; then

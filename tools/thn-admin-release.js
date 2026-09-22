@@ -161,6 +161,32 @@ function adminCertificateFromAssembly(assembly, readTemplate) {
   return config.ViewerCertificate.AcmCertificateArn;
 }
 
+function verifyExactAdminOriginOnlyDiff(desired, live) {
+  const reject = () => { throw new Error("thn_admin_origin_only_diff_invalid"); };
+  const logical = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const host = "admin-test.thehairnarrative.com";
+  const oldDomain = "11zpm6wug2.execute-api.us-east-1.amazonaws.com";
+  const newDomain = "5paiwwz4zl.execute-api.us-east-1.amazonaws.com";
+  const before = live?.Resources?.[logical], after = desired?.Resources?.[logical];
+  if (!before || !after) return false; // Initial creation uses explicit alias evidence instead.
+  const oldConfig = before.Properties?.DistributionConfig, newConfig = after.Properties?.DistributionConfig;
+  const exactAlias = config => same(config?.Aliases, [host]);
+  if (!exactAlias(oldConfig) || !exactAlias(newConfig)) reject();
+  const oldOrigins = oldConfig.Origins?.filter(origin => origin.OriginPath === "/Prod" && origin.DomainName === oldDomain);
+  const newOrigins = newConfig.Origins?.filter(origin => origin.OriginPath === "/Prod" && origin.DomainName === newDomain);
+  if (oldOrigins?.length !== 1) return false;
+  if (newOrigins?.length !== 1 || oldOrigins[0].Id !== newOrigins[0].Id) reject();
+  const normalized = structuredClone(desired);
+  const matching = normalized.Resources[logical].Properties.DistributionConfig.Origins
+    .filter(origin => origin.Id === newOrigins[0].Id);
+  if (matching.length !== 1) reject();
+  matching[0].DomainName = oldDomain;
+  const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+  if (!same(stable(normalized), stable(live))) reject();
+  return true;
+}
+
 function verifyAdminAssemblyQuotas(assembly, readTemplate) {
   try {
     const { config, template } = adminTemplateFromAssembly(assembly, readTemplate);
@@ -255,16 +281,17 @@ async function main(args, readAws) {
   const read = readAws || createRoleClient(releaseRoot, "lookup");
   const response = JSON.parse(read(["cloudformation", "get-template", "--stack-name", STACK_NAME, "--template-stage", "Original", "--output", "json"]));
   const liveTemplate = typeof response.TemplateBody === "string" ? JSON.parse(response.TemplateBody) : response.TemplateBody;
+  const originOnlyProof = selected ? verifyExactAdminOriginOnlyDiff(desiredTemplate, liveTemplate) : false;
   const resource = desiredTemplate.Resources?.ThnAdminTestCertificate || liveTemplate?.Resources?.ThnAdminTestCertificate
     ? JSON.parse(read(["cloudformation", "describe-stack-resource", "--stack-name", STACK_NAME,
       "--logical-resource-id", "ThnAdminTestCertificate", "--output", "json"])).StackResourceDetail : undefined;
   const certificateArn = verifyCertificatePreservation(desiredTemplate, liveTemplate, releaseMetadata, resource, selectedArn);
-  if (!certificateArn) return;
+  if (!certificateArn) return originOnlyProof;
   verifyAdminCertificate(JSON.parse(read(["acm", "describe-certificate", "--certificate-arn", certificateArn, "--output", "json"])), {
     arn: certificateArn, arnSha256: releaseMetadata.thn_admin_certificate_sha256,
     accountId: process.env.EXPECTED_AWS_ACCOUNT_ID,
   });
-  if (!selected) return;
+  if (!selected) return originOnlyProof;
   // Use the owned TEST stack output, never an operator-supplied bucket or URL.
   const stack = JSON.parse(read(["cloudformation", "describe-stacks", "--stack-name", STACK_NAME, "--output", "json"]));
   if (stack.Stacks?.length !== 1 || stack.Stacks[0].StackName !== STACK_NAME) fail();
@@ -273,10 +300,14 @@ async function main(args, readAws) {
   await verifyPublishedAdminRelease(selected, async key => read([
     "s3", "cp", `s3://${buckets[0].OutputValue}/${key}`, "-", "--only-show-errors",
   ]));
+  return originOnlyProof;
 }
 
 if (require.main === module) {
-  main(process.argv.slice(2)).catch(() => { process.stderr.write("thn_admin_release_preflight_failed\n"); process.exitCode = 1; });
+  main(process.argv.slice(2)).then(value => {
+    if (process.argv[2] === "verify") process.stdout.write(`${value === true}\n`);
+  }).catch(() => { process.stderr.write("thn_admin_release_preflight_failed\n"); process.exitCode = 1; });
 }
 module.exports = { selectThnAdminRelease, verifyPublishedAdminRelease, isHashedStaticAssetPath, validateSelection,
-  verifyAdminCertificate, verifyCertificatePreservation, adminCertificateFromAssembly, verifyAdminAssemblyQuotas, main };
+  verifyAdminCertificate, verifyCertificatePreservation, adminCertificateFromAssembly, verifyAdminAssemblyQuotas,
+  verifyExactAdminOriginOnlyDiff, main };

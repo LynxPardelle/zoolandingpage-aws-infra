@@ -194,6 +194,34 @@ function assertOnlyAssetPathMetadataChanged(resource) {
   }
 }
 
+function isOpaquePrivateOriginUpdate(resource, changeCount) {
+  if (changeCount !== 1 || resource.Action !== "Modify" || resource.Replacement !== "False"
+    || resource.LogicalResourceId !== "FrontendDistributionThehairnarrativeAdminTest5B029562"
+    || resource.ResourceType !== "AWS::CloudFront::Distribution"
+    || JSON.stringify(resource.Scope) !== JSON.stringify(["Properties"])) return false;
+  let before, after;
+  try {
+    before = parseContext(resource.BeforeContext);
+    after = parseContext(resource.AfterContext);
+  } catch { return false; }
+  const path = "ZoolandingTest/Zoolandingpage-test-Frontend/FrontendDistributionThehairnarrativeAdminTest/Resource";
+  const exactContext = value => JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["Metadata", "Properties"])
+    && JSON.stringify(Object.keys(value.Properties || {}).sort()) === JSON.stringify(["DistributionConfig", "Tags"])
+    && value.Metadata?.["aws:cdk:path"] === path
+    && typeof value.Properties.DistributionConfig === "string" && value.Properties.DistributionConfig.length > 0;
+  if (!exactContext(before) || !exactContext(after)
+    || before.Properties.DistributionConfig === after.Properties.DistributionConfig
+    || JSON.stringify(canonicalize(before.Metadata)) !== JSON.stringify(canonicalize(after.Metadata))
+    || JSON.stringify(canonicalize(before.Properties.Tags)) !== JSON.stringify(canonicalize(after.Properties.Tags))) return false;
+  const detail = resource.Details?.[0], target = detail?.Target;
+  return resource.Details?.length === 1 && detail.Evaluation === "Static"
+    && detail.ChangeSource === "DirectModification" && target?.Attribute === "Properties"
+    && target.Name === "DistributionConfig" && target.Path === "/Properties/DistributionConfig"
+    && target.RequiresRecreation === "Never" && target.AttributeChangeType === "Modify"
+    && target.BeforeValue === before.Properties.DistributionConfig
+    && target.AfterValue === after.Properties.DistributionConfig;
+}
+
 function domainTokens(value) {
   if (typeof value !== "string") {
     return [];
@@ -285,6 +313,7 @@ function reviewChangeSet(changeSet, options) {
     expectedHost = EXACT_ADMIN_HOST,
     adminInfrastructureApproved = false,
     adminRouteAssociationApproved = false,
+    adminOriginOnlyProof = false,
   } = options || {};
 
   if (
@@ -405,7 +434,8 @@ function reviewChangeSet(changeSet, options) {
       }
       adminSurfaceChanges += 1;
       exactHostEvidence ||= contextText.includes(EXACT_ADMIN_HOST)
-        || adminHostMembershipChanged;
+        || adminHostMembershipChanged
+        || (adminOriginOnlyProof === true && isOpaquePrivateOriginUpdate(resource, changes.length));
     } else if (
       isInfrastructure
       || isRouteAssociation && logicalId.includes("ThehairnarrativeAdminTest")
@@ -460,6 +490,7 @@ function main(argv = process.argv.slice(2)) {
     expectedHost: values['expected-host'],
     adminInfrastructureApproved: parseApproval(values['admin-infrastructure-approved']),
     adminRouteAssociationApproved: parseApproval(values['admin-route-association-approved']),
+    adminOriginOnlyProof: values['admin-origin-only-proof'] === undefined ? false : parseApproval(values['admin-origin-only-proof']),
   });
   process.stdout.write(`${decision}\n`);
 }

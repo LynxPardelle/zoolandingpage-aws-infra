@@ -156,6 +156,22 @@ test("exact change-set execution rechecks identity, review and artifact before m
   assert.ok(!calls.includes("cloudformation execute-change-set"));
 });
 
+test("opaque admin evidence is retried only after an independent exact-origin proof", () => {
+  assert.equal(typeof helper.reviewWithOriginProof, "function");
+  const calls = [];
+  const review = (_description, options) => {
+    calls.push(options.adminOriginOnlyProof === true);
+    if (!options.adminOriginOnlyProof) throw new Error("admin_change_evidence_missing");
+    return "execute";
+  };
+  assert.equal(helper.reviewWithOriginProof({}, {}, review, () => true), "execute");
+  assert.deepEqual(calls, [false, true]);
+  calls.length = 0;
+  assert.throws(() => helper.reviewWithOriginProof({}, {}, review, () => false), /admin_change_evidence_missing/);
+  assert.deepEqual(calls, [false]);
+  assert.throws(() => helper.reviewWithOriginProof({}, {}, () => { throw new Error("unrelated"); }, () => true), /unrelated/);
+});
+
 test("public release drift remains blocked through the existing lookup chain", t => {
   assert.equal(typeof helper.main, "function");
   const f = artifact(t);
