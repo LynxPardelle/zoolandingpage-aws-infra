@@ -48,6 +48,48 @@ class DedicatedIdentityRevisionTests(unittest.TestCase):
         for statement in self.original["Resources"][self.execution]["Properties"]["PolicyDocument"]["Statement"]:
             statement["Resource"] = [value.replace(self.new_prefix, self.old_prefix) for value in statement["Resource"]]
 
+    def attachment_fixture(self):
+        desired = copy.deepcopy(self.desired)
+        basic = {"Fn::Join": ["", ["arn:", {"Ref": "AWS::Partition"},
+                                    ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"]]}
+        xray = {"Fn::Join": ["", ["arn:", {"Ref": "AWS::Partition"},
+                                   ":iam::aws:policy/AWSXrayWriteOnlyAccess"]]}
+        attach = desired[self.execution]["Properties"]["PolicyDocument"]["Statement"][2]
+        attach["Action"] = ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+        attach["Condition"] = {"ArnEquals": {"iam:PolicyARN": [basic, xray]}}
+        original = {"Resources": copy.deepcopy(desired), "Outputs": {"Preserve": {"Value": "same"}}}
+        original["Resources"][self.execution]["Properties"]["PolicyDocument"]["Statement"][2]["Condition"]["ArnEquals"]["iam:PolicyARN"] = basic
+        return original, desired
+
+    def test_attachment_revision_changes_only_basic_to_exact_xray_pair(self):
+        original, desired = self.attachment_fixture()
+        before = copy.deepcopy(original)
+        composed = self.revision.compose_revision(original, desired)
+        self.assertEqual(original, before)
+        self.assertEqual(composed["Outputs"], before["Outputs"])
+        for logical in (self.role, self.github):
+            self.assertEqual(composed["Resources"][logical], before["Resources"][logical])
+        self.assertEqual(composed["Resources"][self.execution], desired[self.execution])
+        live = self.revision._resolve_partition(before["Resources"][self.execution]["Properties"]["PolicyDocument"])
+        self.revision.validate_live_policy(live, desired[self.execution])
+
+    def test_attachment_revision_rejects_replay_drift_or_extra_policy(self):
+        for variant in ("replay", "role", "third-policy", "wrong-old-condition", "action"):
+            original, desired = self.attachment_fixture()
+            statement = desired[self.execution]["Properties"]["PolicyDocument"]["Statement"][2]
+            if variant == "replay":
+                original["Resources"][self.execution] = copy.deepcopy(desired[self.execution])
+            elif variant == "role":
+                original["Resources"][self.role]["Properties"]["RoleName"] = "other"
+            elif variant == "third-policy":
+                statement["Condition"]["ArnEquals"]["iam:PolicyARN"].append("arn:aws:iam::aws:policy/AdministratorAccess")
+            elif variant == "wrong-old-condition":
+                original["Resources"][self.execution]["Properties"]["PolicyDocument"]["Statement"][2]["Condition"] = {}
+            else:
+                statement["Action"].append("iam:UpdateRole")
+            with self.subTest(variant=variant), self.assertRaises(ValueError):
+                self.revision.compose_revision(original, desired)
+
     def test_compose_changes_only_five_runtime_resource_patterns(self):
         before = copy.deepcopy(self.original)
         composed = self.revision.compose_revision(self.original, self.desired)

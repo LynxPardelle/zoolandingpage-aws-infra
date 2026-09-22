@@ -105,3 +105,17 @@ plan and immutable, versioned runtime package are still required before its own
 There is no automated destructive rollback. If access must be halted, keep the
 runtime stack and data intact, close access through its service-owned gate, and
 prepare a separately reviewed IAM change set if this identity must be removed.
+
+## Subsequent policy-only revision
+
+After the three resources are already present, use the separate
+`.github/workflows/thn-dedicated-identity-revision-test.yml` workflow, not the
+initial import workflow. Its `verify` and `apply` operations accept only an
+exact reviewed predecessor and one nonreplacing change to the dedicated
+execution policy's `PolicyDocument`. The THN runtime's Lambda role requires
+both `AWSLambdaBasicExecutionRole` and `AWSXrayWriteOnlyAccess`; the reviewed
+revision changes only the allowed managed-policy condition from the former
+alone to that exact pair. The earlier five-prefix revision remains guarded.
+Check the live template and IAM readback before `apply`, and inspect the exact
+failed stage before any retry. This policy revision does not create the runtime
+or open private blog writing.
