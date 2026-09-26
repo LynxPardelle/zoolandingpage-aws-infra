@@ -509,23 +509,47 @@ function reviewCompleteChangeSet(detailed, summary, options) {
       || detailed.NextToken || summary.NextToken
       || ["StackId", "StackName", "ChangeSetId", "ChangeSetName", "Status", "ExecutionStatus"]
         .some(key => detailed[key] !== summary[key])
-      || !Array.isArray(summary.Changes) || summary.Changes.length !== 2) reject();
+      || !Array.isArray(summary.Changes) || summary.Changes.length !== 4) reject();
+    const distributionId = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+    const edgeId = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
+    // Without property values CloudFormation also reports references to the
+    // unchanged distribution domain and the updated function ARN as dynamic.
     const expected = new Map([
-      ["FrontendDistributionThehairnarrativeAdminTest5B029562", ["AWS::CloudFront::Distribution", "DistributionConfig"]],
-      ["FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2", ["AWS::CloudFront::Function", "FunctionCode"]],
+      ["FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+        ["Custom::ZoolandingFrontendAliasRecords", "Conditional", ["Create", "Conditionally", `${distributionId}.DomainName`]]],
+      ["FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+        ["AWS::SSM::Parameter", "False", ["Value", "Never", `${distributionId}.DomainName`]]],
+      [distributionId, ["AWS::CloudFront::Distribution", "False", ["DistributionConfig", "Never", `${edgeId}.FunctionARN`]]],
+      [edgeId, ["AWS::CloudFront::Function", "False", ["FunctionCode", "Never"]]],
     ]);
     const seen = new Set();
     for (const change of summary.Changes) {
       const resource = change?.ResourceChange;
       const profile = expected.get(resource?.LogicalResourceId);
-      const detail = resource?.Details?.[0], target = detail?.Target;
       if (change?.Type !== "Resource" || !profile || seen.has(resource.LogicalResourceId)
         || resource.Action !== "Modify" || resource.ResourceType !== profile[0]
-        || resource.Replacement !== "False" || JSON.stringify(resource.Scope) !== JSON.stringify(["Properties"])
-        || resource.Details?.length !== 1 || detail.Evaluation !== "Static"
-        || detail.ChangeSource !== "DirectModification" || target?.Attribute !== "Properties"
-        || target.Name !== profile[1] || target.RequiresRecreation !== "Never"
-        || (target.Path != null && target.Path !== `/Properties/${profile[1]}`)) reject();
+        || resource.Replacement !== profile[1] || JSON.stringify(resource.Scope) !== JSON.stringify(["Properties"])
+        || resource.Details?.length !== (resource.LogicalResourceId === distributionId ? 2 : 1)) reject();
+      const [name, recreation, cause] = profile[2];
+      const details = resource.Details;
+      const dynamic = resource.LogicalResourceId !== edgeId;
+      if (resource.LogicalResourceId === distributionId) {
+        const inherited = details.find(detail => detail.ChangeSource === "ResourceAttribute");
+        const direct = details.find(detail => detail.ChangeSource === "DirectModification");
+        if (!inherited || !direct || inherited.Evaluation !== "Dynamic" || direct.Evaluation !== "Dynamic"
+          || inherited.CausingEntity !== cause || direct.CausingEntity != null
+          || [inherited, direct].some(detail => detail.Target?.Attribute !== "Properties"
+            || detail.Target.Name !== name || detail.Target.RequiresRecreation !== recreation
+            || detail.Target.Path != null || detail.Target.AttributeChangeType != null)) reject();
+      } else {
+        const detail = details[0], target = detail.Target;
+        if (detail.Evaluation !== (dynamic ? "Dynamic" : "Static")
+          || detail.ChangeSource !== (dynamic ? "ResourceAttribute" : "DirectModification")
+          || detail.CausingEntity !== cause || target?.Attribute !== "Properties"
+          || target.Name !== name || target.RequiresRecreation !== recreation
+          || (dynamic && (target.Path != null || target.AttributeChangeType != null))
+          || (!dynamic && target.Path != null && target.Path !== `/Properties/${name}`)) reject();
+      }
       seen.add(resource.LogicalResourceId);
     }
     if (seen.size !== expected.size) reject();
