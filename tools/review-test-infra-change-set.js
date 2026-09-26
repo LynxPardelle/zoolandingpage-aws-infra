@@ -222,6 +222,46 @@ function isOpaquePrivateOriginUpdate(resource, changeCount) {
     && target.AfterValue === after.Properties.DistributionConfig;
 }
 
+function isOpaquePrivateStaticRotation(changes) {
+  if (changes.length !== 2) return false;
+  const expected = new Map([
+    ["FrontendDistributionThehairnarrativeAdminTest5B029562", ["AWS::CloudFront::Distribution", "DistributionConfig",
+      ["DistributionConfig", "Tags"]]],
+    ["FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2", ["AWS::CloudFront::Function", "FunctionCode",
+      ["AutoPublish", "FunctionCode", "FunctionConfig", "Name", "Tags"]]],
+  ]);
+  const seen = new Set();
+  for (const change of changes) {
+    const resource = change?.ResourceChange;
+    const id = resource?.LogicalResourceId;
+    const profile = expected.get(id);
+    if (!profile || seen.has(id) || resource.Action !== "Modify" || resource.Replacement !== "False"
+      || resource.ResourceType !== profile[0] || JSON.stringify(resource.Scope) !== JSON.stringify(["Properties"])) return false;
+    let before, after;
+    try { before = parseContext(resource.BeforeContext); after = parseContext(resource.AfterContext); }
+    catch { return false; }
+    const path = `ZoolandingTest/Zoolandingpage-test-Frontend/${id.replace(/[A-F0-9]{8}$/, "")}/Resource`;
+    const contextValid = value => JSON.stringify(Object.keys(value).sort()) === JSON.stringify(["Metadata", "Properties"])
+      && JSON.stringify(Object.keys(value.Properties || {}).sort()) === JSON.stringify(profile[2])
+      && value.Metadata?.["aws:cdk:path"] === path;
+    const oldValue = before.Properties?.[profile[1]], newValue = after.Properties?.[profile[1]];
+    const signature = /^\(Truncated-Signature\):[a-f0-9]{64}$/;
+    const normalizedAfter = structuredClone(after);
+    if (!contextValid(before) || !contextValid(after) || !signature.test(oldValue) || !signature.test(newValue)
+      || oldValue === newValue) return false;
+    normalizedAfter.Properties[profile[1]] = oldValue;
+    if (JSON.stringify(canonicalize(before)) !== JSON.stringify(canonicalize(normalizedAfter))) return false;
+    const detail = resource.Details?.[0], target = detail?.Target;
+    if (resource.Details?.length !== 1 || detail.Evaluation !== "Static"
+      || detail.ChangeSource !== "DirectModification" || target?.Attribute !== "Properties"
+      || target.Name !== profile[1] || target.Path !== `/Properties/${profile[1]}`
+      || target.RequiresRecreation !== "Never" || target.AttributeChangeType !== "Modify"
+      || target.BeforeValue !== oldValue || target.AfterValue !== newValue) return false;
+    seen.add(id);
+  }
+  return seen.size === expected.size;
+}
+
 function domainTokens(value) {
   if (typeof value !== "string") {
     return [];
@@ -314,6 +354,7 @@ function reviewChangeSet(changeSet, options) {
     adminInfrastructureApproved = false,
     adminRouteAssociationApproved = false,
     adminOriginOnlyProof = false,
+    adminStaticRotationProof = false,
   } = options || {};
 
   if (
@@ -351,6 +392,9 @@ function reviewChangeSet(changeSet, options) {
   if (adminInfrastructureApproved !== adminRouteAssociationApproved) {
     throw new ChangeSetReviewError("admin_approval_pair_invalid");
   }
+  if (adminOriginOnlyProof && adminStaticRotationProof) {
+    throw new ChangeSetReviewError("admin_proof_mode_invalid");
+  }
   const adminMode = adminInfrastructureApproved && adminRouteAssociationApproved;
 
   const { Status: status, ExecutionStatus: executionStatus, StatusReason: statusReason } = changeSet;
@@ -373,6 +417,8 @@ function reviewChangeSet(changeSet, options) {
   let adminSurfaceChanges = 0;
   let metadataOnlyChanges = 0;
   let exactHostEvidence = false;
+  const staticRotationEvidence = adminMode && adminStaticRotationProof === true
+    && isOpaquePrivateStaticRotation(changes);
   for (const change of changes) {
     if (!change || change.Type !== "Resource" || !change.ResourceChange) {
       throw new ChangeSetReviewError("change_set_entry_invalid");
@@ -435,7 +481,8 @@ function reviewChangeSet(changeSet, options) {
       adminSurfaceChanges += 1;
       exactHostEvidence ||= contextText.includes(EXACT_ADMIN_HOST)
         || adminHostMembershipChanged
-        || (adminOriginOnlyProof === true && isOpaquePrivateOriginUpdate(resource, changes.length));
+        || (adminOriginOnlyProof === true && isOpaquePrivateOriginUpdate(resource, changes.length))
+        || staticRotationEvidence;
     } else if (
       isInfrastructure
       || isRouteAssociation && logicalId.includes("ThehairnarrativeAdminTest")
@@ -456,6 +503,34 @@ function reviewChangeSet(changeSet, options) {
 
 function reviewCompleteChangeSet(detailed, summary, options) {
   const decision = reviewChangeSet(detailed, options);
+  if (options?.adminStaticRotationProof === true) {
+    const reject = () => { throw new ChangeSetReviewError("admin_change_summary_invalid"); };
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)
+      || detailed.NextToken || summary.NextToken
+      || ["StackId", "StackName", "ChangeSetId", "ChangeSetName", "Status", "ExecutionStatus"]
+        .some(key => detailed[key] !== summary[key])
+      || !Array.isArray(summary.Changes) || summary.Changes.length !== 2) reject();
+    const expected = new Map([
+      ["FrontendDistributionThehairnarrativeAdminTest5B029562", ["AWS::CloudFront::Distribution", "DistributionConfig"]],
+      ["FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2", ["AWS::CloudFront::Function", "FunctionCode"]],
+    ]);
+    const seen = new Set();
+    for (const change of summary.Changes) {
+      const resource = change?.ResourceChange;
+      const profile = expected.get(resource?.LogicalResourceId);
+      const detail = resource?.Details?.[0], target = detail?.Target;
+      if (change?.Type !== "Resource" || !profile || seen.has(resource.LogicalResourceId)
+        || resource.Action !== "Modify" || resource.ResourceType !== profile[0]
+        || resource.Replacement !== "False" || JSON.stringify(resource.Scope) !== JSON.stringify(["Properties"])
+        || resource.Details?.length !== 1 || detail.Evaluation !== "Static"
+        || detail.ChangeSource !== "DirectModification" || target?.Attribute !== "Properties"
+        || target.Name !== profile[1] || target.RequiresRecreation !== "Never"
+        || (target.Path != null && target.Path !== `/Properties/${profile[1]}`)) reject();
+      seen.add(resource.LogicalResourceId);
+    }
+    if (seen.size !== expected.size) reject();
+    return decision;
+  }
   if (options?.adminOriginOnlyProof !== true) return decision;
   const reject = () => { throw new ChangeSetReviewError("admin_change_summary_invalid"); };
   if (!summary || typeof summary !== "object" || Array.isArray(summary)
@@ -532,9 +607,10 @@ function main(argv = process.argv.slice(2)) {
     adminInfrastructureApproved: parseApproval(values['admin-infrastructure-approved']),
     adminRouteAssociationApproved: parseApproval(values['admin-route-association-approved']),
     adminOriginOnlyProof: values['admin-origin-only-proof'] === undefined ? false : parseApproval(values['admin-origin-only-proof']),
+    adminStaticRotationProof: values['admin-static-rotation-proof'] === undefined ? false : parseApproval(values['admin-static-rotation-proof']),
   };
   const summaryPath = values['summary-description-path'];
-  if (reviewOptions.adminOriginOnlyProof && !summaryPath) {
+  if ((reviewOptions.adminOriginOnlyProof || reviewOptions.adminStaticRotationProof) && !summaryPath) {
     throw new ChangeSetReviewError("admin_change_summary_invalid");
   }
   const summary = summaryPath ? JSON.parse(fs.readFileSync(summaryPath, "utf8")) : undefined;

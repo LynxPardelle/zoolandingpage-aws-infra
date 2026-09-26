@@ -195,6 +195,53 @@ test("origin-only proof requires the complete unvalued change inventory", () => 
   undefined, reviewOptions), "execute");
 });
 
+test("static release rotation accepts only the two opaque private resources in both change-set views", () => {
+  const { reviewCompleteChangeSet } = require(reviewerPath);
+  const signature = token => `(Truncated-Signature):${token.repeat(64)}`;
+  const resource = (id, type, property, properties) => {
+    const before = { Properties: { ...properties, [property]: signature("a") },
+      Metadata: { "aws:cdk:path": `ZoolandingTest/Zoolandingpage-test-Frontend/${id.replace(/[A-F0-9]{8}$/, "")}/Resource` } };
+    const after = structuredClone(before);
+    after.Properties[property] = signature("b");
+    return { Action: "Modify", LogicalResourceId: id, ResourceType: type, Replacement: "False", Scope: ["Properties"],
+      BeforeContext: JSON.stringify(before), AfterContext: JSON.stringify(after),
+      Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: { Attribute: "Properties",
+        Name: property, Path: `/Properties/${property}`, RequiresRecreation: "Never", AttributeChangeType: "Modify",
+        BeforeValue: signature("a"), AfterValue: signature("b") } }] };
+  };
+  const distribution = resource("FrontendDistributionThehairnarrativeAdminTest5B029562",
+    "AWS::CloudFront::Distribution", "DistributionConfig", { Tags: [{ Key: "Environment", Value: "test" }] });
+  const edge = resource("FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2",
+    "AWS::CloudFront::Function", "FunctionCode", { FunctionConfig: { Runtime: "cloudfront-js-2.0" }, AutoPublish: "true",
+      Tags: [{ Key: "Environment", Value: "test" }], Name: "private-admin-test" });
+  const detailed = changeSet([distribution, edge]);
+  const summary = structuredClone(detailed);
+  for (const change of summary.Changes) {
+    delete change.ResourceChange.BeforeContext;
+    delete change.ResourceChange.AfterContext;
+    delete change.ResourceChange.Details[0].Target.BeforeValue;
+    delete change.ResourceChange.Details[0].Target.AfterValue;
+  }
+  const options = { ...reviewOptions, adminStaticRotationProof: true };
+  assert.equal(reviewCompleteChangeSet(detailed, summary, options), "execute");
+  assert.throws(() => reviewCompleteChangeSet(detailed, summary, reviewOptions), /admin_change_evidence_missing/);
+  const extra = structuredClone(summary);
+  extra.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Other" } });
+  assert.throws(() => reviewCompleteChangeSet(detailed, extra, options), /admin_change_summary_invalid/);
+  for (const mutate of [
+    value => { value.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Other" } }); },
+    value => { value.Changes[0].ResourceChange.Replacement = "True"; },
+    value => { value.Changes[0].ResourceChange.AfterContext = value.Changes[0].ResourceChange.BeforeContext; },
+    value => { value.Changes[1].ResourceChange.Details[0].Target.Name = "FunctionConfig"; },
+  ]) {
+    const changed = structuredClone(detailed); mutate(changed);
+    assert.throws(() => reviewCompleteChangeSet(changed, summary, options));
+  }
+  assert.throws(() => reviewCompleteChangeSet(detailed, undefined, options), /admin_change_summary_invalid/);
+  assert.throws(() => reviewCompleteChangeSet(detailed, summary,
+    { ...options, adminInfrastructureApproved: false, adminRouteAssociationApproved: false }));
+});
+
 test("native metadata may accompany a genuine separately approved admin addition", () => {
   const { reviewChangeSet } = require(reviewerPath);
   const addition = { Action: "Add", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestAABBCCDD", ResourceType: "AWS::CloudFront::Distribution", AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }) };
@@ -414,7 +461,9 @@ test("TEST helpers use only sealed artifact-derived CDK roles and preserve the p
   }
   assert.match(deploy, /cp tools\/infra-test-aws\.js .release\/release-tools\//);
   assert.match(runner, /infra-test-aws\.js" describe-change-set/);
-  assert.match(runner, /if \[ "\$origin_only_proof" = "true" \]; then[\s\S]*describe-change-set-summary/);
+  assert.match(runner, /proof_mode="\$\(node "\$RELEASE_ROOT\/release-tools\/thn-admin-release\.js" verify/);
+  assert.match(runner, /if \[ "\$proof_mode" != "none" \]; then[\s\S]*describe-change-set-summary/);
+  assert.match(runner, /--admin-static-rotation-proof "\$static_rotation_proof"/);
   assert.match(runner, /summary_args\+=\(--summary-description-path "\$summary"\)/);
   assert.match(runner, /"\$\{summary_args\[@\]\}"\)/);
   assert.match(runner, /infra-test-aws\.js" execute-change-set/);

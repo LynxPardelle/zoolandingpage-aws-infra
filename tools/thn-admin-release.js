@@ -187,6 +187,85 @@ function verifyExactAdminOriginOnlyDiff(desired, live) {
   return true;
 }
 
+function verifyExactAdminStaticRotationDiff(desired, live, selection) {
+  const reject = () => { throw new Error("thn_admin_static_rotation_diff_invalid"); };
+  if (!selection) return false;
+  const selected = validateSelection(selection);
+  const host = "admin-test.thehairnarrative.com";
+  const functionId = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
+  const distributionId = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const beforeFunction = live?.Resources?.[functionId], afterFunction = desired?.Resources?.[functionId];
+  const beforeDistribution = live?.Resources?.[distributionId], afterDistribution = desired?.Resources?.[distributionId];
+  if (!beforeFunction || !afterFunction || !beforeDistribution || !afterDistribution) return false;
+  if (beforeFunction.Type !== "AWS::CloudFront::Function" || afterFunction.Type !== beforeFunction.Type
+    || beforeDistribution.Type !== "AWS::CloudFront::Distribution" || afterDistribution.Type !== beforeDistribution.Type) reject();
+  const beforeConfig = beforeDistribution.Properties?.DistributionConfig;
+  const afterConfig = afterDistribution.Properties?.DistributionConfig;
+  if (!same(beforeConfig?.Aliases, [host]) || !same(afterConfig?.Aliases, [host])) reject();
+
+  const beforeCode = beforeFunction.Properties?.FunctionCode;
+  const afterCode = afterFunction.Properties?.FunctionCode;
+  if (beforeCode === afterCode) return false;
+  const rulesPattern = /^  var rules = (\[[^\n]*\]);$/gm;
+  const readRules = code => {
+    if (typeof code !== "string") reject();
+    const matches = [...code.matchAll(rulesPattern)];
+    if (matches.length !== 1) reject();
+    let rules;
+    try { rules = JSON.parse(matches[0][1]); } catch { reject(); }
+    if (!Array.isArray(rules)) reject();
+    return { rules, line: matches[0][0] };
+  };
+  const oldRules = readRules(beforeCode), newRules = readRules(afterCode);
+  const assetRule = rule => isHashedStaticAssetPath(rule?.path);
+  const oldAssets = oldRules.rules.filter(assetRule), newAssets = newRules.rules.filter(assetRule);
+  const validAssetRule = rule => exactKeys(rule, ["path", "methods", "allowLanguageQuery"])
+    && same(rule.methods, ["GET"]) && rule.allowLanguageQuery === false;
+  if (oldAssets.length === 0 || ![...oldAssets, ...newAssets].every(validAssetRule)
+    || !same(newAssets.map(rule => rule.path), selected.manifest.staticAssetPaths)
+    || !same(oldRules.rules.filter(rule => !assetRule(rule)), newRules.rules.filter(rule => !assetRule(rule)))
+    || beforeCode.replace(oldRules.line, "  var rules = __STATIC_ROTATION__;")
+      !== afterCode.replace(newRules.line, "  var rules = __STATIC_ROTATION__;")
+    || beforeCode === afterCode) reject();
+
+  const assetBehavior = behavior => isHashedStaticAssetPath(`/${behavior?.PathPattern}`);
+  const oldBehaviors = beforeConfig?.CacheBehaviors, newBehaviors = afterConfig?.CacheBehaviors;
+  if (!Array.isArray(oldBehaviors) || !Array.isArray(newBehaviors)) reject();
+  const oldStatic = oldBehaviors.filter(assetBehavior), newStatic = newBehaviors.filter(assetBehavior);
+  const paths = behaviors => behaviors.map(behavior => `/${behavior.PathPattern}`);
+  if (!same(paths(oldStatic), oldAssets.map(rule => rule.path))
+    || !same(paths(newStatic), selected.manifest.staticAssetPaths)
+    || !same(oldBehaviors.filter(behavior => !assetBehavior(behavior)),
+      newBehaviors.filter(behavior => !assetBehavior(behavior)))) reject();
+  const staticOriginId = oldStatic[0]?.TargetOriginId;
+  const withoutPath = behavior => {
+    const { PathPattern: ignored, ...shape } = behavior;
+    return shape;
+  };
+  if (typeof staticOriginId !== "string" || staticOriginId.length === 0
+    || ![...oldStatic, ...newStatic].every(behavior =>
+      same(withoutPath(behavior), withoutPath(oldStatic[0])))) reject();
+  const oldOrigins = beforeConfig?.Origins, newOrigins = afterConfig?.Origins;
+  if (!Array.isArray(oldOrigins) || !Array.isArray(newOrigins)) reject();
+  const oldOrigin = oldOrigins.filter(origin => origin.Id === staticOriginId);
+  const newOrigin = newOrigins.filter(origin => origin.Id === staticOriginId);
+  const oldPath = oldOrigin[0]?.OriginPath;
+  const newPath = newOrigin[0]?.OriginPath;
+  if (oldOrigin.length !== 1 || newOrigin.length !== 1
+    || typeof oldPath !== "string" || !/^\/frontend\/angular-ssr\/test\/releases\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(oldPath)
+    || newPath !== `/${selected.originPrefix}` || oldPath === newPath) reject();
+
+  const normalized = structuredClone(desired);
+  normalized.Resources[functionId].Properties.FunctionCode = beforeCode;
+  const normalizedConfig = normalized.Resources[distributionId].Properties.DistributionConfig;
+  normalizedConfig.Origins.find(origin => origin.Id === staticOriginId).OriginPath = oldPath;
+  normalizedConfig.CacheBehaviors = structuredClone(oldBehaviors);
+  const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+  if (!same(stable(normalized), stable(live))) reject();
+  return true;
+}
+
 function verifyAdminAssemblyQuotas(assembly, readTemplate) {
   try {
     const { config, template } = adminTemplateFromAssembly(assembly, readTemplate);
@@ -281,17 +360,18 @@ async function main(args, readAws) {
   const read = readAws || createRoleClient(releaseRoot, "lookup");
   const response = JSON.parse(read(["cloudformation", "get-template", "--stack-name", STACK_NAME, "--template-stage", "Original", "--output", "json"]));
   const liveTemplate = typeof response.TemplateBody === "string" ? JSON.parse(response.TemplateBody) : response.TemplateBody;
-  const originOnlyProof = selected ? verifyExactAdminOriginOnlyDiff(desiredTemplate, liveTemplate) : false;
+  const proofMode = selected && verifyExactAdminOriginOnlyDiff(desiredTemplate, liveTemplate) ? "origin-only"
+    : selected && verifyExactAdminStaticRotationDiff(desiredTemplate, liveTemplate, selected) ? "static-rotation" : "none";
   const resource = desiredTemplate.Resources?.ThnAdminTestCertificate || liveTemplate?.Resources?.ThnAdminTestCertificate
     ? JSON.parse(read(["cloudformation", "describe-stack-resource", "--stack-name", STACK_NAME,
       "--logical-resource-id", "ThnAdminTestCertificate", "--output", "json"])).StackResourceDetail : undefined;
   const certificateArn = verifyCertificatePreservation(desiredTemplate, liveTemplate, releaseMetadata, resource, selectedArn);
-  if (!certificateArn) return originOnlyProof;
+  if (!certificateArn) return proofMode;
   verifyAdminCertificate(JSON.parse(read(["acm", "describe-certificate", "--certificate-arn", certificateArn, "--output", "json"])), {
     arn: certificateArn, arnSha256: releaseMetadata.thn_admin_certificate_sha256,
     accountId: process.env.EXPECTED_AWS_ACCOUNT_ID,
   });
-  if (!selected) return originOnlyProof;
+  if (!selected) return proofMode;
   // Use the owned TEST stack output, never an operator-supplied bucket or URL.
   const stack = JSON.parse(read(["cloudformation", "describe-stacks", "--stack-name", STACK_NAME, "--output", "json"]));
   if (stack.Stacks?.length !== 1 || stack.Stacks[0].StackName !== STACK_NAME) fail();
@@ -300,14 +380,14 @@ async function main(args, readAws) {
   await verifyPublishedAdminRelease(selected, async key => read([
     "s3", "cp", `s3://${buckets[0].OutputValue}/${key}`, "-", "--only-show-errors",
   ]));
-  return originOnlyProof;
+  return proofMode;
 }
 
 if (require.main === module) {
   main(process.argv.slice(2)).then(value => {
-    if (process.argv[2] === "verify") process.stdout.write(`${value === true}\n`);
+    if (process.argv[2] === "verify") process.stdout.write(`${value}\n`);
   }).catch(() => { process.stderr.write("thn_admin_release_preflight_failed\n"); process.exitCode = 1; });
 }
 module.exports = { selectThnAdminRelease, verifyPublishedAdminRelease, isHashedStaticAssetPath, validateSelection,
   verifyAdminCertificate, verifyCertificatePreservation, adminCertificateFromAssembly, verifyAdminAssemblyQuotas,
-  verifyExactAdminOriginOnlyDiff, main };
+  verifyExactAdminOriginOnlyDiff, verifyExactAdminStaticRotationDiff, main };

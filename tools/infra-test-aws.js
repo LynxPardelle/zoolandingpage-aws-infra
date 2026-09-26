@@ -132,14 +132,23 @@ function validateChangeSetIdentity(description, account, name, arn) {
     || (arn && description.ChangeSetId !== arn)) fail("test_infra_change_set_identity_invalid");
 }
 
-function reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly, reviewSummary) {
+function reviewWithAdminProof(description, reviewOptions, review, proveMode, reviewSummary) {
   try { return review(description, reviewOptions); }
   catch (error) {
-    if (error?.message !== "admin_change_evidence_missing" || !proveOriginOnly()) throw error;
+    if (error?.message !== "admin_change_evidence_missing") throw error;
+    const mode = proveMode();
+    if (!["origin-only", "static-rotation"].includes(mode)) throw error;
     if (typeof reviewSummary !== "function") fail("admin_change_summary_invalid");
-    reviewSummary();
-    return review(description, { ...reviewOptions, adminOriginOnlyProof: true });
+    const proofOptions = { ...reviewOptions, adminOriginOnlyProof: mode === "origin-only",
+      adminStaticRotationProof: mode === "static-rotation" };
+    reviewSummary(proofOptions);
+    return review(description, proofOptions);
   }
+}
+
+function reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly, reviewSummary) {
+  return reviewWithAdminProof(description, reviewOptions, review,
+    () => proveOriginOnly() ? "origin-only" : "none", reviewSummary);
 }
 
 function main(args, options = {}) {
@@ -171,24 +180,26 @@ function main(args, options = {}) {
       expectedChangeSetArn: changeSetArn, expectedChangeSetType: "UPDATE", expectedAccountId: account, expectedRegion: REGION,
       adminInfrastructureApproved: env.ADMIN_INFRASTRUCTURE_APPROVED === "true",
       adminRouteAssociationApproved: env.ADMIN_ROUTE_ASSOCIATION_APPROVED === "true" };
-    const proveOriginOnly = () => {
-      if (options.review || !reviewOptions.adminInfrastructureApproved) return false;
+    const proveMode = () => {
+      if (options.review || !reviewOptions.adminInfrastructureApproved) return "none";
       const lookup = createRoleClient(root, "lookup", options);
       const liveResponse = JSON.parse(lookup(["cloudformation", "get-template", "--stack-name", STACK,
         "--template-stage", "Original", "--output", "json"]));
       const live = typeof liveResponse.TemplateBody === "string"
         ? JSON.parse(liveResponse.TemplateBody) : liveResponse.TemplateBody;
       const desired = JSON.parse(fs.readFileSync(path.join(artifact.assemblyRoot, artifact.stack.properties.templateFile), "utf8"));
-      return require("./thn-admin-release").verifyExactAdminOriginOnlyDiff(desired, live);
+      const verifier = require("./thn-admin-release");
+      if (verifier.verifyExactAdminOriginOnlyDiff(desired, live)) return "origin-only";
+      const selection = JSON.parse(fs.readFileSync(path.join(artifact.root, "thn-admin-selection.json"), "utf8"));
+      return verifier.verifyExactAdminStaticRotationDiff(desired, live, selection) ? "static-rotation" : "none";
     };
-    const reviewSummary = () => {
+    const reviewSummary = proofOptions => {
       const plain = JSON.parse(client(["cloudformation", "describe-change-set", "--stack-name", STACK,
         "--change-set-name", changeSetArn, "--output", "json"]));
       validateChangeSetIdentity(plain, account, changeSetName, changeSetArn);
-      require("./review-test-infra-change-set").reviewCompleteChangeSet(description, plain,
-        { ...reviewOptions, adminOriginOnlyProof: true });
+      require("./review-test-infra-change-set").reviewCompleteChangeSet(description, plain, proofOptions);
     };
-    const decision = reviewWithOriginProof(description, reviewOptions, review, proveOriginOnly, reviewSummary);
+    const decision = reviewWithAdminProof(description, reviewOptions, review, proveMode, reviewSummary);
     if (decision !== "execute") fail("test_infra_execution_not_approved");
     client(["cloudformation", "execute-change-set", "--stack-name", STACK, "--change-set-name", changeSetArn]);
     return;
@@ -223,4 +234,5 @@ if (require.main === module) {
   try { const result = main(process.argv.slice(2)); if (result) process.stdout.write(result); }
   catch { process.stderr.write("test_infra_aws_guard_failed\n"); process.exitCode = 1; }
 }
-module.exports = { loadArtifact, createRoleClient, validChangeSetArn, validChangeSetName, reviewWithOriginProof, main };
+module.exports = { loadArtifact, createRoleClient, validChangeSetArn, validChangeSetName,
+  reviewWithOriginProof, reviewWithAdminProof, main };

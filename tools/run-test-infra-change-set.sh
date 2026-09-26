@@ -32,8 +32,15 @@ test -f "$RELEASE_ROOT/release-tools/infra-test-aws.js"
 test -f "$RELEASE_ROOT/thn-admin-selection.json"
 
 # CDK preparation can publish assets; attest the selected APP release first.
-origin_only_proof="$(node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json")"
-[[ "$origin_only_proof" = "true" || "$origin_only_proof" = "false" ]]
+proof_mode="$(node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json")"
+origin_only_proof=false
+static_rotation_proof=false
+case "$proof_mode" in
+  none) ;;
+  origin-only) origin_only_proof=true ;;
+  static-rotation) static_rotation_proof=true ;;
+  *) echo "admin_proof_mode_invalid" >&2; exit 1 ;;
+esac
 
 cdk_parameters=()
 if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
@@ -75,7 +82,7 @@ change_set_arn="$(node -e '
 ' "$description")"
 
 summary_args=()
-if [ "$origin_only_proof" = "true" ]; then
+if [ "$proof_mode" != "none" ]; then
   summary="$RUNNER_TEMP/$CHANGE_SET_NAME-summary.json"
   node "$RELEASE_ROOT/release-tools/infra-test-aws.js" describe-change-set-summary \
     "$RELEASE_ROOT" "$CHANGE_SET_NAME" > "$summary"
@@ -94,6 +101,7 @@ decision="$(node "$RELEASE_ROOT/release-tools/review-test-infra-change-set.js" \
   --admin-infrastructure-approved "$ADMIN_INFRASTRUCTURE_APPROVED" \
   --admin-route-association-approved "$ADMIN_ROUTE_ASSOCIATION_APPROVED" \
   --admin-origin-only-proof "$origin_only_proof" \
+  --admin-static-rotation-proof "$static_rotation_proof" \
   "${summary_args[@]}")"
 
 if [ "$decision" = "noop" ]; then
@@ -109,7 +117,7 @@ test "$prepare_exit" -eq 0 || {
 }
 
 # Recheck immutable provenance immediately before the CloudFormation mutation.
-node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json"
+test "$(node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json")" = "$proof_mode"
 
 node "$RELEASE_ROOT/release-tools/infra-test-aws.js" execute-change-set "$RELEASE_ROOT" "$CHANGE_SET_NAME" "$change_set_arn"
 node "$RELEASE_ROOT/release-tools/infra-test-aws.js" wait-stack "$RELEASE_ROOT"
