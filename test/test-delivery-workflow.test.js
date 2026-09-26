@@ -195,7 +195,7 @@ test("origin-only proof requires the complete unvalued change inventory", () => 
   undefined, reviewOptions), "execute");
 });
 
-test("static release rotation accepts only the two opaque private resources in both change-set views", () => {
+test("static release rotation accepts exact derived changes in the unvalued view", () => {
   const { reviewCompleteChangeSet } = require(reviewerPath);
   const signature = token => `(Truncated-Signature):${token.repeat(64)}`;
   const resource = (id, type, property, properties) => {
@@ -222,12 +222,43 @@ test("static release rotation accepts only the two opaque private resources in b
     delete change.ResourceChange.Details[0].Target.BeforeValue;
     delete change.ResourceChange.Details[0].Target.AfterValue;
   }
+  const distributionId = distribution.LogicalResourceId;
+  const edgeId = edge.LogicalResourceId;
+  const dynamic = (id, type, replacement, name, recreation) => ({ Type: "Resource", ResourceChange: {
+    Action: "Modify", LogicalResourceId: id, ResourceType: type, Replacement: replacement, Scope: ["Properties"],
+    Details: [{ Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
+      CausingEntity: `${distributionId}.DomainName`, Target: { Attribute: "Properties", Name: name,
+        RequiresRecreation: recreation } }],
+  } });
+  summary.Changes.unshift(
+    dynamic("FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+      "Custom::ZoolandingFrontendAliasRecords", "Conditional", "Create", "Conditionally"),
+    dynamic("FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+      "AWS::SSM::Parameter", "False", "Value", "Never")
+  );
+  summary.Changes[2].ResourceChange.Details = [
+    { Evaluation: "Dynamic", ChangeSource: "ResourceAttribute", CausingEntity: `${edgeId}.FunctionARN`,
+      Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } },
+    { Evaluation: "Dynamic", ChangeSource: "DirectModification",
+      Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } },
+  ];
   const options = { ...reviewOptions, adminStaticRotationProof: true };
   assert.equal(reviewCompleteChangeSet(detailed, summary, options), "execute");
   assert.throws(() => reviewCompleteChangeSet(detailed, summary, reviewOptions), /admin_change_evidence_missing/);
   const extra = structuredClone(summary);
   extra.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Other" } });
   assert.throws(() => reviewCompleteChangeSet(detailed, extra, options), /admin_change_summary_invalid/);
+  for (const mutate of [
+    value => { value.Changes.pop(); },
+    value => { value.Changes[0].ResourceChange.Details[0].CausingEntity = "Other.DomainName"; },
+    value => { value.Changes[0].ResourceChange.Replacement = "False"; },
+    value => { value.Changes[1].ResourceChange.Details[0].Target.Name = "Name"; },
+    value => { value.Changes[2].ResourceChange.Details[0].CausingEntity = "Other.FunctionARN"; },
+    value => { value.Changes[2].ResourceChange.Details[1].ChangeSource = "ResourceAttribute"; },
+  ]) {
+    const changed = structuredClone(summary); mutate(changed);
+    assert.throws(() => reviewCompleteChangeSet(detailed, changed, options), /admin_change_summary_invalid/);
+  }
   for (const mutate of [
     value => { value.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Other" } }); },
     value => { value.Changes[0].ResourceChange.Replacement = "True"; },
