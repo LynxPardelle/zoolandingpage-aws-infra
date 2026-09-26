@@ -164,6 +164,44 @@ test("private origin proof accepts only the exact dedicated API domain change in
   }
 });
 
+test("private static rotation proof accepts only the selected asset list and release prefix", () => {
+  const selected = select(fixture(["/browser/chunk-12345678.js", "/browser/styles-abcdef12.css"]).inputs);
+  const oldPaths = ["/browser/chunk-87654321.js", "/browser/styles-fedcba98.css"];
+  const pageRule = { path: "/admin/journal/access", methods: ["GET"], allowLanguageQuery: true };
+  const assetRules = paths => paths.map(path => ({ path, methods: ["GET"], allowLanguageQuery: false }));
+  const code = paths => `function handler(event) {\n  var expectedHost = "admin-test.thehairnarrative.com";\n  var rules = ${JSON.stringify([pageRule, ...assetRules(paths)])};\n  return event.request;\n}`;
+  const behavior = path => ({ PathPattern: path.slice(1), TargetOriginId: "private-static", ViewerProtocolPolicy: "redirect-to-https" });
+  const releasePath = releaseId => `/frontend/angular-ssr/test/releases/${releaseId}`;
+  const functionId = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
+  const distributionId = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const live = { Resources: {
+    Other: { Type: "AWS::S3::Bucket", Properties: { BucketName: "unchanged" } },
+    [functionId]: { Type: "AWS::CloudFront::Function", Properties: { FunctionCode: code(oldPaths) } },
+    [distributionId]: { Type: "AWS::CloudFront::Distribution", Properties: { DistributionConfig: {
+      Aliases: ["admin-test.thehairnarrative.com"],
+      Origins: [{ Id: "private-static", OriginPath: releasePath("thn-admin-previous") }, { Id: "api", OriginPath: "/Prod" }],
+      CacheBehaviors: [...oldPaths.map(behavior), { PathPattern: "auth-v2/session/me", TargetOriginId: "api" }],
+    } } },
+  } };
+  const desired = structuredClone(live);
+  desired.Resources[functionId].Properties.FunctionCode = code(selected.manifest.staticAssetPaths);
+  const config = desired.Resources[distributionId].Properties.DistributionConfig;
+  config.Origins[0].OriginPath = releasePath(selected.metadata.releaseId);
+  config.CacheBehaviors = [...selected.manifest.staticAssetPaths.map(behavior), config.CacheBehaviors.at(-1)];
+  assert.equal(consumer.verifyExactAdminStaticRotationDiff(desired, live, selected), true);
+  assert.equal(consumer.verifyExactAdminStaticRotationDiff(live, live, selected), false);
+  for (const mutate of [
+    value => { value.Resources.Other.Properties.BucketName = "changed"; },
+    value => { value.Resources[distributionId].Properties.DistributionConfig.Aliases = ["thehairnarrative.com"]; },
+    value => { value.Resources[distributionId].Properties.DistributionConfig.Origins[1].OriginPath = "/Other"; },
+    value => { value.Resources[distributionId].Properties.DistributionConfig.CacheBehaviors[0].ViewerProtocolPolicy = "allow-all"; },
+    value => { value.Resources[functionId].Properties.FunctionCode += "\n// additional change"; },
+  ]) {
+    const changed = structuredClone(desired); mutate(changed);
+    assert.throws(() => consumer.verifyExactAdminStaticRotationDiff(changed, live, selected), /thn_admin_static_rotation_diff_invalid/);
+  }
+});
+
 test("final transported assembly gate measures UTF-8 bytes and total cache behaviors without truncation", () => {
   assert.equal(typeof consumer.verifyAdminAssemblyQuotas, "function");
   const assembly = { artifacts: { stack: { type: "aws:cloudformation:stack", properties: {
@@ -234,7 +272,7 @@ test("release CLI attests ACM and immutable S3 metadata read-only; failure preve
     assert.ok(result, "only exact published metadata keys may be read");
     return result;
   };
-  await consumer.main(["verify", selection], read);
+  assert.equal(await consumer.main(["verify", selection], read), "none");
   assert.deepEqual(calls, ["cloudformation get-template", "cloudformation describe-stack-resource", "acm describe-certificate", "cloudformation describe-stacks", "s3 cp", "s3 cp", "s3 cp", "s3 cp"]);
   let failedCalls = 0;
   await assert.rejects(() => consumer.main(["verify", selection], args => {

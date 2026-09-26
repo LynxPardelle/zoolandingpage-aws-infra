@@ -175,6 +175,25 @@ test("opaque admin evidence is retried only after an independent exact-origin pr
     () => { throw new Error("unexpected"); }), /unrelated/);
 });
 
+test("opaque static rotation is re-reviewed with its complete summary before execution", () => {
+  assert.equal(typeof helper.reviewWithAdminProof, "function");
+  const calls = [];
+  const review = (_description, options) => {
+    calls.push(options.adminStaticRotationProof === true ? "static" : "ordinary");
+    if (!options.adminStaticRotationProof) throw new Error("admin_change_evidence_missing");
+    return "execute";
+  };
+  const decision = helper.reviewWithAdminProof({}, {}, review, () => "static-rotation", options => {
+    assert.equal(options.adminStaticRotationProof, true);
+    calls.push("summary");
+  });
+  assert.equal(decision, "execute");
+  assert.deepEqual(calls, ["ordinary", "summary", "static"]);
+  assert.throws(() => helper.reviewWithAdminProof({}, {}, review, () => "none", () => {
+    throw new Error("unexpected summary");
+  }), /admin_change_evidence_missing/);
+});
+
 test("summary description reads the same immutable change set without property-value filtering", t => {
   const f = artifact(t);
   const name = "release-123-1";
