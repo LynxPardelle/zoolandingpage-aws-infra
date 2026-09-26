@@ -728,6 +728,47 @@ test("admin migration may replace only its origin URL permission with the privat
   }
 });
 
+test("native CloudFormation permission replacement proves the private URL dependency", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const logicalId = "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C";
+  const oldArn = "arn:aws:lambda:us-east-1:765932874577:function:zoolandingpage-test-frontend-ssr";
+  const pending = "{{changeSet:KNOWN_AFTER_APPLY}}";
+  const properties = {
+    FunctionName: oldArn,
+    Action: "lambda:InvokeFunctionUrl",
+    SourceArn: "arn:aws:cloudfront::765932874577:distribution/E3FIRFPVARY6BX",
+    Principal: "cloudfront.amazonaws.com",
+  };
+  const metadata = { "aws:cdk:path": `ZoolandingTest/Zoolandingpage-test-Frontend/FrontendDistributionThehairnarrativeAdminTest/Origin1/InvokeFromApiFor${logicalId.slice("FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiFor".length)}` };
+  const target = { Attribute: "Properties", Name: "FunctionName", RequiresRecreation: "Always",
+    Path: "/Properties/FunctionName", BeforeValue: oldArn, AfterValue: pending, AttributeChangeType: "Modify" };
+  const permission = {
+    Action: "Modify", LogicalResourceId: logicalId, ResourceType: "AWS::Lambda::Permission",
+    Replacement: "True", Scope: ["Properties"],
+    BeforeContext: JSON.stringify({ Properties: properties, Metadata: metadata }),
+    AfterContext: JSON.stringify({ Properties: { ...properties, FunctionName: pending }, Metadata: metadata }),
+    Details: [
+      { Target: target, Evaluation: "Dynamic", ChangeSource: "DirectModification" },
+      { Target: target, Evaluation: "Static", ChangeSource: "ResourceAttribute",
+      CausingEntity: "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7.FunctionArn" },
+    ],
+  };
+  const hostChange = {
+    Action: "Modify", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution", Replacement: "False",
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+  };
+  assert.equal(reviewChangeSet(changeSet([permission, hostChange]), reviewOptions), "execute");
+  for (const changed of [
+    { ...permission, Details: [permission.Details[0]] },
+    { ...permission, Details: [permission.Details[0], { ...permission.Details[1], CausingEntity: "FrontendSsrFunctionFunctionUrlD978E4C7.FunctionArn" }] },
+    { ...permission, AfterContext: JSON.stringify({ Properties: { ...properties, FunctionName: pending, Principal: "*" }, Metadata: metadata }) },
+    { ...permission, BeforeContext: JSON.stringify({ Properties: { ...properties, FunctionName: "arn:aws:lambda:us-east-1:765932874577:function:other" }, Metadata: metadata }) },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([changed, hostChange]), reviewOptions));
+  }
+});
+
 test("change-set reviewer allows ordinary SSR drift when the admin host membership is unchanged", () => {
   assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
   const { reviewChangeSet } = require(reviewerPath);
