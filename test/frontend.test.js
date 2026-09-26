@@ -131,6 +131,7 @@ const releasedTestBackendOwner = (id) => {
 const THN_TRUSTED_TEST_API_FRONT_DOORS = {
   apiProxy: releasedTestBackendOwner("api-proxy"),
   authAdmin: releasedTestBackendOwner("auth-admin"),
+  thnAuthAdmin: { domainName: "d6h2nzsn0i.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
   contentHub: releasedTestBackendOwner("content-hub"),
   thnAuthRuntime: { domainName: "5paiwwz4zl.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
 };
@@ -1397,6 +1398,42 @@ test("THN admin runtime route uses the dedicated TEST API without changing the p
   });
 });
 
+test("THN session routes use the dedicated v2 API while public v1 keeps its origin", () => {
+  const frontDoor = buildFixtureThnAdminFrontDoor();
+  const sessions = frontDoor.backendRoutes.find(route => route.id === "thn-admin-auth-v2");
+  assert.deepEqual({ domainName: sessions.domainName, originPath: sessions.originPath },
+    THN_TRUSTED_TEST_API_FRONT_DOORS.thnAuthAdmin);
+  assert.deepEqual(releasedTestBackendOwner("auth-admin"),
+    THN_TRUSTED_TEST_API_FRONT_DOORS.authAdmin);
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST).Properties.DistributionConfig;
+  const signin = admin.CacheBehaviors.find(item => item.PathPattern === "auth-v2/session/signin");
+  const origin = admin.Origins.find(item => item.Id === signin.TargetOriginId);
+  assert.equal(origin.DomainName, THN_TRUSTED_TEST_API_FRONT_DOORS.thnAuthAdmin.domainName);
+  assert.equal(origin.OriginPath, "/test");
+});
+
+test("THN page SSR uses the same sealed release as private assets without replacing public SSR", () => {
+  const template = synthesizeThnAdminFixture();
+  const release = adminReleaseFixture();
+  const functions = Object.entries(template.findResources("AWS::Lambda::Function"));
+  const privateSsr = functions.find(([, resource]) =>
+    resource.Properties?.Code?.S3Key === `${release.prefix}/server/ssr-handler.zip`);
+  const publicSsr = functions.find(([, resource]) =>
+    resource.Properties?.Code?.S3Key === "frontend/angular-ssr/test/releases/test-release/server/ssr-handler.zip");
+  assert.ok(privateSsr, "private SSR must use the selected admin bundle");
+  assert.ok(publicSsr, "public SSR bundle must remain selected independently");
+  assert.equal(privateSsr[1].Properties.Environment.Variables.ZLP_RELEASE_ID, release.manifest.releaseId);
+  assert.equal(privateSsr[1].Properties.Environment.Variables.NG_ALLOWED_HOSTS,
+    `${THN_ADMIN_HOST},*.lambda-url.us-east-1.on.aws`);
+  const privateUrl = Object.entries(template.findResources("AWS::Lambda::Url"))
+    .find(([, resource]) => JSON.stringify(resource.Properties).includes(privateSsr[0]));
+  assert.ok(privateUrl, "private SSR must have its own IAM-protected function URL");
+  const admin = distributionForAlias(template, THN_ADMIN_HOST).Properties.DistributionConfig;
+  const pageOrigin = admin.Origins.find(origin => origin.Id === admin.DefaultCacheBehavior.TargetOriginId);
+  assert.match(JSON.stringify(pageOrigin.DomainName), new RegExp(privateUrl[0]));
+});
+
 test("THN admin inputs fail closed on missing or non-exact certificate coordinates", () => {
   assert.throws(
     () => buildThnAdminTestFrontDoor({ FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true" }, testEnvironment.account),
@@ -1421,8 +1458,8 @@ test("THN admin inputs fail closed on missing or non-exact certificate coordinat
   assert.throws(
     () => buildFixtureThnAdminFrontDoor(THN_ADMIN_INPUTS, {
       ...THN_TRUSTED_TEST_API_FRONT_DOORS,
-      authAdmin: {
-        ...THN_TRUSTED_TEST_API_FRONT_DOORS.authAdmin,
+      thnAuthAdmin: {
+        ...THN_TRUSTED_TEST_API_FRONT_DOORS.thnAuthAdmin,
         domainName: "https://auth-v2.example.com",
       },
     }),
@@ -1431,8 +1468,8 @@ test("THN admin inputs fail closed on missing or non-exact certificate coordinat
   assert.throws(
     () => buildFixtureThnAdminFrontDoor(THN_ADMIN_INPUTS, {
       ...THN_TRUSTED_TEST_API_FRONT_DOORS,
-      authAdmin: {
-        ...THN_TRUSTED_TEST_API_FRONT_DOORS.authAdmin,
+      thnAuthAdmin: {
+        ...THN_TRUSTED_TEST_API_FRONT_DOORS.thnAuthAdmin,
         domainName: "attacker.example",
       },
     }),
@@ -1612,7 +1649,7 @@ test("THN admin page and backend route inventories are sealed exactly", () => {
           : backendRoute
       )),
     }),
-    /must use the verified TEST coordinates owned by auth-admin/
+    /must use the verified TEST coordinates owned by thn-auth-admin/
   );
 
   const coordinatedDriftEnvironment = releasedEnvironmentWithThnAdmin();
@@ -1652,7 +1689,7 @@ test("THN admin page and backend route inventories are sealed exactly", () => {
       },
       environment: coordinatedDriftEnvironment,
     }),
-    /does not match the immutable TEST owner seal/
+    /must use the verified TEST coordinates owned by thn-auth-admin/
   );
 });
 
