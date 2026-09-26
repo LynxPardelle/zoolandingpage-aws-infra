@@ -141,11 +141,31 @@ function isPrivateOriginPermissionReplacement(resource) {
   } catch { return false; }
   const beforeProperties = before.Properties || before;
   const afterProperties = after.Properties || after;
-  if (JSON.stringify(beforeProperties.FunctionName) !== JSON.stringify({
+  const symbolic = JSON.stringify(beforeProperties.FunctionName) === JSON.stringify({
     "Fn::GetAtt": ["FrontendSsrFunctionFunctionUrlD978E4C7", "FunctionArn"],
-  }) || JSON.stringify(afterProperties.FunctionName) !== JSON.stringify({
+  }) && JSON.stringify(afterProperties.FunctionName) === JSON.stringify({
     "Fn::GetAtt": ["FrontendThnAdminSsrFunctionFunctionUrlA847D4A7", "FunctionArn"],
-  })) return false;
+  });
+  const oldArn = "arn:aws:lambda:us-east-1:765932874577:function:zoolandingpage-test-frontend-ssr";
+  const pending = "{{changeSet:KNOWN_AFTER_APPLY}}";
+  const nativeTarget = {
+    Attribute: "Properties", Name: "FunctionName", RequiresRecreation: "Always",
+    Path: "/Properties/FunctionName", BeforeValue: oldArn, AfterValue: pending,
+    AttributeChangeType: "Modify",
+  };
+  const nativeDetails = resource.Details;
+  const native = beforeProperties.FunctionName === oldArn && afterProperties.FunctionName === pending
+    && JSON.stringify(resource.Scope) === JSON.stringify(["Properties"])
+    && Array.isArray(nativeDetails) && nativeDetails.length === 2
+    && nativeDetails.some(detail => detail.Evaluation === "Dynamic"
+      && detail.ChangeSource === "DirectModification" && detail.CausingEntity == null
+      && JSON.stringify(canonicalize(detail.Target)) === JSON.stringify(canonicalize(nativeTarget)))
+    && nativeDetails.some(detail => detail.Evaluation === "Static"
+      && detail.ChangeSource === "ResourceAttribute"
+      && detail.CausingEntity === "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7.FunctionArn"
+      && JSON.stringify(canonicalize(detail.Target)) === JSON.stringify(canonicalize(nativeTarget)))
+    && beforeProperties.SourceArn === "arn:aws:cloudfront::765932874577:distribution/E3FIRFPVARY6BX";
+  if (!symbolic && !native) return false;
   const normalizedBefore = structuredClone(before);
   const normalizedAfter = structuredClone(after);
   (normalizedBefore.Properties || normalizedBefore).FunctionName = null;
@@ -153,7 +173,7 @@ function isPrivateOriginPermissionReplacement(resource) {
   return JSON.stringify(canonicalize(normalizedBefore)) === JSON.stringify(canonicalize(normalizedAfter))
     && beforeProperties.Action === "lambda:InvokeFunctionUrl"
     && beforeProperties.Principal === "cloudfront.amazonaws.com"
-    && JSON.stringify(beforeProperties.SourceArn || {}).includes("FrontendDistributionThehairnarrativeAdminTest5B029562");
+    && (native || JSON.stringify(beforeProperties.SourceArn || {}).includes("FrontendDistributionThehairnarrativeAdminTest5B029562"));
 }
 
 function assertOnlyCdkAnalyticsChanged(resource) {
