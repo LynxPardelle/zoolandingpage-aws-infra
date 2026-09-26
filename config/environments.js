@@ -119,6 +119,7 @@ const serviceRepositoryBootstrap = {
 const backendApiFrontDoors = {
   test: {
     authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    thnAuthAdmin: { domainName: "d6h2nzsn0i.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     comboCatalog: { domainName: "5g5e63f3g4.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     contentHub: { domainName: "z1pub0v0c7.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
@@ -282,7 +283,7 @@ function buildThnAdminTestFrontDoor(
   }
 
   const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthRuntime");
-  const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "authAdmin");
+  const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthAdmin");
   const contentHubOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "contentHub");
   const staticRelease = selectThnAdminRelease(source);
 

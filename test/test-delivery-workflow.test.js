@@ -636,6 +636,98 @@ test("actual synthesized THN activation inventory passes the exact reviewer", ()
   assert.equal(reviewChangeSet(changeSet(resourceChanges), reviewOptions), "execute");
 });
 
+test("private SSR resources require paired approval and exact admin identities", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const privateFunction = {
+    Action: "Add",
+    LogicalResourceId: "FrontendThnAdminSsrFunction874373CC",
+    ResourceType: "AWS::Lambda::Function",
+    Replacement: null,
+    AfterContext: JSON.stringify({
+      FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr",
+      Code: { S3Key: "frontend/angular-ssr/test/releases/selected/server/ssr-handler.zip" },
+      Environment: { Variables: { NG_ALLOWED_HOSTS: "admin-test.thehairnarrative.com,*.lambda-url.us-east-1.on.aws", ZLP_RELEASE_ID: "selected" } },
+    }),
+  };
+  assert.equal(reviewChangeSet(changeSet([privateFunction]), reviewOptions), "execute");
+  assert.throws(() => reviewChangeSet(changeSet([privateFunction]), ordinaryReview), /admin_change_requires_approvals/);
+  for (const changed of [
+    { ...privateFunction, LogicalResourceId: "FrontendSsrFunction47B61DD8" },
+    { ...privateFunction, LogicalResourceId: "FrontendThnAdminSsrFunctionEvil874373CC" },
+    { ...privateFunction, ResourceType: "AWS::IAM::Role" },
+    { ...privateFunction, Action: "Modify", Replacement: "False" },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([changed]), reviewOptions));
+  }
+});
+
+test("admin migration retires only the old shared Lambda permissions for its distribution", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const hostChange = {
+    Action: "Modify",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: "False",
+    BeforeContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"], Origins: ["shared-ssr"] }),
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"], Origins: ["private-ssr"] }),
+  };
+  const oldPermission = {
+    Action: "Remove",
+    LogicalResourceId: "FrontendSsrFunctionAllowCloudFrontInvokeFunctionThehairnarrativeAdminTest0899BBD5",
+    ResourceType: "AWS::Lambda::Permission",
+    Replacement: null,
+  };
+  const changes = [hostChange, oldPermission, {
+    ...oldPermission,
+    LogicalResourceId: "FrontendSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminTest8C77CFB7",
+  }];
+  assert.equal(reviewChangeSet(changeSet(changes), reviewOptions), "execute");
+  assert.throws(() => reviewChangeSet(changeSet(changes), ordinaryReview), /admin_change_requires_approvals/);
+  for (const changed of [
+    { ...oldPermission, LogicalResourceId: "FrontendSsrFunctionAllowCloudFrontInvokeFunctionOtherHostAABBCCDD" },
+    { ...oldPermission, ResourceType: "AWS::Lambda::Function" },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([hostChange, changed]), reviewOptions));
+  }
+});
+
+test("admin migration may replace only its origin URL permission with the private Lambda URL", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const oldProperties = {
+    Action: "lambda:InvokeFunctionUrl",
+    Principal: "cloudfront.amazonaws.com",
+    SourceArn: { Ref: "FrontendDistributionThehairnarrativeAdminTest5B029562" },
+    FunctionName: { "Fn::GetAtt": ["FrontendSsrFunctionFunctionUrlD978E4C7", "FunctionArn"] },
+  };
+  const newProperties = {
+    ...oldProperties,
+    FunctionName: { "Fn::GetAtt": ["FrontendThnAdminSsrFunctionFunctionUrlA847D4A7", "FunctionArn"] },
+  };
+  const permission = {
+    Action: "Modify",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C",
+    ResourceType: "AWS::Lambda::Permission",
+    Replacement: "True",
+    BeforeContext: JSON.stringify(oldProperties),
+    AfterContext: JSON.stringify(newProperties),
+  };
+  assert.equal(reviewChangeSet(changeSet([permission, {
+    Action: "Modify",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: "False",
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+  }]), reviewOptions), "execute");
+  for (const changed of [
+    { ...permission, AfterContext: JSON.stringify({ ...newProperties, Principal: "*" }) },
+    { ...permission, AfterContext: JSON.stringify({ ...newProperties, FunctionName: { "Fn::GetAtt": ["FrontendSsrFunctionFunctionUrlD978E4C7", "FunctionArn"] } }) },
+    { ...permission, LogicalResourceId: permission.LogicalResourceId.replace("ThehairnarrativeAdminTest", "Other") },
+    { ...permission, ResourceType: "AWS::IAM::Role" },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([changed]), reviewOptions));
+  }
+});
+
 test("change-set reviewer allows ordinary SSR drift when the admin host membership is unchanged", () => {
   assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
   const { reviewChangeSet } = require(reviewerPath);

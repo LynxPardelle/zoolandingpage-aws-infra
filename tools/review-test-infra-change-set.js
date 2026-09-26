@@ -19,6 +19,15 @@ const ADMIN_INFRASTRUCTURE_RULES = [
   [/^FrontendAliasUpsertThehairnarrativeAdminTest[A-Za-z0-9]+$/, "Custom::ZoolandingFrontendAliasRecords"],
   [/^FrontendAliasUpsertThehairnarrativeAdminTest[A-Za-z0-9]+CustomResourcePolicy[A-F0-9]+$/, "AWS::IAM::Policy"],
   [/^FrontendDistributionDomainParameterThehairnarrativeAdminTest[A-F0-9]+$/, "AWS::SSM::Parameter"],
+  [/^FrontendDistributionThehairnarrativeAdminTestOrigin1FunctionUrlOriginAccessControl[A-F0-9]+$/, "AWS::CloudFront::OriginAccessControl"],
+];
+
+const ADMIN_PRIVATE_SSR_RULES = [
+  [/^FrontendThnAdminSsrFunction[A-F0-9]+$/, "AWS::Lambda::Function"],
+  [/^FrontendThnAdminSsrFunctionFunctionUrl[A-F0-9]+$/, "AWS::Lambda::Url"],
+  [/^FrontendThnAdminSsrFunctionServiceRole[A-F0-9]+$/, "AWS::IAM::Role"],
+  [/^FrontendThnAdminSsrLogGroup[A-F0-9]+$/, "AWS::Logs::LogGroup"],
+  [/^FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunction(?:Url)?ThehairnarrativeAdminTest[A-F0-9]+$/, "AWS::Lambda::Permission"],
 ];
 
 const ADMIN_ROUTE_RULES = [
@@ -26,6 +35,11 @@ const ADMIN_ROUTE_RULES = [
   [/^FrontendSsrFunctionAllowCloudFrontInvokeFunction(?:Url)?ThehairnarrativeAdminTest[A-F0-9]+$/, "AWS::Lambda::Permission"],
   [/^FrontendDistributionThehairnarrativeAdminTest[A-Za-z0-9]+InvokeFromApiFor[A-Za-z0-9]+$/, "AWS::Lambda::Permission"],
 ];
+
+const RETIRED_ADMIN_SHARED_PERMISSIONS = new Set([
+  "FrontendSsrFunctionAllowCloudFrontInvokeFunctionThehairnarrativeAdminTest0899BBD5",
+  "FrontendSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminTest8C77CFB7",
+]);
 
 function requireString(value, code) {
   if (typeof value !== "string" || value.length === 0) {
@@ -114,6 +128,32 @@ function assertOnlyAdminHostMembershipChanged(resource) {
   ) {
     throw new ChangeSetReviewError("shared_ssr_change_forbidden");
   }
+}
+
+function isPrivateOriginPermissionReplacement(resource) {
+  if (resource.Action !== "Modify" || resource.Replacement !== "True"
+    || resource.LogicalResourceId !== "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C"
+    || resource.ResourceType !== "AWS::Lambda::Permission") return false;
+  let before, after;
+  try {
+    before = parseContext(resource.BeforeContext);
+    after = parseContext(resource.AfterContext);
+  } catch { return false; }
+  const beforeProperties = before.Properties || before;
+  const afterProperties = after.Properties || after;
+  if (JSON.stringify(beforeProperties.FunctionName) !== JSON.stringify({
+    "Fn::GetAtt": ["FrontendSsrFunctionFunctionUrlD978E4C7", "FunctionArn"],
+  }) || JSON.stringify(afterProperties.FunctionName) !== JSON.stringify({
+    "Fn::GetAtt": ["FrontendThnAdminSsrFunctionFunctionUrlA847D4A7", "FunctionArn"],
+  })) return false;
+  const normalizedBefore = structuredClone(before);
+  const normalizedAfter = structuredClone(after);
+  (normalizedBefore.Properties || normalizedBefore).FunctionName = null;
+  (normalizedAfter.Properties || normalizedAfter).FunctionName = null;
+  return JSON.stringify(canonicalize(normalizedBefore)) === JSON.stringify(canonicalize(normalizedAfter))
+    && beforeProperties.Action === "lambda:InvokeFunctionUrl"
+    && beforeProperties.Principal === "cloudfront.amazonaws.com"
+    && JSON.stringify(beforeProperties.SourceArn || {}).includes("FrontendDistributionThehairnarrativeAdminTest5B029562");
 }
 
 function assertOnlyCdkAnalyticsChanged(resource) {
@@ -430,9 +470,16 @@ function reviewChangeSet(changeSet, options) {
     const replacement = resource.Replacement;
     const isCdkAnalyticsMetadata = logicalId === "CDKMetadata"
       && resourceType === "AWS::CDK::Metadata";
+    const retiredAdminPermission = adminMode && action === "Remove"
+      && resourceType === "AWS::Lambda::Permission"
+      && RETIRED_ADMIN_SHARED_PERMISSIONS.has(logicalId);
+    const privateOriginPermissionReplacement = adminMode
+      && isPrivateOriginPermissionReplacement(resource);
 
-    if (!['Add', 'Modify'].includes(action) || (![undefined, null, "False"].includes(replacement)
-      && !(isCdkAnalyticsMetadata && replacement === "Conditional"))) {
+    if ((!['Add', 'Modify'].includes(action) && !retiredAdminPermission)
+      || (![undefined, null, "False"].includes(replacement)
+      && !(isCdkAnalyticsMetadata && replacement === "Conditional")
+      && !privateOriginPermissionReplacement)) {
       throw new ChangeSetReviewError("stateful_resource_change_forbidden");
     }
     if (logicalId === "ThnAdminTestCertificate" || resourceType === "AWS::CertificateManager::Certificate") {
@@ -444,6 +491,7 @@ function reviewChangeSet(changeSet, options) {
     assertNoProductionAlias(resource, `change.${logicalId}`);
 
     const isInfrastructure = matchesRule(logicalId, resourceType, ADMIN_INFRASTRUCTURE_RULES);
+    const isPrivateSsr = matchesRule(logicalId, resourceType, ADMIN_PRIVATE_SSR_RULES);
     const isRouteAssociation = matchesRule(logicalId, resourceType, ADMIN_ROUTE_RULES);
     if (logicalId === "CDKMetadata" || resourceType === "AWS::CDK::Metadata") {
       if (!isCdkAnalyticsMetadata) {
@@ -469,8 +517,11 @@ function reviewChangeSet(changeSet, options) {
       && hostMembershipChanged(resource, EXACT_ADMIN_HOST);
 
     if (adminMode) {
-      if (!isInfrastructure && !isRouteAssociation) {
+      if (!isInfrastructure && !isPrivateSsr && !isRouteAssociation) {
         throw new ChangeSetReviewError("non_admin_resource_change_forbidden");
+      }
+      if (isPrivateSsr && action !== "Add") {
+        throw new ChangeSetReviewError("private_ssr_change_forbidden");
       }
       if (isSharedSsrFunction) {
         if (action !== "Modify") {
@@ -485,6 +536,7 @@ function reviewChangeSet(changeSet, options) {
         || staticRotationEvidence;
     } else if (
       isInfrastructure
+      || isPrivateSsr
       || isRouteAssociation && logicalId.includes("ThehairnarrativeAdminTest")
       || adminHostMembershipChanged
     ) {
