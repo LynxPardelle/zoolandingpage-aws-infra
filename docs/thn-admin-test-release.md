@@ -1,8 +1,11 @@
 # THN TEST admin release selection
 
 This contract is TEST-only. It does not issue certificates, select a new public
-frontend release, create accounts, change IAM, or enable either approval flag.
-The existing shared SSR Lambda and exact-host guard remain unchanged.
+frontend release, create accounts, or enable either approval flag. The private
+admin distribution uses a dedicated SSR Lambda and IAM-protected Function URL
+from the selected admin release. Its role, log group, and CloudFront access
+control are created only with the paired admin approvals. The public SSR Lambda
+and its selected release remain independent.
 
 ## Inputs and immutable transport
 
@@ -93,9 +96,11 @@ already contain `/browser/`. The public static origin retains its existing
 selected release and prefix. No wildcard `/browser/*` behavior is created.
 
 The public `FRONTEND_RELEASE_ID` must still equal the live public release during
-the separate admin infrastructure approval. Selecting the shared Lambda's new
-APP artifact happens at the independently approved frontend-release step; it
-must not be combined with or hidden inside admin infrastructure activation.
+the separate admin infrastructure approval. The admin SSR bundle and exact
+static asset allowlist are selected from the same verified APP release. The
+private session routes use the isolated THN Auth Admin TEST API; the public v1
+Auth Admin origin is unchanged. A later admin release rotation requires its own
+review of the private SSR Lambda change.
 An issued exact certificate and approved DNS ownership remain prerequisites.
 The separate [retained prerequisite workflow](thn-test-prerequisites.md) owns its
 single-resource bootstrap. The normal reviewer rejects every certificate change;
