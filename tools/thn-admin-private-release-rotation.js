@@ -292,8 +292,8 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
       || !same(config?.Aliases, { Quantity: 1, Items: [HOST] })) fail();
     const behaviors = [config.DefaultCacheBehavior, ...(config.CacheBehaviors?.Items || [])];
     if (config.CacheBehaviors?.Quantity !== (config.CacheBehaviors?.Items || []).length
-      || behaviors.some(item => !same(item?.FunctionAssociations,
-        { Quantity: 1, Items: [{ EventType: "viewer-request", FunctionARN: viewerArn }] }))) fail();
+      || behaviors.some(item => !same(stable(item?.FunctionAssociations),
+        stable({ Quantity: 1, Items: [{ EventType: "viewer-request", FunctionARN: viewerArn }] })))) fail();
     const staticOrigin = state.original.Resources[DISTRIBUTION_ID].Properties.DistributionConfig.Origins
       .find(item => item.OriginPath?.startsWith("/frontend/angular-ssr/test/releases/"));
     const origin = config.Origins?.Items?.find(item => item.Id === staticOrigin?.Id);
