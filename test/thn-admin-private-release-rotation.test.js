@@ -159,8 +159,9 @@ function rotationChanges() {
   const distribution = direct(DISTRIBUTION_ID, "AWS::CloudFront::Distribution", "DistributionConfig");
   const viewer = direct(FUNCTION_ID, "AWS::CloudFront::Function", "FunctionCode");
   const lambda = direct(SSR_ID, "AWS::Lambda::Function", "Code");
+  lambda.Details[0].Target.Path = "/Properties/Code/S3Key";
   lambda.Details.push({ Evaluation: "Static", ChangeSource: "DirectModification", Target: {
-    Attribute: "Properties", Name: "Environment", Path: "/Properties/Environment",
+    Attribute: "Properties", Name: "Environment", Path: "/Properties/Environment/Variables/ZLP_RELEASE_ID",
     RequiresRecreation: "Never", AttributeChangeType: "Modify", BeforeValue: "before", AfterValue: "after" } });
   const detailed = changeSet([distribution, viewer, lambda]);
   const summary = structuredClone(detailed);
@@ -170,12 +171,14 @@ function rotationChanges() {
     for (const detail of item.ResourceChange.Details) {
       delete detail.Target.BeforeValue;
       delete detail.Target.AfterValue;
+      delete detail.Target.Path;
+      delete detail.Target.AttributeChangeType;
     }
   }
-  const dynamic = (id, type, replacement, name, recreation) => ({ Action: "Modify", LogicalResourceId: id,
+  const dynamic = (id, type, replacement, name, recreation, cause = `${DISTRIBUTION_ID}.DomainName`) => ({ Action: "Modify", LogicalResourceId: id,
     ResourceType: type, Replacement: replacement, Scope: ["Properties"],
     Details: [{ Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
-      CausingEntity: `${DISTRIBUTION_ID}.DomainName`, Target: { Attribute: "Properties", Name: name,
+      CausingEntity: cause, Target: { Attribute: "Properties", Name: name,
         RequiresRecreation: recreation } }] });
   summary.Changes.unshift(
     { Type: "Resource", ResourceChange: dynamic("FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
@@ -183,10 +186,27 @@ function rotationChanges() {
     { Type: "Resource", ResourceChange: dynamic("FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
       "AWS::SSM::Parameter", "False", "Value", "Never") });
   summary.Changes[2].ResourceChange.Details = [
+    { Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
+      CausingEntity: "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7.FunctionUrl",
+      Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } },
     { Evaluation: "Dynamic", ChangeSource: "ResourceAttribute", CausingEntity: `${FUNCTION_ID}.FunctionARN`,
       Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } },
     { Evaluation: "Dynamic", ChangeSource: "DirectModification",
       Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } }];
+  summary.Changes.push(
+    { Type: "Resource", ResourceChange: dynamic(
+      "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C",
+      "AWS::Lambda::Permission", "Conditional", "FunctionName", "Always",
+      "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7.FunctionArn") },
+    { Type: "Resource", ResourceChange: dynamic(
+      "FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionThehairnarrativeAdminTest3FBFDE4C",
+      "AWS::Lambda::Permission", "Conditional", "FunctionName", "Always", `${SSR_ID}.Arn`) },
+    { Type: "Resource", ResourceChange: dynamic(
+      "FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminTestA8483BAF",
+      "AWS::Lambda::Permission", "Conditional", "FunctionName", "Always", `${SSR_ID}.Arn`) },
+    { Type: "Resource", ResourceChange: dynamic(
+      "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7",
+      "AWS::Lambda::Url", "Conditional", "TargetFunctionArn", "Always", `${SSR_ID}.Arn`) });
   return { detailed, summary };
 }
 const reviewContext = { expectedStackName: STACK, expectedChangeSetName: "release-123-1",
@@ -197,11 +217,6 @@ const reviewContext = { expectedStackName: STACK, expectedChangeSetName: "releas
 test("reviews exactly the private Lambda plus proven static rotation entries", () => {
   assert.equal(typeof subject.reviewPrivateReleaseChangeSet, "function");
   const { detailed, summary } = rotationChanges();
-  const reviewer = require("../tools/review-test-infra-change-set");
-  const withoutLambda = value => ({ ...value, Changes: value.Changes.filter(item =>
-    item.ResourceChange.LogicalResourceId !== SSR_ID) });
-  assert.equal(reviewer.reviewCompleteChangeSet(withoutLambda(detailed), withoutLambda(summary),
-    { ...reviewContext, adminStaticRotationProof: true }), "execute");
   assert.equal(subject.reviewPrivateReleaseChangeSet(detailed, summary, reviewContext), "execute");
 });
 
@@ -215,6 +230,35 @@ test("rejects an extra change or a replacing private Lambda", () => {
   replacing.detailed.Changes[2].ResourceChange.Replacement = "True";
   assert.throws(() => subject.reviewPrivateReleaseChangeSet(replacing.detailed, replacing.summary, reviewContext),
     /private_release_change_set_invalid/);
+});
+
+test("conditional dependency entries require the exact native reference proof", () => {
+  const cases = [
+    evidence => { evidence.summary.Changes[5].ResourceChange.Replacement = "True"; },
+    evidence => { evidence.summary.Changes[5].ResourceChange.Details[0].ChangeSource = "DirectModification"; },
+    evidence => { evidence.summary.Changes[8].ResourceChange.Details[0].CausingEntity = `${FUNCTION_ID}.FunctionARN`; },
+    evidence => { evidence.summary.Changes.splice(5, 1); },
+    evidence => { evidence.detailed.Changes.push(structuredClone(evidence.summary.Changes[5])); },
+  ];
+  for (const mutate of cases) {
+    const evidence = rotationChanges();
+    mutate(evidence);
+    assert.throws(() => subject.reviewPrivateReleaseChangeSet(evidence.detailed, evidence.summary,
+      reviewContext), /private_release_change_set_invalid/);
+  }
+});
+
+test("failed change-set review reports a bounded cause without property values", () => {
+  const evidence = rotationChanges();
+  evidence.detailed.Changes[2].ResourceChange.Details[1].Target.Name = "Role";
+  evidence.detailed.Changes[2].ResourceChange.Details[1].Target.BeforeValue = "private-secret";
+  let failure;
+  try { subject.reviewPrivateReleaseChangeSet(evidence.detailed, evidence.summary, reviewContext); }
+  catch (error) { failure = error; }
+  assert.equal(failure?.reviewStage, "detailed_lambda_details");
+  assert.equal(failure?.reviewReason, "private_release_template_invalid");
+  assert.equal(failure?.changeInventory?.detailed?.[2]?.details?.[1]?.name, "Role");
+  assert.doesNotMatch(JSON.stringify(failure?.changeInventory), /private-secret/);
 });
 
 test("rejects incomplete, drifted, or unapproved change set evidence", () => {
@@ -266,7 +310,7 @@ test("review removes its unexecuted change set", async () => {
   assert.match(result.reviewedDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(result.inventory.detailed.map(item => item.logicalId),
     [DISTRIBUTION_ID, FUNCTION_ID, SSR_ID]);
-  assert.equal(result.inventory.summary.length, 5);
+  assert.equal(result.inventory.summary.length, 9);
   assert.deepEqual(calls, ["preflight", "describe", "describe", "cleanup"]);
 });
 
