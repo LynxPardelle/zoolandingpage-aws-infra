@@ -133,6 +133,9 @@ the 2026-09-27 read-only investigation found that this key contains the old
 Journal query rule even though the sealed artifact with that hash contains the
 new rule. The original object remains untouched; do not use a general TEST
 deploy that references it until the asset is separately repaired or replaced.
+The general TEST runner now compares the change set's `Original` template with
+its sealed artifact before review or execution. A stale bootstrap object stops
+that release with `test_infra_change_set_template_invalid`.
 
 The detailed review requires one direct non-replacing `FunctionCode` update on
 the admin TEST viewer function. The summary review accepts only the exact

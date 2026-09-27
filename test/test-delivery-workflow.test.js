@@ -465,6 +465,9 @@ test("TEST deploy reviews the prepared change set before exact execution", () =>
   const execute = runner.indexOf('infra-test-aws.js" execute-change-set');
   assert.ok(prepare >= 0, "prepare-change-set step missing");
   assert.ok(review > prepare, "review must follow change-set preparation");
+  const templateProof = runner.indexOf('infra-test-aws.js" verify-change-set-template');
+  assert.ok(templateProof > prepare && templateProof < review,
+    "sealed template must match the prepared change set before review");
   assert.ok(execute > review, "execution must follow review");
   assert.match(readFileSync(path.join(root, "tools", "infra-test-aws.js"), "utf8"), /--include-property-values/);
   assert.match(runner, /npx --no-install cdk deploy/);

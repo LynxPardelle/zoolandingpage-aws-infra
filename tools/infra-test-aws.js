@@ -107,6 +107,9 @@ function createRoleClient(releaseRoot, kind, options = {}) {
   const account = artifact.metadata.expected_aws_account_id;
   const queryFence = options.queryFence;
   const privateRotation = options.privateRotation;
+  const templateChangeSetArn = options.templateChangeSetArn;
+  if (templateChangeSetArn && !validChangeSetArn(templateChangeSetArn, account,
+    templateChangeSetArn.split("/")[1])) fail("test_infra_operation_invalid");
   if (queryFence && ((queryFence.changeSetArn != null
       && !validChangeSetArn(queryFence.changeSetArn, account, queryFence.changeSetArn?.split("/")[1]))
     || !/^[A-Za-z0-9_-]{1,64}$/.test(queryFence.functionName)
@@ -153,7 +156,7 @@ function createRoleClient(releaseRoot, kind, options = {}) {
     if (!(kind === "lookup" ? lookup : deploy).has(operation) || args.includes("--profile") || args.includes("--endpoint-url")) fail("test_infra_operation_invalid");
     if (args[0] === "cloudformation" && value("--stack-name") !== STACK) fail("test_infra_operation_invalid");
     if (operation === "cloudformation get-template" && (!["Original", ...(queryFence ? ["Processed"] : [])].includes(value("--template-stage"))
-      || (args.includes("--change-set-name") && (!queryFence || value("--change-set-name") !== queryFence.changeSetArn)))) fail("test_infra_operation_invalid");
+      || (args.includes("--change-set-name") && value("--change-set-name") !== (queryFence?.changeSetArn || templateChangeSetArn)))) fail("test_infra_operation_invalid");
     if (operation === "cloudfront get-function" && (!queryFence || value("--name") !== queryFence.functionName
       || value("--stage") !== "LIVE" || args.at(-1) !== queryFence.outputPath)) fail("test_infra_operation_invalid");
     if (operation === "cloudfront describe-function" && (!queryFence || value("--name") !== queryFence.functionName
@@ -216,13 +219,32 @@ function reviewWithOriginProof(description, reviewOptions, review, proveOriginOn
 function main(args, options = {}) {
   const [operation, root, changeSetName, changeSetArn] = args;
   const counts = { "verify-public-release": 2, "describe-change-set": 3, "describe-change-set-summary": 3,
-    "execute-change-set": 4, "wait-stack": 2, smoke: 2 };
+    "verify-change-set-template": 4, "execute-change-set": 4, "wait-stack": 2, smoke: 2 };
   if (args.length !== counts[operation]) fail("test_infra_operation_invalid");
   const env = options.env || process.env;
   const artifact = loadArtifact(root, env);
   const account = artifact.metadata.expected_aws_account_id;
   if (operation.includes("change-set") && (!validChangeSetName(changeSetName)
-    || (operation === "execute-change-set" && !validChangeSetArn(changeSetArn, account, changeSetName)))) fail("test_infra_operation_invalid");
+    || (["verify-change-set-template", "execute-change-set"].includes(operation)
+      && !validChangeSetArn(changeSetArn, account, changeSetName)))) fail("test_infra_operation_invalid");
+  if (operation === "verify-change-set-template") {
+    const read = createRoleClient(root, "lookup", { ...options, templateChangeSetArn: changeSetArn });
+    const description = JSON.parse(read(["cloudformation", "describe-change-set", "--stack-name", STACK,
+      "--change-set-name", changeSetArn, "--output", "json"]));
+    validateChangeSetIdentity(description, account, changeSetName, changeSetArn);
+    const response = JSON.parse(read(["cloudformation", "get-template", "--stack-name", STACK,
+      "--change-set-name", changeSetArn, "--template-stage", "Original", "--output", "json"]));
+    const actual = typeof response.TemplateBody === "string"
+      ? JSON.parse(response.TemplateBody) : response.TemplateBody;
+    const expected = JSON.parse(fs.readFileSync(path.join(artifact.assemblyRoot,
+      artifact.stack.properties.templateFile), "utf8"));
+    const stable = value => Array.isArray(value) ? value.map(stable)
+      : value && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+    if (JSON.stringify(stable(actual)) !== JSON.stringify(stable(expected)))
+      fail("test_infra_change_set_template_invalid");
+    return "verified\n";
+  }
   if (operation === "execute-change-set" && (!["true", "false"].includes(env.ADMIN_INFRASTRUCTURE_APPROVED)
     || env.ADMIN_INFRASTRUCTURE_APPROVED !== env.ADMIN_ROUTE_ASSOCIATION_APPROVED)) fail("test_infra_operation_invalid");
   const mode = ["execute-change-set", "wait-stack"].includes(operation) ? "deploy" : "lookup";
