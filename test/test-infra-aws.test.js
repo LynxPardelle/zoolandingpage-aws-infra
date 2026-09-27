@@ -53,6 +53,90 @@ function assumeResponse(roleArn, sessionName) {
     AssumedRoleUser: { Arn: `arn:aws:sts::${account}:assumed-role/${roleArn.split("/").at(-1)}/${sessionName}` } });
 }
 
+test("private admin Lambda read uses only the pinned TEST OIDC session and function", () => {
+  const calls = [];
+  const env = { AWS_REGION: "us-east-1", AWS_DEFAULT_REGION: "us-east-1",
+    AWS_ACCESS_KEY_ID: `ASIA${"A".repeat(16)}`, AWS_SECRET_ACCESS_KEY: "fixture-secret-not-real",
+    AWS_SESSION_TOKEN: "fixture-session-not-real" };
+  const identity = { Account: "765932874577",
+    Arn: "arn:aws:sts::765932874577:assumed-role/zoolandingpage-infra-test-github-oidc-deploy/GitHubActions" };
+  const lambda = { FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr",
+    Environment: { Variables: { ZLP_RELEASE_ID: "fixture-release" } } };
+  const result = helper.readPrivateLambdaConfiguration({ env, runAws: (args, passedEnv) => {
+    calls.push(args);
+    assert.equal(passedEnv, env);
+    return bytes(args[0] === "sts" ? identity : lambda);
+  } });
+  assert.deepEqual(result, lambda);
+  assert.deepEqual(calls, [
+    ["sts", "get-caller-identity", "--output", "json"],
+    ["lambda", "get-function-configuration", "--function-name",
+      "zoolandingpage-test-frontend-thn-admin-ssr", "--output", "json"],
+  ]);
+});
+
+test("private admin Lambda read requires temporary OIDC credentials before STS", () => {
+  let calls = 0;
+  assert.throws(() => helper.readPrivateLambdaConfiguration({
+    env: { AWS_REGION: "us-east-1", AWS_DEFAULT_REGION: "us-east-1" },
+    runAws: () => { calls++; return bytes({ Account: "765932874577",
+      Arn: "arn:aws:sts::765932874577:assumed-role/zoolandingpage-infra-test-github-oidc-deploy/GitHubActions" }); },
+  }), /private_release_oidc_identity_invalid/);
+  assert.equal(calls, 0);
+});
+
+test("private admin Lambda read rejects another caller before reading Lambda", () => {
+  const env = { AWS_REGION: "us-east-1", AWS_DEFAULT_REGION: "us-east-1",
+    AWS_ACCESS_KEY_ID: `ASIA${"A".repeat(16)}`, AWS_SECRET_ACCESS_KEY: "fixture-secret-not-real",
+    AWS_SESSION_TOKEN: "fixture-session-not-real" };
+  const calls = [];
+  assert.throws(() => helper.readPrivateLambdaConfiguration({ env, runAws: args => {
+    calls.push(args[0]);
+    return bytes({ Account: "765932874577",
+      Arn: "arn:aws:sts::765932874577:assumed-role/cdk-hnb659fds-lookup-role-765932874577-us-east-1/session" });
+  } }), /private_release_oidc_identity_invalid/);
+  assert.deepEqual(calls, ["sts"]);
+});
+
+test("private admin Lambda read hides KMS error details and fails closed", () => {
+  const env = { AWS_REGION: "us-east-1", AWS_DEFAULT_REGION: "us-east-1",
+    AWS_ACCESS_KEY_ID: `ASIA${"A".repeat(16)}`, AWS_SECRET_ACCESS_KEY: "fixture-secret-not-real",
+    AWS_SESSION_TOKEN: "fixture-session-not-real" };
+  const identity = { Account: "765932874577",
+    Arn: "arn:aws:sts::765932874577:assumed-role/zoolandingpage-infra-test-github-oidc-deploy/GitHubActions" };
+  assert.throws(() => helper.readPrivateLambdaConfiguration({ env, runAws: args => bytes(args[0] === "sts"
+    ? identity : { FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr",
+      Environment: { Error: { ErrorCode: "AccessDeniedException", Message: "private-sentinel" } } }) }),
+  error => error.message === "private_release_lambda_read_invalid"
+    && !error.message.includes("private-sentinel"));
+});
+
+test("private admin Lambda read rejects a different function and absent variables", () => {
+  const env = { AWS_REGION: "us-east-1", AWS_DEFAULT_REGION: "us-east-1",
+    AWS_ACCESS_KEY_ID: `ASIA${"A".repeat(16)}`, AWS_SECRET_ACCESS_KEY: "fixture-secret-not-real",
+    AWS_SESSION_TOKEN: "fixture-session-not-real" };
+  const identity = { Account: "765932874577",
+    Arn: "arn:aws:sts::765932874577:assumed-role/zoolandingpage-infra-test-github-oidc-deploy/GitHubActions" };
+  for (const response of [
+    { FunctionName: "unrelated-function", Environment: { Variables: { KEY: "value" } } },
+    { FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr", Environment: {} },
+  ]) {
+    assert.throws(() => helper.readPrivateLambdaConfiguration({ env, runAws: args => bytes(args[0] === "sts"
+      ? identity : response) }), /private_release_lambda_read_invalid/);
+  }
+});
+
+test("private admin IAM read policy grants only the named TEST Lambda configuration", () => {
+  const policy = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "tools",
+    "thn-admin-private-lambda-read-policy.json"), "utf8"));
+  assert.deepEqual(policy, { Version: "2012-10-17", Statement: [{
+    Sid: "ReadThnAdminTestSsrConfiguration",
+    Effect: "Allow",
+    Action: "lambda:GetFunctionConfiguration",
+    Resource: "arn:aws:lambda:us-east-1:765932874577:function:zoolandingpage-test-frontend-thn-admin-ssr",
+  }] });
+});
+
 test("role chain authenticates independent artifact digest, source and exact TEST stack before STS", t => {
   assert.equal(typeof helper.loadArtifact, "function");
   const f = artifact(t);
@@ -130,7 +214,7 @@ test("query fence adds only pinned read and change-set cleanup commands", t => {
   assert.equal(calls.at(-1), "cloudformation execute-change-set");
 });
 
-test("private rotation adds only exact Lambda and admin DNS reads", t => {
+test("private rotation lookup permits exact admin DNS reads but no Lambda configuration", t => {
   const f = artifact(t);
   const zone = "ZTHNADMINTEST";
   f.metadata.thn_admin_hosted_zone_sha256 = digest(zone);
@@ -141,7 +225,8 @@ test("private rotation adds only exact Lambda and admin DNS reads", t => {
     outputPath: path.join(f.root, "live-function.js") }, privateRotation: { lambdaName, hostedZoneId: zone },
   runAws: args => args[0] === "sts" ? assumeResponse(roles.lookup, args[args.indexOf("--role-session-name") + 1]) : bytes({}) };
   const read = helper.createRoleClient(f.root, "lookup", options);
-  read(["lambda", "get-function-configuration", "--function-name", lambdaName, "--output", "json"]);
+  assert.throws(() => read(["lambda", "get-function-configuration", "--function-name", lambdaName,
+    "--output", "json"]), /test_infra_operation_invalid/);
   read(["route53", "list-resource-record-sets", "--hosted-zone-id", zone,
     "--start-record-name", "admin-test.thehairnarrative.com.", "--start-record-type", "A",
     "--max-items", "2", "--no-paginate", "--output", "json"]);
