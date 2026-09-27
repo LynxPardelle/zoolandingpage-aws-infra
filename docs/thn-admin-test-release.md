@@ -115,20 +115,24 @@ boundary. They do not demonstrate a deployed origin or a successful AWS run.
 ## Manual Journal locale query patch in TEST
 
 The `THN Admin TEST Query Fence` workflow is the only release path for the
-`articleLocale` viewer-request correction. Promote the reviewed source to
-`test` through the normal code-only PR first. Then dispatch the workflow from
-that exact full source SHA with `execution=review` (the default). Validation
-and CDK synthesis run without AWS credentials. The deploy job checks the
-transported artifact and existing admin release before assuming the TEST
-roles, and prepares a CloudFormation change set without executing it.
+`articleLocale` viewer-request correction. Promote reviewed source to `test`
+through a code-only PR first. Dispatch with the full `test` SHA and the
+canonical manifest, metadata and immutable coordinates of the **already
+active** private APP artifact `10939780047`. Do not use the older repository
+admin release variables. `execution=review` is the default. Validation and CDK
+synthesis run without AWS credentials. The deploy job checks the transported
+artifact, published APP marker, current private release and protected branch
+tip before preparing a CloudFormation change set without executing it.
 
-The review accepts only a single non-replacing `FunctionCode` modification on
-the admin TEST viewer function. It rejects any dependent distribution, origin,
-certificate, DNS, asset, or other resource change, and deletes an unexecuted
-change set. Review can still be blocked if CloudFormation classifies a dynamic
-dependent resource or omits required property evidence. Inspect that exact
-change set and update the design before any wider release; do not use the
-general frontend workflow as a fallback.
+The detailed review requires one direct non-replacing `FunctionCode` update on
+the admin TEST viewer function. The summary review accepts only the exact
+native dynamic reference chain from the viewer Function through the existing
+distribution, SSM domain parameter and create-only alias custom resource.
+Extra resources, direct dependent changes, changed reference causes, actual
+replacement or incomplete property evidence block the operation. `review`
+deletes its unexecuted change set and prints a digest of both inventory views.
+If AWS reports a different native shape, inspect it and revise the guard before
+any execution; do not use the general frontend workflow as a fallback.
 
 The preflight compares the complete historical `queryAllowed` body, which
 collects query keys and accepts zero or one `lang` key, against the current
@@ -137,13 +141,15 @@ flags from the candidate and requires the rest of the live template to match.
 The 2026-09-27 review identified an obsolete single-line baseline in the
 original proof; the corrected proof keeps the same one-resource release scope.
 
-After a clean review, `execution=execute` creates a new change set and repeats
-the live checks immediately before execution. It confirms the Function code,
-stack inventory, selected public release, distribution association and HTTP
-routes after the stack update. `execution=verify` performs read-only checks on
-the deployed result. Record the run ID, source SHA, manifest digest and
-change-set ARN from the workflow output. The patch touches only AWS TEST; the
-QA article remains unpublished until the separate editorial acceptance flow.
+After a clean review, obtain separate approval for `execution=execute` with
+the exact reviewed digest. Execute creates a new change set and repeats the
+live checks and inventory comparison immediately before the update; changed
+evidence blocks it. It confirms Function code, physical resource identities,
+distribution association and settings, selected public and private releases,
+and positive and negative HTTP routes after the stack update.
+`execution=verify` performs read-only checks on the deployed result. Record the
+run ID, source SHA, APP coordinates, manifest digest, review digest and change
+set ARN. The patch touches only AWS TEST and does not publish QA articles.
 
 ## Manual private admin release rotation in TEST
 

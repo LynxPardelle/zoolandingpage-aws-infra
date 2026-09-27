@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       execution:
-        description: Review a TEST change set, execute an exact one-resource change set, or verify read-only
+        description: Review a TEST change set, execute the exact reviewed inventory, or verify read-only
         required: true
         type: choice
         options: [review, execute, verify]
@@ -12,6 +12,22 @@ on:
       expected_source_sha:
         description: Full reviewed source SHA already promoted to TEST
         required: true
+        type: string
+      app_manifest_base64:
+        description: Canonical base64 of the active private APP release manifest
+        required: true
+        type: string
+      app_metadata_json:
+        description: Canonical metadata of the active private APP release
+        required: true
+        type: string
+      app_coordinates_json:
+        description: Immutable APP artifact ID, source, run, attempt and digests
+        required: true
+        type: string
+      expected_review_digest:
+        description: SHA-256 returned by review; required only for execute
+        required: false
         type: string
 
 permissions:
@@ -33,10 +49,11 @@ jobs:
     env:
       EXPECTED_AWS_ACCOUNT_ID: "765932874577"
       EXPECTED_AWS_REGION: us-east-1
+      EXPECTED_APP_COORDINATES_JSON: ${{ inputs.app_coordinates_json }}
       FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
-      FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ vars.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 }}
-      FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ vars.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON }}
+      FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ inputs.app_manifest_base64 }}
+      FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ inputs.app_metadata_json }}
       FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: ${{ vars.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN }}
       FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: ${{ vars.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID }}
       FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED || 'false' }}
@@ -53,6 +70,8 @@ jobs:
         shell: bash
         env:
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+          QUERY_FENCE_EXECUTION: ${{ inputs.execution }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "LynxPardelle/zoolandingpage-aws-infra"
@@ -64,20 +83,29 @@ jobs:
           test "$FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED" = "true"
           test "$FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED" = "true"
           test -n "$FRONTEND_TEST_RELEASE_ID"
+          if [ "$QUERY_FENCE_EXECUTION" = execute ]; then [[ "$EXPECTED_REVIEW_DIGEST" =~ ^[a-f0-9]{64}$ ]]; fi
       - name: Validate and synthesize without AWS credentials
         shell: bash
         run: |
           set -euo pipefail
           npm ci
           node tools/thn-admin-release.js prepare .release/thn-admin-selection.json
+          node <<'NODE'
+          const release = require('./tools/thn-admin-release');
+          const rotation = require('./tools/thn-admin-private-release-rotation');
+          rotation.validatePinnedAppCoordinates(release.selectThnAdminRelease(),
+            JSON.parse(process.env.EXPECTED_APP_COORDINATES_JSON));
+          NODE
           npm test
-          npx --no-install cdk synth "ZoolandingTest/Zoolandingpage-test-Frontend" --output .release/cdk.out
+          FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED=true \
+            npx --no-install cdk synth "ZoolandingTest/Zoolandingpage-test-Frontend" --output .release/cdk.out
       - name: Seal exact assembly and release tools
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .release/release-tools
-          cp tools/thn-admin-release.js tools/infra-test-aws.js tools/thn-admin-query-fence-patch.js .release/release-tools/
+          cp tools/thn-admin-release.js tools/infra-test-aws.js tools/thn-admin-query-fence-patch.js \
+            tools/thn-admin-private-release-rotation.js tools/review-test-infra-change-set.js .release/release-tools/
           node <<'NODE'
           const fs = require('node:fs');
           const crypto = require('node:crypto');
@@ -130,11 +158,13 @@ jobs:
       EXPECTED_RELEASE_RUN_ID: ${{ github.run_id }}
       EXPECTED_AWS_ACCOUNT_ID: "765932874577"
       EXPECTED_AWS_REGION: us-east-1
+      EXPECTED_APP_COORDINATES_JSON: ${{ inputs.app_coordinates_json }}
+      EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
       FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
       THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
-      FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ vars.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 }}
-      FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ vars.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON }}
+      FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ inputs.app_manifest_base64 }}
+      FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ inputs.app_metadata_json }}
       FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN: ${{ vars.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN }}
       FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: ${{ vars.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID }}
       FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED || 'false' }}
@@ -174,6 +204,13 @@ jobs:
           (cd .transport/.release && sha256sum --check --strict ../release-manifest.sha256)
           npm ci
           node .transport/.release/release-tools/thn-admin-release.js compare .transport/.release/thn-admin-selection.json
+      - name: Verify protected TEST branch tip
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/LynxPardelle/zoolandingpage-aws-infra/git/ref/heads/test --jq .object.sha)" = "$GITHUB_SHA"
       - name: Validate deployment role and private origin proof
         shell: bash
         env:
@@ -212,6 +249,14 @@ jobs:
             --change-set-name "$CHANGE_SET_NAME" \
             --require-approval never --exclusively \
             --parameters "ThnAdminAuthAdminOriginVerifySecret=$THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET"
+      - name: Recheck protected TEST tip immediately before execution
+        if: inputs.execution == 'execute'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/LynxPardelle/zoolandingpage-aws-infra/git/ref/heads/test --jq .object.sha)" = "$GITHUB_SHA"
       - name: Review, execute, or verify with exact proof
         shell: bash
         run: |

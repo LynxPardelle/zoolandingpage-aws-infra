@@ -10,6 +10,9 @@ const adminRelease = require("../tools/thn-admin-release");
 
 const ID = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
 const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+const SSR_ID = "FrontendThnAdminSsrFunction874373CC";
+const ALIAS_ID = "FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622";
+const PARAMETER_ID = "FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218";
 const PAGES = ["/admin/journal", "/admin/journal/new", "/admin/journal/:articleId/edit", "/admin/journal/:articleId/preview"];
 const OLD_QUERY = `    var queryKeys = [];
     for (var queryKey in querystring) {
@@ -58,7 +61,9 @@ const newRules = oldRules.map(rule => PAGES.includes(rule.path) ? { ...rule, all
 const code = (rules, query) => `function handler(event) {\n  var expectedHost = "admin-test.thehairnarrative.com";\n  var rules = ${JSON.stringify(rules)};\n  function queryAllowed(rule, querystring) {\n${query}\n  }\n  return event.request;\n}`;
 const live = () => ({ Resources: { [ID]: { Type: "AWS::CloudFront::Function", Properties: {
   Name: "admin-test", FunctionCode: code(oldRules, OLD_QUERY), AutoPublish: true } },
-  [DISTRIBUTION_ID]: { Type: "AWS::CloudFront::Distribution", Properties: { Host: "admin-test.thehairnarrative.com" } } } });
+  [DISTRIBUTION_ID]: { Type: "AWS::CloudFront::Distribution", Properties: { Host: "admin-test.thehairnarrative.com" } },
+  [SSR_ID]: { Type: "AWS::Lambda::Function", Properties: { FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr",
+    Environment: { Variables: { ZLP_RELEASE_ID: "active-app-release" } } } } } });
 const desired = () => {
   const template = live();
   template.Resources[ID].Properties.FunctionCode = code(newRules, NEW_QUERY);
@@ -126,6 +131,47 @@ test("change set proof accepts one FunctionCode effect in both views", () => {
     stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] }), true);
 });
 
+const dependentChangeSet = () => {
+  const detailed = changeSet();
+  detailed.Changes[0].ResourceChange.Details[0].Target.Path = "/Properties/FunctionCode";
+  detailed.Changes[0].ResourceChange.Details[0].Target.BeforeValue = "old-code";
+  detailed.Changes[0].ResourceChange.Details[0].Target.AfterValue = "new-code";
+  const summary = changeSet();
+  const derived = (id, type, replacement, property, cause, recreation) => ({ Type: "Resource",
+    ResourceChange: { LogicalResourceId: id, ResourceType: type, Action: "Modify", Replacement: replacement,
+      Scope: ["Properties"], Details: [{ Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
+        CausingEntity: cause, Target: { Attribute: "Properties", Name: property,
+          RequiresRecreation: recreation } }] } });
+  summary.Changes = [
+    derived(ALIAS_ID, "Custom::ZoolandingFrontendAliasRecords", "Conditional", "Create",
+      `${DISTRIBUTION_ID}.DomainName`, "Conditionally"),
+    derived(PARAMETER_ID, "AWS::SSM::Parameter", "False", "Value",
+      `${DISTRIBUTION_ID}.DomainName`, "Never"),
+    derived(DISTRIBUTION_ID, "AWS::CloudFront::Distribution", "False", "DistributionConfig",
+      `${ID}.FunctionARN`, "Never"),
+    summary.Changes[0],
+  ];
+  return [detailed, summary];
+};
+
+test("native query fence review accepts only the observed dynamic reference chain", () => {
+  const [detailed, summary] = dependentChangeSet();
+  assert.deepEqual(subject.reviewQueryFenceChangeSet(detailed, summary, {
+    stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] }), true);
+  const variants = [
+    (d, s) => { s.Changes[0].ResourceChange.Details[0].CausingEntity = `${ID}.FunctionARN`; },
+    (d, s) => { s.Changes[2].ResourceChange.Replacement = "True"; },
+    (d, s) => { s.Changes.push(structuredClone(s.Changes[3])); },
+    (d, s) => { d.Changes[0].ResourceChange.Details[0].Target.AfterValue = "old-code"; },
+  ];
+  for (const change of variants) {
+    const [before, after] = dependentChangeSet(); change(before, after);
+    assert.throws(() => subject.reviewQueryFenceChangeSet(before, after, {
+      stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] }),
+    /query_fence_change_set_invalid/);
+  }
+});
+
 test("change set proof rejects dependent entries and incomplete descriptions", () => {
   const mutations = [
     (d, s) => { s.Changes.push({ Type: "Resource", ResourceChange: { LogicalResourceId: "AdminDistribution", Action: "Modify" } }); },
@@ -151,6 +197,8 @@ test("blocked change-set inventory identifies only resource coordinates", () => 
     stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] }), error => {
     assert.equal(error.message, "query_fence_change_set_invalid");
     assert.ok(error.changeInventory.some(item => item.logicalId === DISTRIBUTION_ID));
+    assert.equal(error.changeInventory[0].details[0].name, "FunctionCode");
+    assert.equal(error.changeInventory[0].details[0].source, "DirectModification");
     assert.ok(!JSON.stringify(error.changeInventory).includes("do-not-log"));
     return true;
   });
@@ -163,6 +211,8 @@ const liveState = () => {
   const resources = [
     { LogicalResourceId: ID, ResourceType: "AWS::CloudFront::Function", PhysicalResourceId: arn, ResourceStatus: "UPDATE_COMPLETE" },
     { LogicalResourceId: DISTRIBUTION_ID, ResourceType: "AWS::CloudFront::Distribution", PhysicalResourceId: "ABCDEFG123", ResourceStatus: "UPDATE_COMPLETE" },
+    { LogicalResourceId: SSR_ID, ResourceType: "AWS::Lambda::Function",
+      PhysicalResourceId: "zoolandingpage-test-frontend-thn-admin-ssr", ResourceStatus: "UPDATE_COMPLETE" },
   ];
   return { original: current, processed: structuredClone(current),
     stack: { StackId: stackId, StackName: "ZoolandingTest-Zoolandingpage-test-Frontend",
@@ -173,6 +223,13 @@ const liveState = () => {
     resources, function: { ETag: "etag-1", FunctionSummary: { Name: "admin-test", Status: "DEPLOYED",
       FunctionMetadata: { FunctionARN: arn }, FunctionConfig: { Runtime: "cloudfront-js-2.0" } } },
     functionCode: current.Resources[ID].Properties.FunctionCode,
+    lambda: { FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr",
+      FunctionArn: "arn:aws:lambda:us-east-1:765932874577:function:zoolandingpage-test-frontend-thn-admin-ssr",
+      State: "Active", LastUpdateStatus: "Successful", CodeSha256: `${"A".repeat(43)}=`,
+      Environment: { Variables: { ZLP_RELEASE_ID: "active-app-release" } } },
+    dns: { ResourceRecordSets: ["A", "AAAA"].map(Type => ({ Name: "admin-test.thehairnarrative.com.", Type,
+      AliasTarget: { DNSName: "d111111abcdef8.cloudfront.net.", HostedZoneId: "Z2FDTNDATAQYW2",
+        EvaluateTargetHealth: false } })) },
     distribution: { ETag: "dist-etag", DistributionConfig: { Aliases: { Quantity: 1, Items: ["admin-test.thehairnarrative.com"] },
       DefaultCacheBehavior: { FunctionAssociations: { Quantity: 1,
         Items: [{ EventType: "viewer-request", FunctionARN: arn }] } }, CacheBehaviors: { Quantity: 0 } } } };
@@ -194,6 +251,8 @@ test("live snapshot rejects code drift, distribution drift and incomplete invent
     s => { s.function.FunctionSummary.Status = "UNPUBLISHED"; },
     s => { delete s.stack.EnableTerminationProtection; },
     s => { s.stack.Outputs[0].OutputValue = "other"; },
+    s => { s.lambda.Environment.Variables.ZLP_RELEASE_ID = "drifted"; },
+    s => { s.dns.ResourceRecordSets[1].AliasTarget.DNSName = "other.cloudfront.net."; },
   ];
   for (const mutate of mutations) {
     const state = liveState(); mutate(state);
@@ -218,8 +277,33 @@ test("review deletes its change set without executing", async () => {
     execute: async () => { calls.push("execute"); },
     context: { stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] },
   });
-  assert.equal(result, "reviewed-no-execution");
+  assert.equal(result.decision, "reviewed-no-execution");
+  assert.match(result.reviewedDigest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.inventory.detailed.map(item => item.logicalId), [ID]);
+  assert.deepEqual(result.inventory.summary.map(item => item.logicalId), [ID]);
+  assert.ok(!JSON.stringify(result.inventory).includes("old-code"));
   assert.deepEqual(calls, ["preflight", "describe", "describe", "cleanup"]);
+});
+
+test("a prepared review change set is cleaned when its first live preflight fails", async () => {
+  const calls = [];
+  await assert.rejects(() => subject.runGuardedRelease("review", {
+    preflight: async () => { calls.push("preflight"); throw new Error("live drift"); },
+    cleanup: async () => { calls.push("cleanup"); },
+  }), /live drift/);
+  assert.deepEqual(calls, ["preflight", "cleanup"]);
+});
+
+test("review digest binds inventory but not the ephemeral change-set ARN", () => {
+  const first = changeSet(), second = structuredClone(first);
+  second.ChangeSetId = "another-change-set";
+  second.ChangeSetName = "release-2-1";
+  assert.match(subject.changeSetEvidenceDigest(first, first), /^[a-f0-9]{64}$/);
+  assert.equal(subject.changeSetEvidenceDigest(first, first),
+    subject.changeSetEvidenceDigest(second, second));
+  second.Changes[0].ResourceChange.Details[0].Target.Name = "FunctionConfig";
+  assert.notEqual(subject.changeSetEvidenceDigest(first, first),
+    subject.changeSetEvidenceDigest(second, second));
 });
 
 test("execute rechecks unchanged state and exact change set before mutation", async () => {
@@ -232,10 +316,38 @@ test("execute rechecks unchanged state and exact change set before mutation", as
     execute: async () => { calls.push("execute"); },
     wait: async () => { calls.push("wait"); },
     postcheck: async () => { calls.push("postcheck"); },
+    expectedReviewDigest: subject.changeSetEvidenceDigest(changeSet(), changeSet()),
     context: { stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] },
   });
-  assert.equal(result, "executed");
+  assert.equal(result.decision, "executed");
+  assert.match(result.reviewedDigest, /^[a-f0-9]{64}$/);
   assert.deepEqual(calls, ["preflight", "describe", "describe", "preflight", "describe", "execute", "wait", "postcheck", "postcheck"]);
+});
+
+test("execute stops and cleans the change set when reviewed digest differs", async () => {
+  const calls = [];
+  await assert.rejects(() => subject.runGuardedRelease("execute", {
+    preflight: async () => ({ stackId: "stack-id", marker: "stable" }),
+    describe: async () => [changeSet(), changeSet()],
+    cleanup: async () => { calls.push("cleanup"); },
+    execute: async () => { calls.push("execute"); },
+    expectedReviewDigest: "0".repeat(64),
+    context: { stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] },
+  }), /query_fence_review_digest_changed/);
+  assert.deepEqual(calls, ["cleanup"]);
+});
+
+test("an attempted execution is never cleaned up as an unexecuted review", async () => {
+  const calls = [];
+  await assert.rejects(() => subject.runGuardedRelease("execute", {
+    preflight: async () => ({ stackId: "stack-id", marker: "stable" }),
+    describe: async () => [changeSet(), changeSet()],
+    cleanup: async () => { calls.push("cleanup"); },
+    execute: async () => { calls.push("execute"); throw new Error("transport timeout"); },
+    expectedReviewDigest: subject.changeSetEvidenceDigest(changeSet(), changeSet()),
+    context: { stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] },
+  }), /transport timeout/);
+  assert.deepEqual(calls, ["execute"]);
 });
 
 test("dynamic dependent entry blocks execution and cleans up", async () => {
@@ -260,11 +372,22 @@ test("postcheck accepts only deployed code with preserved stack and distribution
   afterState.functionCode = desired().Resources[ID].Properties.FunctionCode;
   afterState.function.ETag = "etag-2";
   afterState.resources[0].LastUpdatedTimestamp = "2026-09-26T12:30:00Z";
+  afterState.resources[1].LastUpdatedTimestamp = "2026-09-26T12:30:00Z";
   assert.equal(subject.validatePostState(desired(), afterState, "approved-release", before).functionEtag, "etag-2");
   afterState.resources[1].PhysicalResourceId = "OTHER123";
   assert.throws(() => subject.validatePostState(desired(), afterState, "approved-release", before), /query_fence_post_state_invalid/);
   afterState.resources[1].PhysicalResourceId = "ABCDEFG123";
   afterState.distribution.ETag = "unexpected";
+  assert.equal(subject.validatePostState(desired(), afterState, "approved-release", before).distributionConfigSha256,
+    before.distributionConfigSha256);
+  afterState.lambda.CodeSha256 = `${"B".repeat(43)}=`;
+  assert.throws(() => subject.validatePostState(desired(), afterState, "approved-release", before), /query_fence_post_state_invalid/);
+  afterState.lambda.CodeSha256 = `${"A".repeat(43)}=`;
+  afterState.dns.ResourceRecordSets[0].AliasTarget.DNSName = "other.cloudfront.net.";
+  afterState.dns.ResourceRecordSets[1].AliasTarget.DNSName = "other.cloudfront.net.";
+  assert.throws(() => subject.validatePostState(desired(), afterState, "approved-release", before), /query_fence_post_state_invalid/);
+  afterState.dns = liveState().dns;
+  afterState.distribution.DistributionConfig.Aliases.Items = ["changed.example"];
   assert.throws(() => subject.validatePostState(desired(), afterState, "approved-release", before), /query_fence_post_state_invalid/);
 });
 
@@ -289,7 +412,8 @@ test("live collector reads both template stages and the LIVE function code", t =
     throw new Error("unexpected AWS read");
   };
   const collected = subject.collectLiveState(desired(), read, outputPath);
-  assert.deepEqual(collected, state);
+  const { lambda, dns, ...lookupState } = state;
+  assert.deepEqual(collected, lookupState);
   assert.deepEqual(calls, ["cloudformation get-template", "cloudformation get-template",
     "cloudformation describe-stacks", "cloudformation list-stack-resources",
     "cloudfront describe-function", "cloudfront get-function", "cloudfront get-distribution-config"]);
@@ -307,6 +431,12 @@ test("manual query fence workflow defaults to review and separates validation fr
   assert.match(workflow, /^\s+THN_ADMIN_ORIGIN_ENABLED: \$\{\{ vars\.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED \|\| 'false' \}\}/m);
   assert.match(workflow, /thn-admin-query-fence-patch\.js/);
   assert.ok(!workflow.split("\n  validate:\n", 2)[1].split("\n  deploy:\n", 1)[0].includes("id-token: write"));
+  assert.match(workflow, /app_manifest_base64:/);
+  assert.match(workflow, /app_metadata_json:/);
+  assert.match(workflow, /app_coordinates_json:/);
+  assert.match(workflow, /expected_review_digest:/);
+  assert.match(workflow, /FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: \$\{\{ inputs\.app_manifest_base64 \}\}/);
+  assert.match(workflow, /EXPECTED_APP_COORDINATES_JSON: \$\{\{ inputs\.app_coordinates_json \}\}/);
 });
 
 test("HTTP probe accepts four article pages and denies invalid locale queries", async () => {
@@ -317,7 +447,8 @@ test("HTTP probe accepts four article pages and denies invalid locale queries", 
       || url.includes("articleLocale=en&articleLocale=es") || url.includes("/admin/journal/access") ? 404 : 302 };
   };
   assert.equal(await subject.probeRoutes(fetcher, { attempts: 1, delayMs: 0 }), true);
-  assert.equal(requests.length, 8);
+  assert.equal(requests.length, 12);
+  assert.ok(requests.some(url => url.includes("?articleLocale=en&lang=es")));
   await assert.rejects(() => subject.probeRoutes(async () => ({ status: 200 }),
     { attempts: 1, delayMs: 0 }), /query_fence_route_probe_failed/);
 });
