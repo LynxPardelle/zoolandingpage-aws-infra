@@ -20,46 +20,52 @@ const digest = value => createHash("sha256").update(typeof value === "string" ? 
 const fail = code => { throw new Error(code); };
 
 function verifyExactQueryFenceDiff(desired, live) {
-  const reject = () => fail("query_fence_diff_invalid");
+  const reject = diffReason => {
+    const error = new Error("query_fence_diff_invalid");
+    error.diffReason = diffReason;
+    throw error;
+  };
   const before = live?.Resources?.[FUNCTION_ID];
   const after = desired?.Resources?.[FUNCTION_ID];
-  if (before?.Type !== "AWS::CloudFront::Function" || after?.Type !== before.Type) reject();
+  if (before?.Type !== "AWS::CloudFront::Function" || after?.Type !== before.Type) reject("function_type");
   const beforeCode = before.Properties?.FunctionCode;
   const afterCode = after.Properties?.FunctionCode;
-  if (typeof beforeCode !== "string" || typeof afterCode !== "string" || beforeCode === afterCode
-    || beforeCode.includes("articleLocale") || !afterCode.includes(NEW_QUERY)
-    || afterCode.split(NEW_QUERY).length !== 2 || beforeCode.split(OLD_QUERY).length !== 2) reject();
+  if (typeof beforeCode !== "string" || typeof afterCode !== "string") reject("code_type");
+  if (beforeCode === afterCode) reject("code_unchanged");
+  if (beforeCode.includes("articleLocale")) reject("prepatch_contains_article_locale");
+  if (!afterCode.includes(NEW_QUERY) || afterCode.split(NEW_QUERY).length !== 2) reject("new_query_shape");
+  if (beforeCode.split(OLD_QUERY).length !== 2) reject("old_query_shape");
   const parse = code => {
     const matches = [...code.matchAll(RULE_LINE)];
-    if (matches.length !== 1) reject();
+    if (matches.length !== 1) reject("rules_line_shape");
     let rules;
-    try { rules = JSON.parse(matches[0][1]); } catch { reject(); }
-    if (!Array.isArray(rules)) reject();
+    try { rules = JSON.parse(matches[0][1]); } catch { reject("rules_json"); }
+    if (!Array.isArray(rules)) reject("rules_type");
     return { rules, line: matches[0][0] };
   };
   const old = parse(beforeCode), next = parse(afterCode);
-  if (old.rules.length !== next.rules.length) reject();
+  if (old.rules.length !== next.rules.length) reject("rules_count");
   const seen = new Set();
   const restoredRules = next.rules.map((rule, index) => {
     if (!rule || typeof rule !== "object" || Array.isArray(rule)
-      || !same(rule.path, old.rules[index]?.path)) reject();
+      || !same(rule.path, old.rules[index]?.path)) reject("rule_path");
     if (JOURNAL_PAGES.has(rule.path)) {
       if (seen.has(rule.path) || rule.allowArticleLocaleQuery !== true
-        || Object.hasOwn(old.rules[index], "allowArticleLocaleQuery")) reject();
+        || Object.hasOwn(old.rules[index], "allowArticleLocaleQuery")) reject("journal_rule");
       seen.add(rule.path);
       const restored = { ...rule };
       delete restored.allowArticleLocaleQuery;
       return restored;
     }
-    if (Object.hasOwn(rule, "allowArticleLocaleQuery")) reject();
+    if (Object.hasOwn(rule, "allowArticleLocaleQuery")) reject("nonjournal_rule");
     return rule;
   });
-  if (seen.size !== JOURNAL_PAGES.size || !same(restoredRules, old.rules)) reject();
+  if (seen.size !== JOURNAL_PAGES.size || !same(restoredRules, old.rules)) reject("rules_delta");
   const restoredCode = afterCode.replace(next.line, old.line).replace(NEW_QUERY, OLD_QUERY);
-  if (restoredCode !== beforeCode) reject();
+  if (restoredCode !== beforeCode) reject("unapproved_code_delta");
   const normalized = structuredClone(desired);
   normalized.Resources[FUNCTION_ID].Properties.FunctionCode = beforeCode;
-  if (!same(normalized, live)) reject();
+  if (!same(normalized, live)) reject("other_template_change");
   return true;
 }
 
@@ -412,6 +418,8 @@ if (require.main === module) {
       const safeCode = /^query_fence_[a-z_]+$/.test(error?.message)
         ? error.message : "query_fence_release_failed";
       process.stderr.write(`${JSON.stringify({ error: safeCode,
+        ...(safeCode === "query_fence_diff_invalid" && /^[a-z_]{1,64}$/.test(error?.diffReason || "")
+          ? { diff_reason: error.diffReason } : {}),
         ...(Array.isArray(error?.changeInventory) ? { change_inventory: error.changeInventory } : {}) })}\n`);
       process.exitCode = 1;
     });
