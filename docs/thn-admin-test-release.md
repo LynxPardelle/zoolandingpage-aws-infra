@@ -171,6 +171,64 @@ and positive and negative HTTP routes after the stack update.
 run ID, source SHA, APP coordinates, manifest digest, review digest and change
 set ARN. The patch touches only AWS TEST and does not publish QA articles.
 
+### AWS CLI audit of query-fence preparation (2026-09-27)
+
+Review run `36356539983` reached the correct template and expected resource
+inventory but rejected the native CDK preview metadata. CDK CLI `2.1129.0`
+sets `IncludeNestedStacks=true` when preparing a normal UPDATE. AWS CLI
+reproduced that flag on this flat root stack: no parent/root change-set IDs,
+one detailed FunctionCode change and the four expected summary entries.
+The sealed, unmodified reviewer rejects that response; the corrected reviewer
+accepts the same response. The flag is a preview option, not evidence of a
+child stack. Live preflight now explicitly rejects an actual
+`AWS::CloudFormation::Stack` resource, and review still rejects parent/root
+IDs, child change-set references, mismatched views and extra changes.
+
+Query-fence preparation uses `--previous-parameters` without parameter
+overrides. It does not load or resend the origin secret from GitHub. AWS CLI
+verified the existing parameters against the proposed parameters before
+execution; both template stages still have to match the sealed candidate.
+Safe rejection diagnostics now identify the failed gate without exposing
+parameter or property values.
+
+The local audit captured AWS CLI responses for both template stages, all 63
+stack resources (zero nested stacks), LIVE Function code/ETag, all 46 cache
+behaviors, Lambda code/environment, DNS, the issued certificate, and the four
+published APP proof objects. It also read all five workflow/bootstrap role
+identities and trust policies. IAM simulation allowed the required OIDC
+assumptions and Lambda read, change-set execute/delete/describe, and execution
+role Function read/update/publish, with no missing context values. Simulation
+is permission evidence; no execute/update/publish API was called.
+
+A local replay of the complete `review` entry point using the captured AWS
+CLI responses passed 50 reads and returned `reviewed-no-execution`. Three
+independently calculated previews (previous parameters, explicit current
+origin parameter, and CDK native preview metadata) produced the same inventory
+digest `4828170c18f4c94a1da2a1162aa8f3354e63b9ad4ad0dd2682d60a36a382efe0`.
+These diagnostic previews are not approval to execute. A new protected TEST
+review is still required after code promotion, followed by the separate
+inventory approval described above. QA image/route acceptance and actual
+post-deployment identity checks remain pending execution.
+
+Raw local evidence contains private configuration and must not be committed
+or uploaded as a GitHub artifact. Keep it outside the repository; this report
+records only the decision, coordinates, counts and digest. Diagnostic preview
+names: `thn-query-fence-diagnostic-20260927`,
+`thn-query-fence-cdk-params-20260927`, and
+`thn-query-fence-cdk-native-20260927`. After the user's action-time approval,
+AWS CLI deleted exactly those three previews and confirmed none remained;
+the same stack ID retained `UPDATE_COMPLETE`. No change set was executed.
+
+Local verification passed the complete infrastructure suite, all 30 focused
+query-fence tests, and Bash syntax checks for all 13 workflow script blocks.
+An exact-input local CDK synthesis also succeeded. Its only differences from
+the Ubuntu/Node 22 sealed template were the asset metadata path separator
+(`../asset...` versus `..\\asset...`) and the analytics record of local Node
+`v20.13.1` versus runner Node `v22.23.2`. The asset hash and all other template
+fields were identical. These local platform differences are documented, not
+exceptions to the deployed template guard. The candidate Function code is
+8,912 bytes, below its 10,240-byte ceiling.
+
 ## Manual private admin release rotation in TEST
 
 The 2026-09-27 review stopped before a change set because the CDK lookup role's
