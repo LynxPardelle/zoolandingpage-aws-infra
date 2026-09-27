@@ -213,6 +213,28 @@ function changeSetEvidenceDigest(detailed, summary) {
     parameters: detailed.Parameters, summaryParameters: summary.Parameters });
 }
 
+function templateDifferencePaths(expected, actual) {
+  const paths = [];
+  const safeKey = key => /^[A-Za-z0-9_:-]{1,128}$/.test(key) ? key : "[key]";
+  const walk = (left, right, segments) => {
+    if (paths.length >= 12 || same(left, right)) return;
+    if (segments.length >= 7 || left == null || right == null
+      || typeof left !== "object" || typeof right !== "object"
+      || Array.isArray(left) !== Array.isArray(right)) {
+      paths.push(segments.join(".") || "[root]"); return;
+    }
+    const keys = Array.isArray(left) && Array.isArray(right)
+      ? [...new Set([...left.keys(), ...right.keys()])]
+      : [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+    for (const key of keys) {
+      walk(left[key], right[key], [...segments, safeKey(String(key))]);
+      if (paths.length >= 12) break;
+    }
+  };
+  walk(expected, actual, []);
+  return paths;
+}
+
 function validateLiveState(desired, state, selectedRelease, patched = false) {
   const reject = () => fail("query_fence_live_state_invalid");
   try {
@@ -429,7 +451,12 @@ function readChangeSet(root, desired, arn) {
       const result = JSON.parse(read(["cloudformation", "get-template", "--stack-name", stackName,
         "--change-set-name", arn, "--template-stage", stage, "--output", "json"]));
       const template = typeof result.TemplateBody === "string" ? JSON.parse(result.TemplateBody) : result.TemplateBody;
-      if (!same(template, desired)) fail("query_fence_change_set_template_invalid");
+      if (!same(template, desired)) {
+        const error = new Error("query_fence_change_set_template_invalid");
+        error.templateStage = stage;
+        error.templatePaths = templateDifferencePaths(desired, template);
+        throw error;
+      }
     }
     return [detailed, summary];
   } finally { fs.rmdirSync(directory); }
@@ -541,7 +568,7 @@ async function probeRoutes(fetcher = fetch, { attempts = 12, delayMs = 10000 } =
 
 module.exports = { verifyExactQueryFenceDiff, reviewQueryFenceChangeSet, validateLiveState, validatePostState,
   collectLiveState, probeRoutes, main,
-  runGuardedRelease, changeSetEvidenceDigest, FUNCTION_ID, DISTRIBUTION_ID };
+  runGuardedRelease, changeSetEvidenceDigest, templateDifferencePaths, FUNCTION_ID, DISTRIBUTION_ID };
 
 if (require.main === module) {
   main().then(result => { process.stdout.write(`${JSON.stringify(result)}\n`); })
@@ -551,7 +578,11 @@ if (require.main === module) {
       process.stderr.write(`${JSON.stringify({ error: safeCode,
         ...(safeCode === "query_fence_diff_invalid" && /^[a-z_]{1,64}$/.test(error?.diffReason || "")
           ? { diff_reason: error.diffReason } : {}),
-        ...(Array.isArray(error?.changeInventory) ? { change_inventory: error.changeInventory } : {}) })}\n`);
+        ...(Array.isArray(error?.changeInventory) ? { change_inventory: error.changeInventory } : {}),
+        ...(["Original", "Processed"].includes(error?.templateStage)
+          && Array.isArray(error?.templatePaths) ? {
+            template_stage: error.templateStage, template_paths: error.templatePaths,
+          } : {}) })}\n`);
       process.exitCode = 1;
     });
 }
