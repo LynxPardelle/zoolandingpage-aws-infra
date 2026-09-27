@@ -13,6 +13,11 @@ const FUNCTION_ID = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD7
 const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
 const SSR_ID = "FrontendThnAdminSsrFunction874373CC";
 const ALIAS_ID = "FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622";
+const URL_ID = "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7";
+const DOMAIN_PARAMETER_ID = "FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218";
+const ORIGIN_PERMISSION_ID = "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C";
+const INVOKE_PERMISSION_ID = "FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionThehairnarrativeAdminTest3FBFDE4C";
+const URL_PERMISSION_ID = "FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminTestA8483BAF";
 const STACK = "ZoolandingTest-Zoolandingpage-test-Frontend";
 const HOST = "admin-test.thehairnarrative.com";
 const PINNED_APP = Object.freeze({ artifactId: "10939780047",
@@ -130,41 +135,116 @@ function projectPrivateReleaseTemplate(desired, live, selection) {
 }
 
 function reviewPrivateReleaseChangeSet(detailed, summary, options) {
+  let stage = "parameters";
   try {
     if (!detailed || !summary || !options || options.aliasCreateOnly !== true
       || options.dnsUnchanged !== true || !Array.isArray(options.expectedParameters)
       || !same(stable(parameterMap(detailed.Parameters)), stable(parameterMap(options.expectedParameters)))
       || !same(stable(parameterMap(summary.Parameters)), stable(parameterMap(options.expectedParameters)))) fail();
-    const withoutLambda = description => {
+    const withoutLambda = (description, source) => {
+      stage = `${source}_lambda_count`;
       if (!Array.isArray(description.Changes)) fail();
       const lambda = description.Changes.filter(change => change?.ResourceChange?.LogicalResourceId === SSR_ID);
       if (lambda.length !== 1) fail();
       const resource = lambda[0].ResourceChange;
+      stage = `${source}_lambda_shape`;
       if (lambda[0].Type !== "Resource" || resource.ResourceType !== "AWS::Lambda::Function"
         || resource.Action !== "Modify" || resource.Replacement !== "False"
         || !same(resource.Scope, ["Properties"]) || !Array.isArray(resource.Details)
         || resource.Details.length !== 2) fail();
+      stage = `${source}_lambda_details`;
       const names = resource.Details.map(detail => {
         const target = detail?.Target;
+        const path = source === "detailed" ? {
+          Code: "/Properties/Code/S3Key",
+          Environment: "/Properties/Environment/Variables/ZLP_RELEASE_ID",
+        }[target?.Name] : undefined;
         if (detail.Evaluation !== "Static" || detail.ChangeSource !== "DirectModification"
           || detail.CausingEntity != null || target?.Attribute !== "Properties"
           || target.RequiresRecreation !== "Never" || !["Code", "Environment"].includes(target.Name)
-          || (target.Path != null && target.Path !== `/Properties/${target.Name}`)) fail();
+          || (source === "detailed" && (target.Path !== path
+            || target.AttributeChangeType !== "Modify" || target.BeforeValue == null
+            || target.AfterValue == null || same(target.BeforeValue, target.AfterValue)))
+          || (source === "summary" && (target.Path != null || target.AttributeChangeType != null
+            || target.BeforeValue != null || target.AfterValue != null))) fail();
         return target.Name;
       });
       if (!same(names.sort(), ["Code", "Environment"])) fail();
       return { ...description, Changes: description.Changes.filter(change => change !== lambda[0]) };
     };
-    const staticDetailed = withoutLambda(detailed);
-    const staticSummary = withoutLambda(summary);
-    return changeSetReviewer.reviewCompleteChangeSet(staticDetailed, staticSummary,
+    const staticDetailed = withoutLambda(detailed, "detailed");
+    withoutLambda(summary, "summary");
+    stage = "static_review";
+    const decision = changeSetReviewer.reviewChangeSet(staticDetailed,
       { ...options, adminStaticRotationProof: true, adminOriginOnlyProof: false });
+    stage = "summary_review";
+    validatePrivateReleaseSummary(detailed, summary);
+    return decision;
   } catch (cause) {
     const error = new Error("private_release_change_set_invalid");
     error.changeInventory = { detailed: safeChangeInventory(detailed), summary: safeChangeInventory(summary) };
+    error.reviewStage = stage;
     if (/^[a-z_]{3,80}$/.test(cause?.message || "")) error.reviewReason = cause.message;
     throw error;
   }
+}
+
+function validatePrivateReleaseSummary(detailed, summary) {
+  const detail = (name, evaluation, source, cause, recreation) =>
+    [name, evaluation, source, cause, recreation];
+  const distributionDomain = `${DISTRIBUTION_ID}.DomainName`;
+  const lambdaArn = `${SSR_ID}.Arn`;
+  const expected = new Map([
+    [ALIAS_ID, ["Custom::ZoolandingFrontendAliasRecords", "Conditional",
+      [detail("Create", "Dynamic", "ResourceAttribute", distributionDomain, "Conditionally")]]],
+    [DOMAIN_PARAMETER_ID, ["AWS::SSM::Parameter", "False",
+      [detail("Value", "Dynamic", "ResourceAttribute", distributionDomain, "Never")]]],
+    [DISTRIBUTION_ID, ["AWS::CloudFront::Distribution", "False", [
+      detail("DistributionConfig", "Dynamic", "ResourceAttribute", `${URL_ID}.FunctionUrl`, "Never"),
+      detail("DistributionConfig", "Dynamic", "ResourceAttribute", `${FUNCTION_ID}.FunctionARN`, "Never"),
+      detail("DistributionConfig", "Dynamic", "DirectModification", null, "Never"),
+    ]]],
+    [ORIGIN_PERMISSION_ID, ["AWS::Lambda::Permission", "Conditional",
+      [detail("FunctionName", "Dynamic", "ResourceAttribute", `${URL_ID}.FunctionArn`, "Always")]]],
+    [SSR_ID, ["AWS::Lambda::Function", "False", [
+      detail("Code", "Static", "DirectModification", null, "Never"),
+      detail("Environment", "Static", "DirectModification", null, "Never"),
+    ]]],
+    [INVOKE_PERMISSION_ID, ["AWS::Lambda::Permission", "Conditional",
+      [detail("FunctionName", "Dynamic", "ResourceAttribute", lambdaArn, "Always")]]],
+    [URL_PERMISSION_ID, ["AWS::Lambda::Permission", "Conditional",
+      [detail("FunctionName", "Dynamic", "ResourceAttribute", lambdaArn, "Always")]]],
+    [URL_ID, ["AWS::Lambda::Url", "Conditional",
+      [detail("TargetFunctionArn", "Dynamic", "ResourceAttribute", lambdaArn, "Always")]]],
+    [FUNCTION_ID, ["AWS::CloudFront::Function", "False",
+      [detail("FunctionCode", "Static", "DirectModification", null, "Never")]]],
+  ]);
+  if (detailed.NextToken || summary.NextToken || !Array.isArray(summary.Changes)
+    || summary.Changes.length !== expected.size
+    || ["StackId", "StackName", "ChangeSetId", "ChangeSetName", "Status", "ExecutionStatus"]
+      .some(key => detailed[key] !== summary[key])) fail();
+  const seen = new Set();
+  for (const change of summary.Changes) {
+    const resource = change?.ResourceChange;
+    const id = resource?.LogicalResourceId;
+    const profile = expected.get(id);
+    if (change?.Type !== "Resource" || !profile || seen.has(id) || resource.Action !== "Modify"
+      || resource.ResourceType !== profile[0] || resource.Replacement !== profile[1]
+      || !same(resource.Scope, ["Properties"]) || !Array.isArray(resource.Details)
+      || resource.Details.length !== profile[2].length) fail();
+    const actual = resource.Details.map(item => {
+      const target = item?.Target;
+      if (target?.Attribute !== "Properties" || target.Path != null
+        || target.AttributeChangeType != null || target.BeforeValue != null
+        || target.AfterValue != null) fail();
+      return detail(target.Name, item.Evaluation, item.ChangeSource,
+        item.CausingEntity ?? null, target.RequiresRecreation);
+    });
+    const ordered = items => items.map(item => JSON.stringify(item)).sort();
+    if (!same(ordered(actual), ordered(profile[2]))) fail();
+    seen.add(id);
+  }
+  if (seen.size !== expected.size) fail();
 }
 
 function parameterMap(parameters) {
@@ -177,6 +257,8 @@ function parameterMap(parameters) {
 
 function safeChangeInventory(description) {
   const safe = value => typeof value === "string" && /^[A-Za-z0-9:_-]{1,255}$/.test(value) ? value : "invalid";
+  const safeDetail = value => typeof value === "string" && /^[A-Za-z0-9:._/-]{1,255}$/.test(value)
+    ? value : value == null ? null : "invalid";
   return Array.isArray(description?.Changes) ? description.Changes.slice(0, 100).map(item => ({
     logicalId: safe(item?.ResourceChange?.LogicalResourceId),
     type: safe(item?.ResourceChange?.ResourceType),
@@ -184,6 +266,16 @@ function safeChangeInventory(description) {
     replacement: safe(item?.ResourceChange?.Replacement),
     properties: Array.isArray(item?.ResourceChange?.Details)
       ? item.ResourceChange.Details.slice(0, 20).map(detail => safe(detail?.Target?.Name)) : [],
+    scope: Array.isArray(item?.ResourceChange?.Scope)
+      ? item.ResourceChange.Scope.slice(0, 5).map(safe) : [],
+    details: Array.isArray(item?.ResourceChange?.Details)
+      ? item.ResourceChange.Details.slice(0, 20).map(detail => ({
+        evaluation: safeDetail(detail?.Evaluation), source: safeDetail(detail?.ChangeSource),
+        cause: safeDetail(detail?.CausingEntity), attribute: safeDetail(detail?.Target?.Attribute),
+        name: safeDetail(detail?.Target?.Name), path: safeDetail(detail?.Target?.Path),
+        recreation: safeDetail(detail?.Target?.RequiresRecreation),
+        changeType: safeDetail(detail?.Target?.AttributeChangeType),
+      })) : [],
   })) : [];
 }
 
@@ -292,8 +384,8 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
       || !same(config?.Aliases, { Quantity: 1, Items: [HOST] })) fail();
     const behaviors = [config.DefaultCacheBehavior, ...(config.CacheBehaviors?.Items || [])];
     if (config.CacheBehaviors?.Quantity !== (config.CacheBehaviors?.Items || []).length
-      || behaviors.some(item => !same(item?.FunctionAssociations,
-        { Quantity: 1, Items: [{ EventType: "viewer-request", FunctionARN: viewerArn }] }))) fail();
+      || behaviors.some(item => !same(stable(item?.FunctionAssociations),
+        stable({ Quantity: 1, Items: [{ EventType: "viewer-request", FunctionARN: viewerArn }] })))) fail();
     const staticOrigin = state.original.Resources[DISTRIBUTION_ID].Properties.DistributionConfig.Origins
       .find(item => item.OriginPath?.startsWith("/frontend/angular-ssr/test/releases/"));
     const origin = config.Origins?.Items?.find(item => item.Id === staticOrigin?.Id);
@@ -580,7 +672,8 @@ if (require.main === module) {
           && /^(thn_admin|test_infra|query_fence)_[a-z_]+$/.test(error?.message || "")
           ? { cause_code: error.message } : {}),
         ...(safeCode === "private_release_change_set_invalid"
-          ? { review_reason: error.reviewReason, change_inventory: error.changeInventory } : {}) })}\n`);
+          ? { review_reason: error.reviewReason, review_stage: error.reviewStage,
+            change_inventory: error.changeInventory } : {}) })}\n`);
       process.exitCode = 1;
     });
 }
