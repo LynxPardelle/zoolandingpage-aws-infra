@@ -129,13 +129,20 @@ assembly. It assigns a release-scoped S3 object key containing the exact
 projected template byte hash and updates both the CDK manifest URL and file
 asset destination. This avoids reusing the historical bootstrap object
 `ce3c0d2738c8be252265656041ba071f6475fe2adf1ea855b8781eec2a6cfcdd.json`:
-the 2026-09-27 read-only investigation found that this key contains the old
-Journal query rule even though the sealed artifact with that hash contains the
-new rule. The original object remains untouched; do not use a general TEST
-deploy that references it until the asset is separately repaired or replaced.
+the 2026-09-27 investigation found that this key contained the old Journal
+query rule even though the sealed artifact with that hash contained the new
+rule. That exact object was restored in TEST as S3 version
+`vKsR3iSRkJ_C7uHxW6fkAJvdot6KvAzL`; a fresh GetObject returned 165421 bytes
+with SHA-256 `ce3c0d2738c8be252265656041ba071f6475fe2adf1ea855b8781eec2a6cfcdd`.
+The previous version remains recoverable in the versioned bucket.
 The general TEST runner now compares the change set's `Original` template with
 its sealed artifact before review or execution. A stale bootstrap object stops
 that release with `test_infra_change_set_template_invalid`.
+Rollback keeps the recorded source artifact and its release selection, but
+loads the current protected `test` runner and template guard from the workflow
+commit. It rechecks that checkout immediately before preparation. This lets a
+rollback using an older immutable artifact reject a stale S3 template before
+review or execution, even when its embedded helper predates the guard.
 
 The detailed review requires one direct non-replacing `FunctionCode` update on
 the admin TEST viewer function. The summary review accepts only the exact

@@ -83,7 +83,7 @@ change_set_arn="$(node -e '
 
 # A stale CDK bootstrap object can differ from the sealed template even when
 # its S3 key looks content-addressed. Reject that change set before review.
-node "$RELEASE_ROOT/release-tools/infra-test-aws.js" verify-change-set-template \
+node "$(dirname "${BASH_SOURCE[0]}")/infra-test-aws.js" verify-change-set-template \
   "$RELEASE_ROOT" "$CHANGE_SET_NAME" "$change_set_arn"
 
 summary_args=()
