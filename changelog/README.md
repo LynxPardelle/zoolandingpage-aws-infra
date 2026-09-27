@@ -1,5 +1,6 @@
 # Changelog
 
+- [2026-09-27 — THN query fence historical baseline correction](2026-09-27-thn-query-fence-historical-baseline.md)
 - [2026-09-19 — THN identity final-readback diagnosis](2026-09-19-thn-identity-final-readback.md)
 - [2026-09-19 — Proposed THN managed-policy import repair](2026-09-19-thn-managed-policy-import-repair.md)
 - [2026-09-19 — THN IAM rollback preflight](2026-09-19-thn-identity-rollback-preflight.md)

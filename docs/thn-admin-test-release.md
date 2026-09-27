@@ -128,6 +128,13 @@ dependent resource or omits required property evidence. Inspect that exact
 change set and update the design before any wider release; do not use the
 general frontend workflow as a fallback.
 
+The preflight compares the complete historical `queryAllowed` body, which
+collects query keys and accepts zero or one `lang` key, against the current
+`articleLocale` implementation. It also removes only the four Journal rule
+flags from the candidate and requires the rest of the live template to match.
+The 2026-09-27 review identified an obsolete single-line baseline in the
+original proof; the corrected proof keeps the same one-resource release scope.
+
 After a clean review, `execution=execute` creates a new change set and repeats
 the live checks immediately before execution. It confirms the Function code,
 stack inventory, selected public release, distribution association and HTTP
