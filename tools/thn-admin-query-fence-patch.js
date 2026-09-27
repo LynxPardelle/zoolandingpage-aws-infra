@@ -3,10 +3,12 @@ const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { loadArtifact, createRoleClient, validChangeSetArn } = require("./infra-test-aws");
+const { loadArtifact, createRoleClient, readPrivateLambdaConfiguration,
+  validChangeSetArn } = require("./infra-test-aws");
 
 const FUNCTION_ID = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
 const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+const SSR_ID = "FrontendThnAdminSsrFunction874373CC";
 const JOURNAL_PAGES = new Set(["/admin/journal", "/admin/journal/new",
   "/admin/journal/:articleId/edit", "/admin/journal/:articleId/preview"]);
 // The deployed pre-patch handler accepts zero or one lang key. Match the whole
@@ -95,18 +97,32 @@ function verifyExactQueryFenceDiff(desired, live) {
   return true;
 }
 
-function reviewQueryFenceChangeSet(detailed, summary, context) {
-  const inventory = changes => Array.isArray(changes) ? changes.slice(0, 100).map(item => {
+function safeChangeInventory(changes) {
+  return Array.isArray(changes) ? changes.slice(0, 100).map(item => {
     const resource = item?.ResourceChange;
     const safe = (value, pattern) => typeof value === "string" && pattern.test(value) ? value : "invalid";
+    const detailValue = value => value == null ? null
+      : safe(value, /^[A-Za-z0-9:._/-]{1,512}$/);
     return { logicalId: safe(resource?.LogicalResourceId, /^[A-Za-z0-9]{1,255}$/),
-      type: safe(resource?.ResourceType, /^AWS::[A-Za-z0-9:]{1,128}$/),
+      type: safe(resource?.ResourceType, /^(AWS|Custom)::[A-Za-z0-9:]{1,128}$/),
       action: safe(resource?.Action, /^(Add|Modify|Remove|Import|Dynamic)$/),
-      replacement: safe(resource?.Replacement, /^(True|False|Conditional)$/) };
+      replacement: safe(resource?.Replacement, /^(True|False|Conditional)$/),
+      details: Array.isArray(resource?.Details) ? resource.Details.slice(0, 20).map(detail => ({
+        evaluation: detailValue(detail?.Evaluation), source: detailValue(detail?.ChangeSource),
+        cause: detailValue(detail?.CausingEntity), attribute: detailValue(detail?.Target?.Attribute),
+        name: detailValue(detail?.Target?.Name), path: detailValue(detail?.Target?.Path),
+        recreation: detailValue(detail?.Target?.RequiresRecreation),
+        valuesPresent: detail?.Target?.BeforeValue != null || detail?.Target?.AfterValue != null,
+        valuesEqual: detail?.Target?.BeforeValue != null && detail?.Target?.AfterValue != null
+          ? detail.Target.BeforeValue === detail.Target.AfterValue : null,
+      })) : [] };
   }) : [];
+}
+
+function reviewQueryFenceChangeSet(detailed, summary, context) {
   const reject = () => {
     const error = new Error("query_fence_change_set_invalid");
-    error.changeInventory = [...inventory(detailed?.Changes), ...inventory(summary?.Changes)];
+    error.changeInventory = [...safeChangeInventory(detailed?.Changes), ...safeChangeInventory(summary?.Changes)];
     throw error;
   };
   if (!context || !Array.isArray(context.parameters) || !detailed || !summary
@@ -123,20 +139,58 @@ function reviewQueryFenceChangeSet(detailed, summary, context) {
     || !same(parameterMap(summary.Parameters), parameterMap(context.parameters))) reject();
   for (const description of [detailed, summary]) {
     if (description.IncludeNestedStacks === true || description.ParentChangeSetId
-      || description.RootChangeSetId || !Array.isArray(description.Changes)
-      || description.Changes.length !== 1) reject();
-    const change = description.Changes[0];
+      || description.RootChangeSetId || !Array.isArray(description.Changes)) reject();
+  }
+  if (detailed.Changes.length !== 1 || ![1, 4].includes(summary.Changes.length)) reject();
+  const checkDirect = (change, detailedView) => {
     const resource = change?.ResourceChange;
     const detail = resource?.Details?.[0];
     const target = detail?.Target;
-    if (change?.Type !== "Resource" || resource.LogicalResourceId !== FUNCTION_ID
+    if (change?.Type !== "Resource" || resource?.LogicalResourceId !== FUNCTION_ID
       || resource.ResourceType !== "AWS::CloudFront::Function" || resource.Action !== "Modify"
       || resource.Replacement !== "False" || !same(resource.Scope, ["Properties"])
       || resource.Details.length !== 1 || detail.Evaluation !== "Static"
       || detail.ChangeSource !== "DirectModification" || detail.CausingEntity != null
       || target?.Attribute !== "Properties" || target.Name !== "FunctionCode"
       || target.RequiresRecreation !== "Never"
-      || (target.Path != null && target.Path !== "/Properties/FunctionCode")) reject();
+      || (detailedView ? target.Path != null && target.Path !== "/Properties/FunctionCode"
+        : target.Path != null || target.BeforeValue != null || target.AfterValue != null)
+      || (detailedView && ((target.BeforeValue == null) !== (target.AfterValue == null)
+        || (target.BeforeValue != null && target.BeforeValue === target.AfterValue)))) reject();
+  };
+  checkDirect(detailed.Changes[0], true);
+  if (summary.Changes.length === 1) checkDirect(summary.Changes[0], false);
+  else {
+    const expected = new Map([
+      ["FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+        ["Custom::ZoolandingFrontendAliasRecords", "Conditional", "Create",
+          `${DISTRIBUTION_ID}.DomainName`, "Conditionally"]],
+      ["FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+        ["AWS::SSM::Parameter", "False", "Value", `${DISTRIBUTION_ID}.DomainName`, "Never"]],
+      [DISTRIBUTION_ID, ["AWS::CloudFront::Distribution", "False", "DistributionConfig",
+        `${FUNCTION_ID}.FunctionARN`, "Never"]],
+    ]);
+    const seen = new Set();
+    for (const change of summary.Changes) {
+      const resource = change?.ResourceChange;
+      if (resource?.LogicalResourceId === FUNCTION_ID) {
+        if (seen.has(FUNCTION_ID)) reject();
+        checkDirect(change, false); seen.add(FUNCTION_ID); continue;
+      }
+      const profile = expected.get(resource?.LogicalResourceId);
+      const item = resource?.Details?.[0];
+      const target = item?.Target;
+      if (change?.Type !== "Resource" || !profile || seen.has(resource.LogicalResourceId)
+        || resource.ResourceType !== profile[0] || resource.Action !== "Modify"
+        || resource.Replacement !== profile[1] || !same(resource.Scope, ["Properties"])
+        || resource.Details.length !== 1 || item.Evaluation !== "Dynamic"
+        || item.ChangeSource !== "ResourceAttribute" || item.CausingEntity !== profile[3]
+        || target?.Attribute !== "Properties" || target.Name !== profile[2]
+        || target.RequiresRecreation !== profile[4] || target.Path != null
+        || target.BeforeValue != null || target.AfterValue != null) reject();
+      seen.add(resource.LogicalResourceId);
+    }
+    if (seen.size !== 4) reject();
   }
   return true;
 }
@@ -149,6 +203,14 @@ function parameterMap(parameters) {
     fail("query_fence_change_set_invalid");
   }
   return Object.fromEntries(entries);
+}
+
+function changeSetEvidenceDigest(detailed, summary) {
+  if (!Array.isArray(detailed?.Changes) || !Array.isArray(summary?.Changes)) {
+    fail("query_fence_change_set_invalid");
+  }
+  return digest({ detailed: detailed.Changes, summary: summary.Changes,
+    parameters: detailed.Parameters, summaryParameters: summary.Parameters });
 }
 
 function validateLiveState(desired, state, selectedRelease, patched = false) {
@@ -174,6 +236,7 @@ function validateLiveState(desired, state, selectedRelease, patched = false) {
       || !["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(resource.ResourceStatus))) reject();
   const functionResource = state.resources.find(resource => resource.LogicalResourceId === FUNCTION_ID);
   const distributionResource = state.resources.find(resource => resource.LogicalResourceId === DISTRIBUTION_ID);
+  const lambdaResource = state.resources.find(resource => resource.LogicalResourceId === SSR_ID);
   const name = state.original.Resources[FUNCTION_ID].Properties?.Name;
   const functionArn = state.function?.FunctionSummary?.FunctionMetadata?.FunctionARN;
   if (!functionResource || !distributionResource || typeof name !== "string" || name.length === 0
@@ -192,10 +255,28 @@ function validateLiveState(desired, state, selectedRelease, patched = false) {
   if (behaviors.length === 0 || config.CacheBehaviors?.Quantity !== (config.CacheBehaviors?.Items || []).length
     || behaviors.some(behavior => !same(behavior?.FunctionAssociations,
       { Quantity: 1, Items: [{ EventType: "viewer-request", FunctionARN: functionArn }] }))) reject();
+  const expectedLambda = state.original.Resources?.[SSR_ID]?.Properties;
+  const lambda = state.lambda;
+  if (!lambdaResource || !expectedLambda || lambdaResource.PhysicalResourceId !== expectedLambda.FunctionName
+    || lambda?.FunctionName !== expectedLambda.FunctionName
+    || lambda.FunctionArn !== `arn:aws:lambda:us-east-1:${account}:function:${expectedLambda.FunctionName}`
+    || lambda.State !== "Active" || lambda.LastUpdateStatus !== "Successful"
+    || !/^[A-Za-z0-9+/]{43}=$/.test(lambda.CodeSha256 || "")
+    || lambda.Environment?.Error || !same(lambda.Environment?.Variables, expectedLambda.Environment?.Variables)) reject();
+  const records = state.dns?.ResourceRecordSets;
+  if (!Array.isArray(records) || records.length !== 2
+    || !same(records.map(item => [item.Name, item.Type]), [
+      ["admin-test.thehairnarrative.com.", "A"], ["admin-test.thehairnarrative.com.", "AAAA"]])
+    || records.some(item => !/^d[a-z0-9]+\.cloudfront\.net\.$/.test(item.AliasTarget?.DNSName || "")
+      || item.AliasTarget?.HostedZoneId !== "Z2FDTNDATAQYW2"
+      || item.AliasTarget?.EvaluateTargetHealth !== false)
+    || !same(records[0].AliasTarget, records[1].AliasTarget)) reject();
   return { stackId: stack.StackId, stackSha256: digest(stack), templateSha256: digest(state.original),
     inventory: structuredClone(state.resources), functionCodeSha256: digest(state.functionCode),
     functionEtag: state.function.ETag, functionArn, distributionId: distributionResource.PhysicalResourceId,
-    distributionSha256: digest(distribution), parameters: stack.Parameters,
+    distributionSha256: digest(distribution), distributionConfigSha256: digest(config),
+    lambdaCodeSha256: lambda.CodeSha256, lambdaEnvSha256: digest(lambda.Environment.Variables),
+    dnsSha256: digest(records), parameters: stack.Parameters,
     selectedRelease };
 }
 
@@ -207,7 +288,7 @@ function validatePostState(desired, state, selectedRelease, baseline) {
   const before = baseline?.inventory;
   const after = current.inventory;
   if (!Array.isArray(before) || before.length !== after.length) reject();
-  const functionIdentity = resource => {
+  const resourceIdentity = resource => {
     const copy = { ...resource };
     delete copy.LastUpdatedTimestamp;
     delete copy.ResourceStatus;
@@ -217,12 +298,14 @@ function validatePostState(desired, state, selectedRelease, baseline) {
   const oldById = new Map(before.map(resource => [resource.LogicalResourceId, resource]));
   if (oldById.size !== before.length || after.some(resource => {
     const old = oldById.get(resource.LogicalResourceId);
-    return !old || !(resource.LogicalResourceId === FUNCTION_ID
-      ? same(functionIdentity(resource), functionIdentity(old)) : same(resource, old));
+    return !old || !same(resourceIdentity(resource), resourceIdentity(old));
   })) reject();
   if (current.stackId !== baseline?.stackId || current.functionArn !== baseline.functionArn
     || current.functionEtag === baseline.functionEtag
-    || current.distributionSha256 !== baseline.distributionSha256
+    || current.distributionConfigSha256 !== baseline.distributionConfigSha256
+    || current.lambdaCodeSha256 !== baseline.lambdaCodeSha256
+    || current.lambdaEnvSha256 !== baseline.lambdaEnvSha256
+    || current.dnsSha256 !== baseline.dnsSha256
     || !same(current.parameters, baseline.parameters)
     || current.selectedRelease !== baseline.selectedRelease
     || current.functionCodeSha256 !== digest(desired.Resources[FUNCTION_ID].Properties.FunctionCode)) reject();
@@ -273,28 +356,33 @@ function collectLiveState(desired, read, outputPath) {
 
 async function runGuardedRelease(mode, operations) {
   if (!["review", "execute"].includes(mode)) fail("query_fence_mode_invalid");
-  const baseline = await operations.preflight();
-  let executed = false;
+  let executionAttempted = false;
   try {
+    const baseline = await operations.preflight();
     const first = await operations.describe();
     reviewQueryFenceChangeSet(...first, operations.context);
     const second = await operations.describe();
     reviewQueryFenceChangeSet(...second, operations.context);
     if (!same(first, second)) fail("query_fence_change_set_changed");
-    if (mode === "review") return "reviewed-no-execution";
+    const reviewedDigest = changeSetEvidenceDigest(...first);
+    const inventory = { detailed: safeChangeInventory(first[0].Changes),
+      summary: safeChangeInventory(first[1].Changes) };
+    if (mode === "review") return { decision: "reviewed-no-execution", reviewedDigest, inventory };
+    if (!/^[a-f0-9]{64}$/.test(operations.expectedReviewDigest)
+      || reviewedDigest !== operations.expectedReviewDigest) fail("query_fence_review_digest_changed");
     const repeated = await operations.preflight();
     if (!same(repeated, baseline)) fail("query_fence_pre_execute_drift");
     const final = await operations.describe();
     reviewQueryFenceChangeSet(...final, operations.context);
     if (!same(final, first)) fail("query_fence_change_set_changed");
+    executionAttempted = true;
     await operations.execute();
-    executed = true;
     await operations.wait();
     await operations.postcheck(baseline);
     await operations.postcheck(baseline);
-    return "executed";
+    return { decision: "executed", reviewedDigest, inventory };
   } finally {
-    if (!executed) await operations.cleanup();
+    if (!executionAttempted) await operations.cleanup();
   }
 }
 
@@ -309,8 +397,17 @@ function readLive(root, desired, changeSetArn) {
   const outputPath = path.join(directory, "live-function.js");
   try {
     const functionName = desired.Resources[FUNCTION_ID].Properties.Name;
-    const read = createRoleClient(root, "lookup", { queryFence: { functionName, outputPath, changeSetArn } });
-    return collectLiveState(desired, read, outputPath);
+    const zoneId = process.env.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID;
+    if (!/^Z[A-Z0-9]{1,32}$/.test(zoneId || "")) fail("query_fence_live_read_invalid");
+    const lambdaName = desired.Resources?.[SSR_ID]?.Properties?.FunctionName;
+    const read = createRoleClient(root, "lookup", { queryFence: { functionName, outputPath, changeSetArn },
+      privateRotation: { lambdaName, hostedZoneId: zoneId } });
+    const state = collectLiveState(desired, read, outputPath);
+    state.lambda = readPrivateLambdaConfiguration();
+    state.dns = JSON.parse(read(["route53", "list-resource-record-sets", "--hosted-zone-id", zoneId,
+      "--start-record-name", "admin-test.thehairnarrative.com.", "--start-record-type", "A",
+      "--max-items", "2", "--no-paginate", "--output", "json"]));
+    return state;
   } finally {
     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     fs.rmdirSync(directory);
@@ -347,6 +444,8 @@ async function main(argv = process.argv.slice(2)) {
     || artifact.metadata.thn_admin_route53_enabled !== "true"
     || !/^[a-f0-9]{40}$/.test(artifact.metadata.source_sha)
     || artifact.metadata.source_sha !== process.env.GITHUB_SHA) fail("query_fence_release_identity_invalid");
+  try { require("./thn-admin-private-release-rotation").loadSelection(artifact, process.env); }
+  catch { fail("query_fence_selection_invalid"); }
   const selected = path.join(artifact.root, "thn-admin-selection.json");
   if (!fs.existsSync(selected)) fail("query_fence_selection_missing");
   const release = require("./thn-admin-release");
@@ -375,6 +474,9 @@ async function main(argv = process.argv.slice(2)) {
   }
   if (!/^release-[1-9][0-9]*-[1-9][0-9]*$/.test(name)
     || name !== `release-${artifact.metadata.run_id}-${artifact.metadata.run_attempt}`) fail("query_fence_change_set_name_invalid");
+  if (mode === "execute" && !/^[a-f0-9]{64}$/.test(process.env.EXPECTED_REVIEW_DIGEST)) {
+    fail("query_fence_review_digest_changed");
+  }
   const baseline = await preflight();
   const stackName = "ZoolandingTest-Zoolandingpage-test-Frontend";
   const initialRead = createRoleClient(root, "lookup");
@@ -390,6 +492,7 @@ async function main(argv = process.argv.slice(2)) {
     outputPath: path.join(os.tmpdir(), "thn-query-fence-unused.js") } });
   const operations = {
     context,
+    expectedReviewDigest: process.env.EXPECTED_REVIEW_DIGEST,
     preflight,
     describe: async () => readChangeSet(root, desired, arn),
     cleanup: async () => deploy(["cloudformation", "delete-change-set", "--stack-name", stackName,
@@ -404,8 +507,8 @@ async function main(argv = process.argv.slice(2)) {
       await probeRoutes();
     },
   };
-  const decision = await runGuardedRelease(mode, operations);
-  return { decision, change_set_arn: arn, source_sha: artifact.metadata.source_sha,
+  const result = await runGuardedRelease(mode, operations);
+  return { ...result, change_set_arn: arn, source_sha: artifact.metadata.source_sha,
     function_code_sha256: digest(desired.Resources[FUNCTION_ID].Properties.FunctionCode) };
 }
 
@@ -413,7 +516,9 @@ async function probeRoutes(fetcher = fetch, { attempts = 12, delayMs = 10000 } =
   const host = "https://admin-test.thehairnarrative.com";
   const id = "a4fc82e0eceecd75b150b6983796558739891fa85";
   const valid = ["/admin/journal", "/admin/journal/new", `/admin/journal/${id}/edit`,
-    `/admin/journal/${id}/preview`].map(route => `${host}${route}?lang=es&articleLocale=en`);
+    `/admin/journal/${id}/preview`].flatMap(route => [
+    `${host}${route}?lang=es&articleLocale=en`, `${host}${route}?articleLocale=en&lang=es`,
+  ]);
   const denied = [`${host}/admin/journal?lang=es&articleLocale=fr`,
     `${host}/admin/journal?lang=es&articleLocale=en&articleLocale=es`,
     `${host}/admin/journal?lang=es&articleLocale=en&unexpected=1`,
@@ -436,7 +541,7 @@ async function probeRoutes(fetcher = fetch, { attempts = 12, delayMs = 10000 } =
 
 module.exports = { verifyExactQueryFenceDiff, reviewQueryFenceChangeSet, validateLiveState, validatePostState,
   collectLiveState, probeRoutes, main,
-  runGuardedRelease, FUNCTION_ID, DISTRIBUTION_ID };
+  runGuardedRelease, changeSetEvidenceDigest, FUNCTION_ID, DISTRIBUTION_ID };
 
 if (require.main === module) {
   main().then(result => { process.stdout.write(`${JSON.stringify(result)}\n`); })
