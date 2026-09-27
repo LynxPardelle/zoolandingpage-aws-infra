@@ -142,3 +142,49 @@ routes after the stack update. `execution=verify` performs read-only checks on
 the deployed result. Record the run ID, source SHA, manifest digest and
 change-set ARN from the workflow output. The patch touches only AWS TEST; the
 QA article remains unpublished until the separate editorial acceptance flow.
+
+## Manual private admin release rotation in TEST
+
+The `THN Admin TEST Private Release Rotation` workflow activates the already
+published APP release `4f45ffc615d3864a167fdccd87535e244ef01971` (APP run
+`36342080059`, artifact `10939780047`). Its exact source, run, delivery digest,
+and admin manifest digest are pinned in the release tool. The manifest and
+canonical metadata are supplied as dispatch inputs from the independently
+verified APP artifact; the workflow does not change the repository's current
+admin release variables or the public frontend release.
+
+Dispatch from the protected infrastructure `test` branch with its full SHA,
+the exact APP manifest base64, metadata JSON, and coordinate JSON. The
+coordinate JSON has exactly `artifactId`, `sourceSha`, `runId`, `runAttempt`,
+`deliverySha256`, and `manifestSha256`. `execution=review` is the default.
+Validation runs before OIDC credentials, checks the pinned APP coordinates,
+and seals the synthesized assembly and release tools. The deploy job checks
+the independently published S3 completion marker and the live stack, function,
+Lambda, DNS, certificate, public release, and static asset inventory.
+
+The operation copies the sealed CDK assembly into runner temporary storage
+and projects only the private release. It restores the live historical Journal
+query policy inside that temporary copy, leaving the separately promoted
+`articleLocale` query patch pending. Full-template proof rejects any unrelated
+resource or route change. CDK prepares a change set; this may publish an
+unchanged CDK asset but does not update the stack. The reviewer requires exact
+non-replacing private SSR Lambda, admin viewer Function, and admin distribution
+changes, plus only the proved create-only admin alias/SSM dependencies.
+`review` prints a digest of the complete detailed and summary inventory and
+deletes its unexecuted change set. A blocked review prints only sanitized
+resource coordinates and a safe reason code.
+
+`execution=execute` requires the reviewed digest as `expected_review_digest`,
+creates a fresh change set, repeats the preflight and full review, then executes
+only if the digest and live state still match. This mode needs separate approval
+after examining the `review` run. It waits for stack and CloudFront completion
+and checks the live release twice, including the Lambda zip checksum, private
+DNS and certificate, unchanged public release, and unchanged nonstatic
+distribution settings. `execution=verify` is read-only. After execution,
+complete the QA browser check with an unpublished draft: upload an inline
+image, confirm it renders immediately and after reload, and check the login
+and MFA boundary at desktop and mobile sizes.
+
+Rollback requires a reviewed code change pinning the prior verified APP
+artifact, followed by the same review and execute gates. Never overwrite an
+immutable APP release or use the general TEST deploy to bypass this review.
