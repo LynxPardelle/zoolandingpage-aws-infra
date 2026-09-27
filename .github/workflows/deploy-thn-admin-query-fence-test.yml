@@ -236,6 +236,13 @@ jobs:
         if: inputs.execution != 'verify'
         shell: bash
         run: node .transport/.release/release-tools/thn-admin-query-fence-patch.js preflight .transport/.release
+      - name: Project template under an isolated content key
+        if: inputs.execution != 'verify'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .transport/.release/release-tools/thn-admin-query-fence-patch.js \
+            project .transport/.release "$RUNNER_TEMP/thn-query-fence-projected-cdk.out"
       - name: Prepare exact TEST change set without execution
         if: inputs.execution != 'verify'
         shell: bash
@@ -244,7 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           npx --no-install cdk deploy "ZoolandingTest/Zoolandingpage-test-Frontend" \
-            --app .transport/.release/cdk.out \
+            --app "$RUNNER_TEMP/thn-query-fence-projected-cdk.out" \
             --method prepare-change-set \
             --change-set-name "$CHANGE_SET_NAME" \
             --require-approval never --exclusively \

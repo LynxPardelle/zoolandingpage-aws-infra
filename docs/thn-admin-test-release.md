@@ -124,6 +124,16 @@ synthesis run without AWS credentials. The deploy job checks the transported
 artifact, published APP marker, current private release and protected branch
 tip before preparing a CloudFormation change set without executing it.
 
+The query-fence release projects the sealed template into a temporary CDK
+assembly. It assigns a release-scoped S3 object key containing the exact
+projected template byte hash and updates both the CDK manifest URL and file
+asset destination. This avoids reusing the historical bootstrap object
+`ce3c0d2738c8be252265656041ba071f6475fe2adf1ea855b8781eec2a6cfcdd.json`:
+the 2026-09-27 read-only investigation found that this key contains the old
+Journal query rule even though the sealed artifact with that hash contains the
+new rule. The original object remains untouched; do not use a general TEST
+deploy that references it until the asset is separately repaired or replaced.
+
 The detailed review requires one direct non-replacing `FunctionCode` update on
 the admin TEST viewer function. The summary review accepts only the exact
 native dynamic reference chain from the viewer Function through the existing
@@ -196,9 +206,11 @@ Lambda, DNS, certificate, public release, and static asset inventory.
 The operation copies the sealed CDK assembly into runner temporary storage
 and projects only the private release. It restores the live historical Journal
 query policy inside that temporary copy, leaving the separately promoted
-`articleLocale` query patch pending. Full-template proof rejects any unrelated
-resource or route change. CDK prepares a change set; this may publish an
-unchanged CDK asset but does not update the stack. The reviewer requires exact
+`articleLocale` query patch pending. The projection rewrites its CDK template
+asset URL and destination to an isolated key based on the projected bytes, so
+it cannot overwrite or reuse the sealed artifact's content-addressed key.
+Full-template proof rejects any unrelated resource or route change. CDK
+prepares a change set without updating the stack. The reviewer requires exact
 non-replacing private SSR Lambda, admin viewer Function, and admin distribution
 changes, plus only the proved create-only admin alias/SSM dependencies.
 `review` prints a digest of the complete detailed and summary inventory and
