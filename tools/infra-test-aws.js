@@ -73,10 +73,14 @@ function createRoleClient(releaseRoot, kind, options = {}) {
   const artifact = loadArtifact(releaseRoot, env);
   const account = artifact.metadata.expected_aws_account_id;
   const queryFence = options.queryFence;
+  const privateRotation = options.privateRotation;
   if (queryFence && ((queryFence.changeSetArn != null
       && !validChangeSetArn(queryFence.changeSetArn, account, queryFence.changeSetArn?.split("/")[1]))
     || !/^[A-Za-z0-9_-]{1,64}$/.test(queryFence.functionName)
     || !path.isAbsolute(queryFence.outputPath))) fail("test_infra_operation_invalid");
+  if (privateRotation && (!queryFence || !/^[A-Za-z0-9_-]{1,64}$/.test(privateRotation.lambdaName)
+    || typeof privateRotation.hostedZoneId !== "string"
+    || digest(privateRotation.hostedZoneId) !== artifact.metadata.thn_admin_hosted_zone_sha256)) fail("test_infra_operation_invalid");
   const rawArn = kind === "lookup" ? artifact.stack.properties.lookupRole?.arn : kind === "deploy" ? artifact.stack.properties.assumeRoleArn : null;
   const arn = typeof rawArn === "string" ? rawArn.replaceAll("${AWS::Partition}", "aws") : "";
   if (!["lookup", "deploy"].includes(kind) || !new RegExp(`^arn:aws:iam::${account}:role/cdk-[a-z0-9]+-${kind}-role-${account}-${REGION}$`).test(arn)
@@ -110,6 +114,10 @@ function createRoleClient(releaseRoot, kind, options = {}) {
       lookup.add("cloudfront get-function");
       deploy.add("cloudformation delete-change-set");
     }
+    if (privateRotation) {
+      lookup.add("lambda get-function-configuration");
+      lookup.add("route53 list-resource-record-sets");
+    }
     if (!(kind === "lookup" ? lookup : deploy).has(operation) || args.includes("--profile") || args.includes("--endpoint-url")) fail("test_infra_operation_invalid");
     if (args[0] === "cloudformation" && value("--stack-name") !== STACK) fail("test_infra_operation_invalid");
     if (operation === "cloudformation get-template" && (!["Original", ...(queryFence ? ["Processed"] : [])].includes(value("--template-stage"))
@@ -118,6 +126,14 @@ function createRoleClient(releaseRoot, kind, options = {}) {
       || value("--stage") !== "LIVE" || args.at(-1) !== queryFence.outputPath)) fail("test_infra_operation_invalid");
     if (operation === "cloudfront describe-function" && (!queryFence || value("--name") !== queryFence.functionName
       || value("--stage") !== "LIVE")) fail("test_infra_operation_invalid");
+    if (operation === "lambda get-function-configuration" && (!privateRotation
+      || JSON.stringify(args) !== JSON.stringify(["lambda", "get-function-configuration",
+        "--function-name", privateRotation.lambdaName, "--output", "json"]))) fail("test_infra_operation_invalid");
+    if (operation === "route53 list-resource-record-sets" && (!privateRotation
+      || JSON.stringify(args) !== JSON.stringify(["route53", "list-resource-record-sets",
+        "--hosted-zone-id", privateRotation.hostedZoneId,
+        "--start-record-name", "admin-test.thehairnarrative.com.", "--start-record-type", "A",
+        "--max-items", "2", "--no-paginate", "--output", "json"]))) fail("test_infra_operation_invalid");
     if (operation === "cloudformation describe-stack-resource" && value("--logical-resource-id") !== "ThnAdminTestCertificate") fail("test_infra_operation_invalid");
     if (operation === "cloudformation wait" && args[2] !== "stack-update-complete") fail("test_infra_operation_invalid");
     if (operation.endsWith("change-set")) {

@@ -130,6 +130,30 @@ test("query fence adds only pinned read and change-set cleanup commands", t => {
   assert.equal(calls.at(-1), "cloudformation execute-change-set");
 });
 
+test("private rotation adds only exact Lambda and admin DNS reads", t => {
+  const f = artifact(t);
+  const zone = "ZTHNADMINTEST";
+  f.metadata.thn_admin_hosted_zone_sha256 = digest(zone);
+  fs.writeFileSync(path.join(f.root, "release-metadata.json"), bytes(f.metadata)); f.seal();
+  const functionName = "zoolanding-test-admin-viewer";
+  const lambdaName = "zoolanding-test-private-ssr";
+  const options = { env: f.env, seals, queryFence: { functionName,
+    outputPath: path.join(f.root, "live-function.js") }, privateRotation: { lambdaName, hostedZoneId: zone },
+  runAws: args => args[0] === "sts" ? assumeResponse(roles.lookup, args[args.indexOf("--role-session-name") + 1]) : bytes({}) };
+  const read = helper.createRoleClient(f.root, "lookup", options);
+  read(["lambda", "get-function-configuration", "--function-name", lambdaName, "--output", "json"]);
+  read(["route53", "list-resource-record-sets", "--hosted-zone-id", zone,
+    "--start-record-name", "admin-test.thehairnarrative.com.", "--start-record-type", "A",
+    "--max-items", "2", "--no-paginate", "--output", "json"]);
+  assert.throws(() => read(["lambda", "get-function-configuration", "--function-name", "other"]),
+    /test_infra_operation_invalid/);
+  assert.throws(() => read(["lambda", "get-function-configuration", "--function-name", lambdaName,
+    "--qualifier", "another-version", "--output", "json"]), /test_infra_operation_invalid/);
+  assert.throws(() => read(["route53", "list-resource-record-sets", "--hosted-zone-id", zone,
+    "--start-record-name", "example.com.", "--start-record-type", "A", "--max-items", "2", "--no-paginate"]),
+  /test_infra_operation_invalid/);
+});
+
 test("swapped, unsealed, wrong-account, wrong-region and wrong-partition roles fail before STS", t => {
   assert.equal(typeof helper.createRoleClient, "function");
   for (const replacement of [roles.deploy, roles.lookup.replace("fixture1", "other"),
