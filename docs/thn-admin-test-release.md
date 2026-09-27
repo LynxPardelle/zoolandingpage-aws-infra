@@ -109,3 +109,29 @@ it does not weaken the existing admin/SSR review to perform issuance.
 Local tests cover AWS-shaped change-set responses, exact asset projection,
 negative provenance/certificate/size cases, and the no-credential/no-mutation
 boundary. They do not demonstrate a deployed origin or a successful AWS run.
+
+## Manual Journal locale query patch in TEST
+
+The `THN Admin TEST Query Fence` workflow is the only release path for the
+`articleLocale` viewer-request correction. Promote the reviewed source to
+`test` through the normal code-only PR first. Then dispatch the workflow from
+that exact full source SHA with `execution=review` (the default). Validation
+and CDK synthesis run without AWS credentials. The deploy job checks the
+transported artifact and existing admin release before assuming the TEST
+roles, and prepares a CloudFormation change set without executing it.
+
+The review accepts only a single non-replacing `FunctionCode` modification on
+the admin TEST viewer function. It rejects any dependent distribution, origin,
+certificate, DNS, asset, or other resource change, and deletes an unexecuted
+change set. Review can still be blocked if CloudFormation classifies a dynamic
+dependent resource or omits required property evidence. Inspect that exact
+change set and update the design before any wider release; do not use the
+general frontend workflow as a fallback.
+
+After a clean review, `execution=execute` creates a new change set and repeats
+the live checks immediately before execution. It confirms the Function code,
+stack inventory, selected public release, distribution association and HTTP
+routes after the stack update. `execution=verify` performs read-only checks on
+the deployed result. Record the run ID, source SHA, manifest digest and
+change-set ARN from the workflow output. The patch touches only AWS TEST; the
+QA article remains unpublished until the separate editorial acceptance flow.

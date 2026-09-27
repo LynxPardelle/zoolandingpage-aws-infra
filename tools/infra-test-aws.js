@@ -72,6 +72,11 @@ function createRoleClient(releaseRoot, kind, options = {}) {
   const seals = options.seals || ROLE_SEALS;
   const artifact = loadArtifact(releaseRoot, env);
   const account = artifact.metadata.expected_aws_account_id;
+  const queryFence = options.queryFence;
+  if (queryFence && ((queryFence.changeSetArn != null
+      && !validChangeSetArn(queryFence.changeSetArn, account, queryFence.changeSetArn?.split("/")[1]))
+    || !/^[A-Za-z0-9_-]{1,64}$/.test(queryFence.functionName)
+    || !path.isAbsolute(queryFence.outputPath))) fail("test_infra_operation_invalid");
   const rawArn = kind === "lookup" ? artifact.stack.properties.lookupRole?.arn : kind === "deploy" ? artifact.stack.properties.assumeRoleArn : null;
   const arn = typeof rawArn === "string" ? rawArn.replaceAll("${AWS::Partition}", "aws") : "";
   if (!["lookup", "deploy"].includes(kind) || !new RegExp(`^arn:aws:iam::${account}:role/cdk-[a-z0-9]+-${kind}-role-${account}-${REGION}$`).test(arn)
@@ -100,15 +105,26 @@ function createRoleClient(releaseRoot, kind, options = {}) {
       "cloudformation get-template", "cloudformation describe-stack-resource",
       "acm describe-certificate", "s3 cp", "cloudfront get-distribution-config", "cloudfront wait"]);
     const deploy = new Set(["cloudformation describe-change-set", "cloudformation execute-change-set", "cloudformation wait"]);
+    if (queryFence) {
+      lookup.add("cloudfront describe-function");
+      lookup.add("cloudfront get-function");
+      deploy.add("cloudformation delete-change-set");
+    }
     if (!(kind === "lookup" ? lookup : deploy).has(operation) || args.includes("--profile") || args.includes("--endpoint-url")) fail("test_infra_operation_invalid");
     if (args[0] === "cloudformation" && value("--stack-name") !== STACK) fail("test_infra_operation_invalid");
-    if (operation === "cloudformation get-template" && (value("--template-stage") !== "Original" || args.includes("--change-set-name"))) fail("test_infra_operation_invalid");
+    if (operation === "cloudformation get-template" && (!["Original", ...(queryFence ? ["Processed"] : [])].includes(value("--template-stage"))
+      || (args.includes("--change-set-name") && (!queryFence || value("--change-set-name") !== queryFence.changeSetArn)))) fail("test_infra_operation_invalid");
+    if (operation === "cloudfront get-function" && (!queryFence || value("--name") !== queryFence.functionName
+      || value("--stage") !== "LIVE" || args.at(-1) !== queryFence.outputPath)) fail("test_infra_operation_invalid");
+    if (operation === "cloudfront describe-function" && (!queryFence || value("--name") !== queryFence.functionName
+      || value("--stage") !== "LIVE")) fail("test_infra_operation_invalid");
     if (operation === "cloudformation describe-stack-resource" && value("--logical-resource-id") !== "ThnAdminTestCertificate") fail("test_infra_operation_invalid");
     if (operation === "cloudformation wait" && args[2] !== "stack-update-complete") fail("test_infra_operation_invalid");
     if (operation.endsWith("change-set")) {
       const coordinate = value("--change-set-name");
       const name = coordinate?.startsWith("arn:") ? coordinate.split("/")[1] : coordinate;
       if (!validChangeSetName(name) || (coordinate.startsWith("arn:") && !validChangeSetArn(coordinate, account, name))) fail("test_infra_operation_invalid");
+      if (queryFence && kind === "deploy" && coordinate !== queryFence.changeSetArn) fail("test_infra_operation_invalid");
     }
     if (operation === "acm describe-certificate" && (digest(value("--certificate-arn") || "") !== artifact.metadata.thn_admin_certificate_sha256
       || !new RegExp(`^arn:aws:acm:${REGION}:${account}:certificate/[A-Za-z0-9-]+$`).test(value("--certificate-arn")))) fail("test_infra_operation_invalid");
@@ -118,7 +134,8 @@ function createRoleClient(releaseRoot, kind, options = {}) {
       if (args[3] !== "-" || !args[2]?.startsWith(prefix)
         || !["manifest.json", "delivery.json", "thn-admin-release.json", "thn-route-manifest.json"].includes(args[2].slice(prefix.length))) fail("test_infra_operation_invalid");
     }
-    if (args[0] === "cloudfront" && (!/^[A-Z0-9]+$/.test(value("--id")) || (args[1] === "wait" && args[2] !== "distribution-deployed"))) fail("test_infra_operation_invalid");
+    if (args[0] === "cloudfront" && !["cloudfront get-function", "cloudfront describe-function"].includes(operation)
+      && (!/^[A-Z0-9]+$/.test(value("--id")) || (args[1] === "wait" && args[2] !== "distribution-deployed"))) fail("test_infra_operation_invalid");
     // Authenticate the same independent artifact again at the mutation boundary.
     if (operation === "cloudformation execute-change-set") loadArtifact(releaseRoot, env);
     try { return call(args, childEnv); } catch { fail("test_infra_aws_operation_failed"); }

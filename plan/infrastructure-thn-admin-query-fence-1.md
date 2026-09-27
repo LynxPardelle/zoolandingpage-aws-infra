@@ -66,7 +66,7 @@ The source route fix in `lib/stacks/frontend-stack.js` is tested offline. This p
 ## 4. Dependencies
 
 - **DEP-001**: Approved `docs/superpowers/specs/2026-09-26-thn-admin-test-query-fence-patch-design.md`.
-- **DEP-002**: Existing TEST OIDC role, CloudFormation execution role, protected frontend stack, admin distribution and selected APP release.
+- **DEP-002**: Existing TEST OIDC role, CloudFormation execution role, healthy frontend stack with its observed termination-protection setting preserved, admin distribution and selected APP release.
 - **DEP-003**: Tested source change in `lib/stacks/frontend-stack.js` and `test/frontend.test.js`.
 
 ## 5. Files

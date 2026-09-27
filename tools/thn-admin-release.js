@@ -327,9 +327,19 @@ function verifyCertificatePreservation(desired, live, metadata, detail, selected
   return detail.PhysicalResourceId;
 }
 
+function determineAdminProofMode(selected, desired, live, queryFence = false) {
+  if (queryFence) {
+    if (!selected) throw new Error("thn_admin_query_fence_selection_invalid");
+    return require("./thn-admin-query-fence-patch").verifyExactQueryFenceDiff(desired, live)
+      ? "query-fence" : "none";
+  }
+  return selected && verifyExactAdminOriginOnlyDiff(desired, live) ? "origin-only"
+    : selected && verifyExactAdminStaticRotationDiff(desired, live, selected) ? "static-rotation" : "none";
+}
+
 async function main(args, readAws) {
   const [operation, target] = args;
-  if (args.length !== 2 || !["prepare", "compare", "verify"].includes(operation)) fail();
+  if (args.length !== 2 || !["prepare", "compare", "verify", "verify-query-fence"].includes(operation)) fail();
   if (operation === "prepare") {
     const selected = selectThnAdminRelease();
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -360,8 +370,8 @@ async function main(args, readAws) {
   const read = readAws || createRoleClient(releaseRoot, "lookup");
   const response = JSON.parse(read(["cloudformation", "get-template", "--stack-name", STACK_NAME, "--template-stage", "Original", "--output", "json"]));
   const liveTemplate = typeof response.TemplateBody === "string" ? JSON.parse(response.TemplateBody) : response.TemplateBody;
-  const proofMode = selected && verifyExactAdminOriginOnlyDiff(desiredTemplate, liveTemplate) ? "origin-only"
-    : selected && verifyExactAdminStaticRotationDiff(desiredTemplate, liveTemplate, selected) ? "static-rotation" : "none";
+  const proofMode = determineAdminProofMode(selected, desiredTemplate, liveTemplate,
+    operation === "verify-query-fence");
   const resource = desiredTemplate.Resources?.ThnAdminTestCertificate || liveTemplate?.Resources?.ThnAdminTestCertificate
     ? JSON.parse(read(["cloudformation", "describe-stack-resource", "--stack-name", STACK_NAME,
       "--logical-resource-id", "ThnAdminTestCertificate", "--output", "json"])).StackResourceDetail : undefined;
@@ -390,4 +400,4 @@ if (require.main === module) {
 }
 module.exports = { selectThnAdminRelease, verifyPublishedAdminRelease, isHashedStaticAssetPath, validateSelection,
   verifyAdminCertificate, verifyCertificatePreservation, adminCertificateFromAssembly, verifyAdminAssemblyQuotas,
-  verifyExactAdminOriginOnlyDiff, verifyExactAdminStaticRotationDiff, main };
+  verifyExactAdminOriginOnlyDiff, verifyExactAdminStaticRotationDiff, determineAdminProofMode, main };
