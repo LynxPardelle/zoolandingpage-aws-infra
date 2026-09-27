@@ -30,3 +30,24 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 
 See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
+
+## The Hair Narrative public production host
+
+The public `thehairnarrative.com` front door is separate from the private
+`admin-test.thehairnarrative.com` TEST distribution. It is disabled by default.
+The production workflow passes these environment variables from its GitHub
+production Environment:
+
+- `FRONTEND_PRODUCTION_THN_PUBLIC_ORIGIN_ENABLED`: set to `true` only after the
+  exact apex certificate is issued in ACM `us-east-1` in account `765932874577`.
+- `FRONTEND_PRODUCTION_THN_PUBLIC_CERTIFICATE_ARN`: the verified certificate ARN.
+- `FRONTEND_PRODUCTION_THN_PUBLIC_ROUTE53_RECORDS_ENABLED`: keep `false` while
+  creating and inspecting the CloudFront distribution; set to `true` only after
+  the production draft package is published and the distribution is ready.
+
+The DNS operation creates only the apex A and AAAA aliases in hosted zone
+`Z08032292DKYZ4QGCIZDR`. It is create-only and does not manage `www` or change
+the private TEST host. Before enabling DNS, verify that no apex A or AAAA record
+already exists. Disabling the flag later does not remove a retained DNS record;
+rollback must explicitly restore the previous DNS state. After cutover, verify
+desktop and mobile browser rendering on the public domain.
