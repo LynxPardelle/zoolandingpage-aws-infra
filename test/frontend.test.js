@@ -19,6 +19,7 @@ const {
 const {
   buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
+  buildThnPublicProductionFrontDoor,
   environments,
   retiredZoolandingpageComMxAliases,
 } = require("../config/environments");
@@ -1210,6 +1211,65 @@ test("production front doors activate Astra Legal aliases and Route53 cutover", 
       domainNames: ["grupoastralegal.com", "www.grupoastralegal.com"],
     },
   ]);
+});
+
+test("THN public production front door requires an exact certificate and explicit DNS activation", () => {
+  const certificateArn = "arn:aws:acm:us-east-1:765932874577:certificate/11111111-2222-3333-4444-555555555555";
+  assert.equal(buildThnPublicProductionFrontDoor({}), null);
+  assert.throws(() => buildThnPublicProductionFrontDoor({
+    FRONTEND_PRODUCTION_THN_PUBLIC_ROUTE53_RECORDS_ENABLED: "true",
+  }), /requires the public origin/);
+  assert.throws(() => buildThnPublicProductionFrontDoor({
+    FRONTEND_PRODUCTION_THN_PUBLIC_ORIGIN_ENABLED: "true",
+    FRONTEND_PRODUCTION_THN_PUBLIC_CERTIFICATE_ARN: "arn:aws:acm:us-east-1:000000000000:certificate/11111111-2222-3333-4444-555555555555",
+  }), /expected account and region/);
+
+  const withoutDns = buildThnPublicProductionFrontDoor({
+    FRONTEND_PRODUCTION_THN_PUBLIC_ORIGIN_ENABLED: "true",
+    FRONTEND_PRODUCTION_THN_PUBLIC_CERTIFICATE_ARN: certificateArn,
+  });
+  assert.equal(withoutDns.route53RecordsEnabled, false);
+  assert.equal(withoutDns.domainName, "thehairnarrative.com");
+  assert.deepEqual(withoutDns.alternateDomainNames, []);
+  assert.equal(withoutDns.route53RecordManagement, "create-only");
+  assert.deepEqual(withoutDns.aliasRecordGroups, [{
+    hostedZoneName: "thehairnarrative.com",
+    hostedZoneId: "Z08032292DKYZ4QGCIZDR",
+    domainNames: ["thehairnarrative.com"],
+  }]);
+
+  const withDns = buildThnPublicProductionFrontDoor({
+    FRONTEND_PRODUCTION_THN_PUBLIC_ORIGIN_ENABLED: "true",
+    FRONTEND_PRODUCTION_THN_PUBLIC_CERTIFICATE_ARN: certificateArn,
+    FRONTEND_PRODUCTION_THN_PUBLIC_ROUTE53_RECORDS_ENABLED: "true",
+  });
+  assert.equal(withDns.route53RecordsEnabled, true);
+  const app = new cdk.App();
+  const stack = new FrontendStack(app, "ThnPublicProductionFrontDoorFixture", {
+    env: { account: testEnvironment.account, region: testEnvironment.region },
+    environment: {
+      ...testEnvironment,
+      name: "production",
+      removalPolicy: "retain",
+      frontendHosting: {
+        ...testEnvironment.frontendHosting,
+        releaseId: "thn-public-fixture",
+        staticPrefix: "frontend/angular-ssr/production/releases/thn-public-fixture/browser",
+        serverBundleKey: "frontend/angular-ssr/production/releases/thn-public-fixture/server/ssr-handler.zip",
+        frontDoors: [withDns],
+      },
+    },
+  });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties("AWS::CloudFront::Distribution", {
+    DistributionConfig: Match.objectLike({ Aliases: ["thehairnarrative.com"] }),
+  });
+  const records = template.findResources("Custom::ZoolandingFrontendAliasRecords");
+  assert.equal(Object.keys(records).length, 1);
+  const createParts = Object.values(records)[0].Properties.Create["Fn::Join"][1];
+  const createRequest = createParts.filter((part) => typeof part === "string").join("");
+  assert.equal((createRequest.match(/"Action":"CREATE"/g) || []).length, 2);
+  assert.equal((createRequest.match(/"Name":"thehairnarrative.com\."/g) || []).length, 2);
 });
 
 test("production frontend stack creates guarded alias operations OIDC role", () => {

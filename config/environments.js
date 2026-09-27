@@ -55,6 +55,10 @@ const hostedZones = {
     hostedZoneName: "grupoastralegal.com",
     hostedZoneId: "Z05844193OR5CAJJCR2ZJ",
   },
+  theHairNarrativeCom: {
+    hostedZoneName: "thehairnarrative.com",
+    hostedZoneId: "Z08032292DKYZ4QGCIZDR",
+  },
 };
 
 const environmentDefaults = {
@@ -135,6 +139,33 @@ const backendApiFrontDoors = {
 
 const thnAdminTestHost = "admin-test.thehairnarrative.com";
 const thnAdminHostedZoneName = "thehairnarrative.com";
+const thnPublicProductionHost = "thehairnarrative.com";
+
+function buildThnPublicProductionFrontDoor(source = process.env) {
+  const enabled = parseBooleanFlag(source.FRONTEND_PRODUCTION_THN_PUBLIC_ORIGIN_ENABLED);
+  const recordsEnabled = parseBooleanFlag(source.FRONTEND_PRODUCTION_THN_PUBLIC_ROUTE53_RECORDS_ENABLED);
+  if (!enabled) {
+    if (recordsEnabled) throw new Error("THN production DNS requires the public origin to be enabled.");
+    return null;
+  }
+  const certificateArn = String(source.FRONTEND_PRODUCTION_THN_PUBLIC_CERTIFICATE_ARN || "").trim();
+  if (!/^arn:aws:acm:us-east-1:765932874577:certificate\/[0-9a-f-]{36}$/.test(certificateArn)) {
+    throw new Error("THN production requires an ACM certificate in the expected account and region.");
+  }
+  return {
+    id: "thehairnarrative-public",
+    domainName: thnPublicProductionHost,
+    alternateDomainNames: [],
+    customDomainNamesEnabled: true,
+    route53RecordsEnabled: recordsEnabled,
+    route53RecordManagement: "create-only",
+    certificateArn,
+    aliasRecordGroups: [{
+      ...hostedZones.theHairNarrativeCom,
+      domainNames: [thnPublicProductionHost],
+    }],
+  };
+}
 
 const productionCustomDomainNamesEnabled = parseBooleanFlag(
   process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED ||
@@ -435,6 +466,7 @@ function requiredOriginPath(value, name) {
 }
 
 const thnAdminTestFrontDoor = buildThnAdminTestFrontDoor();
+const thnPublicProductionFrontDoor = buildThnPublicProductionFrontDoor();
 
 const environments = [
   {
@@ -568,6 +600,7 @@ const environments = [
             },
           ],
         },
+        ...(thnPublicProductionFrontDoor ? [thnPublicProductionFrontDoor] : []),
       ],
     },
     removalPolicy: "retain",
@@ -581,6 +614,7 @@ function parseBooleanFlag(value) {
 module.exports = {
   buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
+  buildThnPublicProductionFrontDoor,
   environments,
   expectedAccount,
   defaultRegion,
