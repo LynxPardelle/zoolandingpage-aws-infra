@@ -55,6 +55,24 @@ test("proof rejects any other code, route, or template change", () => {
   }
 });
 
+test("query fence diff identifies the failed gate without exposing template values", () => {
+  const extraTemplate = live();
+  extraTemplate.Resources[DISTRIBUTION_ID].Properties.Host = "private-value-not-for-logs";
+  assert.throws(() => subject.verifyExactQueryFenceDiff(desired(), extraTemplate), error => {
+    assert.equal(error.message, "query_fence_diff_invalid");
+    assert.equal(error.diffReason, "other_template_change");
+    assert.ok(!JSON.stringify(error).includes("private-value-not-for-logs"));
+    return true;
+  });
+  const wrongCode = desired();
+  wrongCode.Resources[ID].Properties.FunctionCode += "\n// private-value-not-for-logs";
+  assert.throws(() => subject.verifyExactQueryFenceDiff(wrongCode, live()), error => {
+    assert.equal(error.diffReason, "unapproved_code_delta");
+    assert.ok(!JSON.stringify(error).includes("private-value-not-for-logs"));
+    return true;
+  });
+});
+
 const changeSet = () => ({ StackId: "stack-id", StackName: "ZoolandingTest-Zoolandingpage-test-Frontend",
   ChangeSetId: "change-id", ChangeSetName: "release-1-1", Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE",
   Parameters: [], Changes: [{ Type: "Resource", ResourceChange: { LogicalResourceId: ID,
