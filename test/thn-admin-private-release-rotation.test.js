@@ -378,6 +378,22 @@ test("live preflight preserves only the safe template projection stage", () => {
       && !error.message.includes("private-sentinel"));
 });
 
+test("live preflight accepts CloudFront's function association key order", () => {
+  const { live, desired } = templates();
+  const state = runtimeState(live);
+  const config = state.distribution.DistributionConfig;
+  for (const behavior of [config.DefaultCacheBehavior, ...config.CacheBehaviors.Items]) {
+    const item = behavior.FunctionAssociations.Items[0];
+    behavior.FunctionAssociations = { Quantity: 1,
+      Items: [{ FunctionARN: item.FunctionARN, EventType: "viewer-request" }] };
+  }
+  assert.doesNotThrow(() => subject.validateRotationState(desired, state, selected,
+    "public-release", "before"));
+  config.CacheBehaviors.Items[0].FunctionAssociations.Items[0].FunctionARN = "wrong-function";
+  assert.throws(() => subject.validateRotationState(desired, state, selected,
+    "public-release", "before"), /private_release_live_state_invalid_distribution/);
+});
+
 test("live and post state keep identities, DNS, public release and nonstatic distribution", () => {
   const { live, desired } = templates();
   const baseline = subject.validateRotationState(desired, runtimeState(live), selected, "public-release", "before");
