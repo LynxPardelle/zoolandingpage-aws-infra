@@ -131,6 +131,32 @@ test("change set proof accepts one FunctionCode effect in both views", () => {
     stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] }), true);
 });
 
+test("change set rejection names the failed gate without exposing parameter values", () => {
+  const detailed = changeSet(), summary = changeSet();
+  detailed.Parameters = [{ ParameterKey: "OriginProof", ParameterValue: "private-do-not-log" }];
+  summary.Parameters = structuredClone(detailed.Parameters);
+  assert.throws(() => subject.reviewQueryFenceChangeSet(detailed, summary, {
+    stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1",
+    parameters: [{ ParameterKey: "OriginProof", ParameterValue: "previous-private-value" }],
+  }), error => {
+    assert.equal(error.changeSetReason, "parameters");
+    assert.ok(!JSON.stringify(error).includes("private-do-not-log"));
+    assert.ok(!JSON.stringify(error).includes("previous-private-value"));
+    return true;
+  });
+});
+
+test("change set rejection separates status and identity failures", () => {
+  for (const [field, value, reason] of [["ExecutionStatus", "UNAVAILABLE", "status"],
+    ["StackId", "another-stack", "identity"]]) {
+    const detailed = changeSet(), summary = changeSet();
+    detailed[field] = value; summary[field] = value;
+    assert.throws(() => subject.reviewQueryFenceChangeSet(detailed, summary, {
+      stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [],
+    }), error => error.changeSetReason === reason);
+  }
+});
+
 const dependentChangeSet = () => {
   const detailed = changeSet();
   detailed.Changes[0].ResourceChange.Details[0].Target.Path = "/Properties/FunctionCode";
@@ -169,6 +195,25 @@ test("native query fence review accepts only the observed dynamic reference chai
     assert.throws(() => subject.reviewQueryFenceChangeSet(before, after, {
       stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] }),
     /query_fence_change_set_invalid/);
+  }
+});
+
+test("query fence accepts CDK nested-preview metadata on a flat root stack", () => {
+  const [detailed, summary] = dependentChangeSet();
+  for (const view of [detailed, summary]) {
+    view.IncludeNestedStacks = true;
+  }
+  const context = { stackId: "stack-id", changeSetId: "change-id", changeSetName: "release-1-1", parameters: [] };
+  assert.equal(subject.reviewQueryFenceChangeSet(detailed, summary, context), true);
+  for (const mutate of [
+    view => { view.ParentChangeSetId = "parent-change-id"; },
+    view => { view.RootChangeSetId = view.ChangeSetId; },
+    view => { view.IncludeNestedStacks = "true"; },
+    view => { view.Changes[0].ResourceChange.ChangeSetId = "child-change-id"; },
+  ]) {
+    const invalid = structuredClone(detailed); mutate(invalid);
+    assert.throws(() => subject.reviewQueryFenceChangeSet(invalid, summary, context),
+      /query_fence_change_set_invalid/);
   }
 });
 
@@ -240,6 +285,16 @@ test("live snapshot binds template, runtime code, function association and selec
   const result = subject.validateLiveState(desired(), state, "approved-release");
   assert.match(result.functionCodeSha256, /^[a-f0-9]{64}$/);
   assert.equal(result.stackId, state.stack.StackId);
+});
+
+test("query fence preflight rejects an actual nested stack even if its template is unchanged", () => {
+  const state = liveState(), candidate = desired();
+  const child = { Type: "AWS::CloudFormation::Stack", Properties: { TemplateURL: "https://example.com/child.json" } };
+  for (const template of [state.original, state.processed, candidate]) template.Resources.Child = structuredClone(child);
+  state.resources.push({ LogicalResourceId: "Child", ResourceType: child.Type,
+    PhysicalResourceId: "child-stack-id", ResourceStatus: "UPDATE_COMPLETE" });
+  assert.throws(() => subject.validateLiveState(candidate, state, "approved-release"),
+    /query_fence_live_state_invalid/);
 });
 
 test("live snapshot rejects code drift, distribution drift and incomplete inventory", () => {
@@ -437,6 +492,13 @@ test("manual query fence workflow defaults to review and separates validation fr
   assert.match(workflow, /expected_review_digest:/);
   assert.match(workflow, /FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: \$\{\{ inputs\.app_manifest_base64 \}\}/);
   assert.match(workflow, /EXPECTED_APP_COORDINATES_JSON: \$\{\{ inputs\.app_coordinates_json \}\}/);
+});
+
+test("query fence preparation preserves existing parameters without resending the origin secret", () => {
+  const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/deploy-thn-admin-query-fence-test.yml"), "utf8");
+  assert.match(workflow, /--previous-parameters/);
+  assert.ok(!workflow.includes("--parameters"));
+  assert.ok(!workflow.includes("THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET"));
 });
 
 test("HTTP probe accepts four article pages and denies invalid locale queries", async () => {

@@ -120,34 +120,46 @@ function safeChangeInventory(changes) {
 }
 
 function reviewQueryFenceChangeSet(detailed, summary, context) {
-  const reject = () => {
+  const reject = reason => {
     const error = new Error("query_fence_change_set_invalid");
+    error.changeSetReason = reason;
     error.changeInventory = [...safeChangeInventory(detailed?.Changes), ...safeChangeInventory(summary?.Changes)];
     throw error;
   };
   if (!context || !Array.isArray(context.parameters) || !detailed || !summary
-    || detailed.NextToken || summary.NextToken) reject();
-  const keys = ["StackId", "StackName", "ChangeSetId", "ChangeSetName", "Status", "ExecutionStatus"];
+    || detailed.NextToken || summary.NextToken) reject("context_or_pagination");
+  const keys = ["StackId", "StackName", "ChangeSetId", "ChangeSetName"];
   if (keys.some(key => detailed[key] !== summary[key])
     || detailed.StackId !== context.stackId || detailed.ChangeSetId !== context.changeSetId
     || detailed.ChangeSetName !== context.changeSetName
-    || detailed.StackName !== "ZoolandingTest-Zoolandingpage-test-Frontend"
+    || detailed.StackName !== "ZoolandingTest-Zoolandingpage-test-Frontend") reject("identity");
+  if (detailed.Status !== summary.Status || detailed.ExecutionStatus !== summary.ExecutionStatus
     || detailed.Status !== "CREATE_COMPLETE" || detailed.ExecutionStatus !== "AVAILABLE"
     || ![undefined, "UPDATE"].includes(detailed.ChangeSetType)
-    || ![undefined, "UPDATE"].includes(summary.ChangeSetType)
-    || !same(parameterMap(detailed.Parameters), parameterMap(context.parameters))
-    || !same(parameterMap(summary.Parameters), parameterMap(context.parameters))) reject();
-  for (const description of [detailed, summary]) {
-    if (description.IncludeNestedStacks === true || description.ParentChangeSetId
-      || description.RootChangeSetId || !Array.isArray(description.Changes)) reject();
+    || ![undefined, "UPDATE"].includes(summary.ChangeSetType)) reject("status");
+  try {
+    if (!same(parameterMap(detailed.Parameters), parameterMap(context.parameters))
+      || !same(parameterMap(summary.Parameters), parameterMap(context.parameters))) reject("parameters");
+  } catch (error) {
+    if (error.changeSetReason) throw error;
+    reject("parameters");
   }
-  if (detailed.Changes.length !== 1 || ![1, 4].includes(summary.Changes.length)) reject();
+  // CDK 2.1129.0 sets this preview flag even for a flat root stack. It does
+  // not prove that a child stack exists. The live inventory rejects actual
+  // nested stacks, and both change-set views must remain the same root.
+  if (detailed.IncludeNestedStacks !== summary.IncludeNestedStacks) reject("nested_preview_disagreement");
+  for (const description of [detailed, summary]) {
+    if (![undefined, false, true].includes(description.IncludeNestedStacks) || description.ParentChangeSetId
+      || description.RootChangeSetId || !Array.isArray(description.Changes)) reject("nested_or_changes_shape");
+  }
+  if (detailed.Changes.length !== 1 || ![1, 4].includes(summary.Changes.length)) reject("change_count");
   const checkDirect = (change, detailedView) => {
     const resource = change?.ResourceChange;
     const detail = resource?.Details?.[0];
     const target = detail?.Target;
     if (change?.Type !== "Resource" || resource?.LogicalResourceId !== FUNCTION_ID
       || resource.ResourceType !== "AWS::CloudFront::Function" || resource.Action !== "Modify"
+      || resource.ChangeSetId != null
       || resource.Replacement !== "False" || !same(resource.Scope, ["Properties"])
       || resource.Details.length !== 1 || detail.Evaluation !== "Static"
       || detail.ChangeSource !== "DirectModification" || detail.CausingEntity != null
@@ -156,7 +168,9 @@ function reviewQueryFenceChangeSet(detailed, summary, context) {
       || (detailedView ? target.Path != null && target.Path !== "/Properties/FunctionCode"
         : target.Path != null || target.BeforeValue != null || target.AfterValue != null)
       || (detailedView && ((target.BeforeValue == null) !== (target.AfterValue == null)
-        || (target.BeforeValue != null && target.BeforeValue === target.AfterValue)))) reject();
+        || (target.BeforeValue != null && target.BeforeValue === target.AfterValue)))) {
+      reject(detailedView ? "direct_detailed" : "direct_summary");
+    }
   };
   checkDirect(detailed.Changes[0], true);
   if (summary.Changes.length === 1) checkDirect(summary.Changes[0], false);
@@ -174,7 +188,7 @@ function reviewQueryFenceChangeSet(detailed, summary, context) {
     for (const change of summary.Changes) {
       const resource = change?.ResourceChange;
       if (resource?.LogicalResourceId === FUNCTION_ID) {
-        if (seen.has(FUNCTION_ID)) reject();
+        if (seen.has(FUNCTION_ID)) reject("duplicate_function");
         checkDirect(change, false); seen.add(FUNCTION_ID); continue;
       }
       const profile = expected.get(resource?.LogicalResourceId);
@@ -182,15 +196,16 @@ function reviewQueryFenceChangeSet(detailed, summary, context) {
       const target = item?.Target;
       if (change?.Type !== "Resource" || !profile || seen.has(resource.LogicalResourceId)
         || resource.ResourceType !== profile[0] || resource.Action !== "Modify"
+        || resource.ChangeSetId != null
         || resource.Replacement !== profile[1] || !same(resource.Scope, ["Properties"])
         || resource.Details.length !== 1 || item.Evaluation !== "Dynamic"
         || item.ChangeSource !== "ResourceAttribute" || item.CausingEntity !== profile[3]
         || target?.Attribute !== "Properties" || target.Name !== profile[2]
         || target.RequiresRecreation !== profile[4] || target.Path != null
-        || target.BeforeValue != null || target.AfterValue != null) reject();
+        || target.BeforeValue != null || target.AfterValue != null) reject("dependent_summary");
       seen.add(resource.LogicalResourceId);
     }
-    if (seen.size !== 4) reject();
+    if (seen.size !== 4) reject("dependent_count");
   }
   return true;
 }
@@ -271,7 +286,8 @@ function validateLiveState(desired, state, selectedRelease, patched = false) {
   if (!Array.isArray(state.resources) || state.resources.length < 2
     || state.resources.length !== Object.keys(state.original.Resources || {}).length
     || new Set(state.resources.map(resource => resource.LogicalResourceId)).size !== state.resources.length
-    || state.resources.some(resource => resource.ResourceType !== state.original.Resources?.[resource.LogicalResourceId]?.Type
+    || state.resources.some(resource => resource.ResourceType === "AWS::CloudFormation::Stack"
+      || resource.ResourceType !== state.original.Resources?.[resource.LogicalResourceId]?.Type
       || !["CREATE_COMPLETE", "UPDATE_COMPLETE"].includes(resource.ResourceStatus))) reject();
   const functionResource = state.resources.find(resource => resource.LogicalResourceId === FUNCTION_ID);
   const distributionResource = state.resources.find(resource => resource.LogicalResourceId === DISTRIBUTION_ID);
@@ -606,6 +622,9 @@ if (require.main === module) {
       const safeCode = /^query_fence_[a-z_]+$/.test(error?.message)
         ? error.message : "query_fence_release_failed";
       process.stderr.write(`${JSON.stringify({ error: safeCode,
+        ...(safeCode === "query_fence_change_set_invalid"
+          && /^[a-z_]{1,64}$/.test(error?.changeSetReason || "")
+          ? { change_set_reason: error.changeSetReason } : {}),
         ...(safeCode === "query_fence_diff_invalid" && /^[a-z_]{1,64}$/.test(error?.diffReason || "")
           ? { diff_reason: error.diffReason } : {}),
         ...(Array.isArray(error?.changeInventory) ? { change_inventory: error.changeInventory } : {}),
