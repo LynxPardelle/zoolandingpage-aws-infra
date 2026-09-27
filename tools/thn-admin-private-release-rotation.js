@@ -58,8 +58,10 @@ function rulesFrom(code) {
 }
 
 function projectPrivateReleaseTemplate(desired, live, selection) {
+  let stage = "selection";
   try {
     const selected = adminRelease.validateSelection(selection);
+    stage = "ssr_coordinates";
     const oldSsr = live?.Resources?.[SSR_ID];
     const newSsr = desired?.Resources?.[SSR_ID];
     if (oldSsr?.Type !== "AWS::Lambda::Function" || newSsr?.Type !== oldSsr.Type) fail();
@@ -76,8 +78,10 @@ function projectPrivateReleaseTemplate(desired, live, selection) {
     const normalizedSsr = structuredClone(newSsr);
     normalizedSsr.Properties.Code.S3Key = oldCode.S3Key;
     normalizedSsr.Properties.Environment.Variables.ZLP_RELEASE_ID = oldReleaseId;
+    stage = "ssr_scope";
     if (!same(stable(normalizedSsr), stable(oldSsr))) fail();
 
+    stage = "viewer_rules";
     const oldViewerCode = live?.Resources?.[FUNCTION_ID]?.Properties?.FunctionCode;
     const newViewerCode = desired?.Resources?.[FUNCTION_ID]?.Properties?.FunctionCode;
     const oldViewer = rulesFrom(oldViewerCode);
@@ -106,16 +110,23 @@ function projectPrivateReleaseTemplate(desired, live, selection) {
     const queryOnly = structuredClone(live);
     queryOnly.Resources[FUNCTION_ID].Properties.FunctionCode = newViewerCode.replace(newViewer.line,
       `  var rules = ${JSON.stringify(queryRules)};`);
+    stage = "query_policy";
     queryFence.verifyExactQueryFenceDiff(queryOnly, live);
 
+    stage = "static_rotation";
     const staticOnly = structuredClone(candidate);
     staticOnly.Resources[SSR_ID] = structuredClone(oldSsr);
     if (!adminRelease.verifyExactAdminStaticRotationDiff(staticOnly, live, selected)) fail();
     const candidateCode = candidate.Resources[FUNCTION_ID].Properties.FunctionCode;
     const candidateBehaviors = candidate.Resources[DISTRIBUTION_ID].Properties.DistributionConfig.CacheBehaviors;
+    stage = "quotas";
     if (Buffer.byteLength(candidateCode, "utf8") > 10240 || candidateBehaviors.length + 1 > 75) fail();
     return candidate;
-  } catch { fail(); }
+  } catch {
+    const error = new Error(`private_release_template_invalid_${stage}`);
+    error.projectionStage = stage;
+    throw error;
+  }
 }
 
 function reviewPrivateReleaseChangeSet(detailed, summary, options) {
@@ -231,13 +242,18 @@ function collectRotationState(artifact, desired, env = process.env) {
 }
 
 function validateRotationState(desired, state, selection, publicRelease, mode, expectedCandidate) {
+  let stage = "selection";
   try {
     const selected = adminRelease.validateSelection(selection);
+    stage = "template_identity";
     if (!same(stable(state?.original), stable(state?.processed))) fail();
+    stage = "template_projection";
     const candidate = mode === "before"
       ? projectPrivateReleaseTemplate(desired, state.original, selected)
       : (queryFence.verifyExactQueryFenceDiff(desired, state.original), state.original);
+    stage = "candidate_identity";
     if (expectedCandidate && !same(stable(candidate), stable(expectedCandidate))) fail();
+    stage = "stack";
     const stack = state.stack;
     if (stack?.StackName !== STACK || !new RegExp(`^arn:aws:cloudformation:us-east-1:765932874577:stack/${STACK}/[A-Za-z0-9-]+$`).test(stack.StackId)
       || stack.StackStatus !== "UPDATE_COMPLETE" || stack.EnableTerminationProtection !== false
@@ -245,6 +261,7 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
       || !Array.isArray(stack.Parameters) || !Array.isArray(stack.Outputs)
       || stack.Outputs.filter(item => item.OutputKey === "FrontendReleaseId").length !== 1
       || stack.Outputs.find(item => item.OutputKey === "FrontendReleaseId").OutputValue !== publicRelease) fail();
+    stage = "resource_inventory";
     const resources = state.resources;
     if (!Array.isArray(resources) || resources.length !== Object.keys(state.original.Resources || {}).length
       || new Set(resources.map(item => item.LogicalResourceId)).size !== resources.length
@@ -254,12 +271,14 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
     const viewer = state.function;
     const viewerName = state.original.Resources[FUNCTION_ID].Properties.Name;
     const viewerArn = `arn:aws:cloudfront::765932874577:function/${viewerName}`;
+    stage = "viewer";
     if (resource(FUNCTION_ID)?.PhysicalResourceId !== viewerArn
       || viewer?.FunctionSummary?.Name !== viewerName || viewer.FunctionSummary.Status !== "DEPLOYED"
       || viewer.FunctionSummary.FunctionMetadata?.FunctionARN !== viewerArn
       || !viewer.ETag || state.functionCode !== state.original.Resources[FUNCTION_ID].Properties.FunctionCode) fail();
     const lambda = state.lambda;
     const expectedLambda = state.original.Resources[SSR_ID].Properties;
+    stage = "lambda";
     if (resource(SSR_ID)?.PhysicalResourceId !== expectedLambda.FunctionName
       || lambda?.FunctionName !== expectedLambda.FunctionName
       || lambda.FunctionArn !== `arn:aws:lambda:us-east-1:765932874577:function:${expectedLambda.FunctionName}`
@@ -268,6 +287,7 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
       || !same(stable(lambda.Environment?.Variables), stable(expectedLambda.Environment?.Variables))) fail();
     const config = state.distribution?.DistributionConfig;
     const distributionId = resource(DISTRIBUTION_ID)?.PhysicalResourceId;
+    stage = "distribution";
     if (!/^[A-Z0-9]+$/.test(distributionId || "") || !state.distribution.ETag
       || !same(config?.Aliases, { Quantity: 1, Items: [HOST] })) fail();
     const behaviors = [config.DefaultCacheBehavior, ...(config.CacheBehaviors?.Items || [])];
@@ -281,7 +301,9 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
       .filter(item => adminRelease.isHashedStaticAssetPath(`/${item.PathPattern}`)).map(item => item.PathPattern);
     const actualStatic = (config.CacheBehaviors?.Items || []).filter(item =>
       adminRelease.isHashedStaticAssetPath(`/${item.PathPattern}`)).map(item => item.PathPattern);
+    stage = "static_origin";
     if (!origin || origin.OriginPath !== staticOrigin.OriginPath || !same(actualStatic, expectedStatic)) fail();
+    stage = "dns";
     const records = state.dns?.ResourceRecordSets;
     if (!Array.isArray(records) || records.length !== 2
       || !same(records.map(item => [item.Name, item.Type]), [[`${HOST}.`, "A"], [`${HOST}.`, "AAAA"]])
@@ -293,7 +315,12 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
       viewerEtag: viewer.ETag, lambdaCodeSha256: lambda.CodeSha256,
       distributionId, distributionConfig: structuredClone(config), distributionEtag: state.distribution.ETag,
       dns: structuredClone(records), publicRelease };
-  } catch { throw new Error("private_release_live_state_invalid"); }
+  } catch (cause) {
+    const projectionStage = stage === "template_projection" && ["selection", "ssr_coordinates", "ssr_scope",
+      "viewer_rules", "query_policy", "static_rotation", "quotas"].includes(cause?.projectionStage)
+      ? `_${cause.projectionStage}` : "";
+    throw new Error(`private_release_live_state_invalid_${stage}${projectionStage}`);
+  }
 }
 
 function validatePostRotationState(desired, state, selection, publicRelease, baseline, expectedCodeSha256) {
