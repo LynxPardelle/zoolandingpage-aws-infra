@@ -452,3 +452,12 @@ test("HTTP probe accepts four article pages and denies invalid locale queries", 
   await assert.rejects(() => subject.probeRoutes(async () => ({ status: 200 }),
     { attempts: 1, delayMs: 0 }), /query_fence_route_probe_failed/);
 });
+
+test("template diagnostics report bounded key paths without values", () => {
+  const expected = { Resources: { Example: { Properties: { Secret: "first-private-value" } } } };
+  const actual = { Resources: { Example: { Properties: { Secret: "second-private-value" } } } };
+  const paths = subject.templateDifferencePaths(expected, actual);
+  assert.deepEqual(paths, ["Resources.Example.Properties.Secret"]);
+  assert.ok(!JSON.stringify(paths).includes("private-value"));
+  assert.deepEqual(subject.templateDifferencePaths(expected, structuredClone(expected)), []);
+});
