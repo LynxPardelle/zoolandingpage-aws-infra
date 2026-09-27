@@ -402,6 +402,10 @@ async function probeRoutes(fetcher = fetch, { attempts = 12, delayMs = 10000 } =
   fail("query_fence_route_probe_failed");
 }
 
+module.exports = { verifyExactQueryFenceDiff, reviewQueryFenceChangeSet, validateLiveState, validatePostState,
+  collectLiveState, probeRoutes, main,
+  runGuardedRelease, FUNCTION_ID, DISTRIBUTION_ID };
+
 if (require.main === module) {
   main().then(result => { process.stdout.write(`${JSON.stringify(result)}\n`); })
     .catch(error => {
@@ -412,7 +416,3 @@ if (require.main === module) {
       process.exitCode = 1;
     });
 }
-
-module.exports = { verifyExactQueryFenceDiff, reviewQueryFenceChangeSet, validateLiveState, validatePostState,
-  collectLiveState, probeRoutes, main,
-  runGuardedRelease, FUNCTION_ID, DISTRIBUTION_ID };

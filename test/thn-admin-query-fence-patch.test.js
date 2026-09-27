@@ -13,6 +13,14 @@ const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
 const PAGES = ["/admin/journal", "/admin/journal/new", "/admin/journal/:articleId/edit", "/admin/journal/:articleId/preview"];
 const OLD_QUERY = `      if (queryKey !== "lang" || !rule.allowLanguageQuery) {`;
 const NEW_QUERY = `      if ((queryKey !== "lang" || !rule.allowLanguageQuery)\n        && (queryKey !== "articleLocale" || !rule.allowArticleLocaleQuery)) {`;
+
+test("CLI publishes the query fence proof before starting preflight", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "tools", "thn-admin-query-fence-patch.js"), "utf8");
+  const exportPosition = source.indexOf("module.exports = { verifyExactQueryFenceDiff");
+  const startPosition = source.indexOf("if (require.main === module)");
+  assert.ok(exportPosition >= 0 && startPosition >= 0 && exportPosition < startPosition,
+    "the CLI must export the proof before thn-admin-release requires it during preflight");
+});
 const oldRules = [...PAGES.map(path => ({ path, methods: ["GET"], allowLanguageQuery: true })),
   { path: "/admin/journal/api", methods: ["POST"], allowLanguageQuery: false }];
 const newRules = oldRules.map(rule => PAGES.includes(rule.path) ? { ...rule, allowArticleLocaleQuery: true } : rule);
@@ -232,7 +240,7 @@ test("live collector reads both template stages and the LIVE function code", t =
 
 test("manual query fence workflow defaults to review and separates validation from OIDC", () => {
   const workflow = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows",
-    "deploy-thn-admin-query-fence-test.yml"), "utf8");
+    "deploy-thn-admin-query-fence-test.yml"), "utf8").replace(/\r\n/g, "\n");
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /options: \[review, execute, verify\]/);
   assert.match(workflow, /default: review/);
