@@ -1923,6 +1923,45 @@ test("THN admin viewer fence allows only the exact safe language query on pages"
   })).statusCode, 404);
 });
 
+test("THN admin viewer fence accepts article language on journal pages only", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  for (const uri of ["/admin/journal", "/admin/journal/new",
+    "/admin/journal/article-123/edit", "/admin/journal/article-123/preview"]) {
+    for (const articleLocale of ["en", "es"]) {
+      for (const querystring of [
+        { articleLocale: { value: articleLocale } },
+        { articleLocale: { value: articleLocale }, lang: { value: "es" } },
+      ]) {
+        assert.equal(handler(cloudFrontRequest({ uri, querystring })).statusCode, undefined, uri);
+      }
+    }
+  }
+  for (const uri of ["/admin/journal/access", "/admin/journal/mfa"]) {
+    assert.equal(handler(cloudFrontRequest({
+      uri, querystring: { articleLocale: { value: "en" } },
+    })).statusCode, 404, uri);
+  }
+});
+
+test("THN admin viewer fence rejects malformed article language queries", () => {
+  const template = synthesizeThnAdminFixture();
+  const admin = distributionForAlias(template, THN_ADMIN_HOST);
+  const { handler } = viewerHandlerForDistribution(template, admin);
+  for (const querystring of [
+    { articleLocale: { value: "fr" } },
+    { ArticleLocale: { value: "en" } },
+    { articleLocale: { value: "en", multiValue: [{ value: "en" }] } },
+    { articleLocale: { value: "en" }, other: { value: "x" } },
+    { articleLocale: { value: "en" }, lang: { value: "fr" } },
+  ]) {
+    assert.equal(handler(cloudFrontRequest({
+      uri: "/admin/journal/article-123/edit", querystring,
+    })).statusCode, 404);
+  }
+});
+
 test("THN admin viewer fence bounds article identifiers and removes viewer proxy headers", () => {
   const template = synthesizeThnAdminFixture();
   const admin = distributionForAlias(template, THN_ADMIN_HOST);
