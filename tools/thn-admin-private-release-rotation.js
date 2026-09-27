@@ -521,20 +521,58 @@ function readChangeSet(artifact, candidate, arn) {
   return [detailed, summary];
 }
 
-function writeProjectedAssembly(artifact, candidate, destination, env = process.env) {
+function writeProjectedAssembly(artifact, candidate, destination, env = process.env, purpose = "private-rotation") {
   const source = path.join(artifact.root, "cdk.out");
   const resolved = path.resolve(destination);
   const temporary = path.resolve(env.RUNNER_TEMP || "");
   if (!env.RUNNER_TEMP || path.dirname(resolved) !== temporary || fs.existsSync(resolved))
     throw new Error("private_release_projection_path_invalid");
+  if (!["private-rotation", "query-fence"].includes(purpose)
+    || !/^[1-9][0-9]*$/.test(artifact.metadata.run_id)
+    || !/^[1-9][0-9]*$/.test(artifact.metadata.run_attempt)) fail();
   const relative = path.relative(source, path.join(artifact.assemblyRoot, artifact.stack.properties.templateFile));
   if (relative.startsWith("..") || path.isAbsolute(relative)) fail();
+  const assemblyRelative = path.dirname(relative);
+  const manifest = structuredClone(artifact.assembly);
+  const matches = Object.entries(manifest.artifacts || {}).filter(([, entry]) =>
+    entry.type === "aws:cloudformation:stack"
+    && entry.properties?.stackName === STACK);
+  if (matches.length !== 1 || matches[0][1].properties.templateFile !== artifact.stack.properties.templateFile) fail();
+  const [stackId, stack] = matches[0];
+  const assetId = `${stackId}.assets`;
+  if (!stack.properties.additionalDependencies?.includes(assetId)) fail();
+  const assetsPath = path.join(artifact.assemblyRoot, `${assetId}.json`);
+  const assets = JSON.parse(fs.readFileSync(assetsPath, "utf8"));
+  const originalBytes = fs.readFileSync(path.join(source, relative));
+  const originalHash = sha256(originalBytes);
+  const bucket = `cdk-hnb659fds-assets-${artifact.metadata.expected_aws_account_id}-${artifact.metadata.expected_aws_region}`;
+  const oldKey = `${originalHash}.json`;
+  if (stack.properties.stackTemplateAssetObjectUrl !== `s3://${bucket}/${oldKey}`
+    || !assets.files?.[originalHash]
+    || assets.files[originalHash].source?.path !== artifact.stack.properties.templateFile
+    || assets.files[originalHash].source?.packaging !== "file") fail();
+  const destinations = Object.values(assets.files[originalHash].destinations || {});
+  if (destinations.length !== 1 || destinations[0].bucketName !== bucket
+    || destinations[0].region !== artifact.metadata.expected_aws_region
+    || destinations[0].objectKey !== oldKey) fail();
+  const candidateBytes = Buffer.from(`${JSON.stringify(candidate, null, 2)}\n`);
+  const candidateHash = sha256(candidateBytes);
+  const newKey = `thn-projections/${purpose}/${artifact.metadata.run_id}-${artifact.metadata.run_attempt}/${candidateHash}.json`;
+  if (assets.files[candidateHash] && candidateHash !== originalHash) fail();
+  const projectedAsset = assets.files[originalHash];
+  projectedAsset.destinations[Object.keys(projectedAsset.destinations)[0]].objectKey = newKey;
+  delete assets.files[originalHash];
+  assets.files[candidateHash] = projectedAsset;
+  stack.properties.stackTemplateAssetObjectUrl = `s3://${bucket}/${newKey}`;
   fs.cpSync(source, resolved, { recursive: true, force: false, errorOnExist: true });
   const target = path.join(resolved, relative);
-  fs.writeFileSync(target, `${JSON.stringify(candidate, null, 2)}\n`);
+  fs.writeFileSync(target, candidateBytes);
+  fs.writeFileSync(path.join(resolved, assemblyRelative, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(resolved, assemblyRelative, `${assetId}.json`), `${JSON.stringify(assets, null, 2)}\n`);
   if (!same(stable(JSON.parse(fs.readFileSync(target, "utf8"))), stable(candidate))) fail();
   return { projectedTemplateSha256: digest(candidate), projectedAssembly: resolved,
-    projectedTemplate: target };
+    projectedTemplate: target, projectedTemplateAssetKey: newKey,
+    projectedTemplateBytesSha256: candidateHash };
 }
 
 async function main(argv = process.argv.slice(2), env = process.env) {

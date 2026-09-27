@@ -465,6 +465,9 @@ test("TEST deploy reviews the prepared change set before exact execution", () =>
   const execute = runner.indexOf('infra-test-aws.js" execute-change-set');
   assert.ok(prepare >= 0, "prepare-change-set step missing");
   assert.ok(review > prepare, "review must follow change-set preparation");
+  const templateProof = runner.indexOf('infra-test-aws.js" verify-change-set-template');
+  assert.ok(templateProof > prepare && templateProof < review,
+    "sealed template must match the prepared change set before review");
   assert.ok(execute > review, "execution must follow review");
   assert.match(readFileSync(path.join(root, "tools", "infra-test-aws.js"), "utf8"), /--include-property-values/);
   assert.match(runner, /npx --no-install cdk deploy/);
@@ -541,7 +544,12 @@ test("TEST rollback selects a recorded immutable Deploy Test artifact", () => {
   assert.match(rollback, /expectedArtifactName/);
   assert.match(rollback, /artifact-ids:/);
   assert.match(rollback, /run-id:/);
-  assert.match(rollback, /run-test-infra-change-set\.sh/);
+  assert.match(rollback, /ref: \$\{\{ github\.sha \}\}[\s\S]*path: \.trusted-rollback/);
+  assert.match(rollback, /git -C \.trusted-rollback rev-parse HEAD/);
+  assert.match(rollback, /git -C \.trusted-rollback status --porcelain/);
+  assert.match(rollback, /bash \.trusted-rollback\/tools\/run-test-infra-change-set\.sh/);
+  assert.doesNotMatch(rollback, /bash \.transport\/\.release\/release-tools\/run-test-infra-change-set\.sh/);
+  assert.match(runner, /node "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)\/infra-test-aws\.js" verify-change-set-template/);
   assert.equal(count(rollback, "id-token: write"), 1);
 });
 
