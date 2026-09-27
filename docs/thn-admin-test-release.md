@@ -124,6 +124,26 @@ synthesis run without AWS credentials. The deploy job checks the transported
 artifact, published APP marker, current private release and protected branch
 tip before preparing a CloudFormation change set without executing it.
 
+The query-fence release projects the sealed template into a temporary CDK
+assembly. It assigns a release-scoped S3 object key containing the exact
+projected template byte hash and updates both the CDK manifest URL and file
+asset destination. This avoids reusing the historical bootstrap object
+`ce3c0d2738c8be252265656041ba071f6475fe2adf1ea855b8781eec2a6cfcdd.json`:
+the 2026-09-27 investigation found that this key contained the old Journal
+query rule even though the sealed artifact with that hash contained the new
+rule. That exact object was restored in TEST as S3 version
+`vKsR3iSRkJ_C7uHxW6fkAJvdot6KvAzL`; a fresh GetObject returned 165421 bytes
+with SHA-256 `ce3c0d2738c8be252265656041ba071f6475fe2adf1ea855b8781eec2a6cfcdd`.
+The previous version remains recoverable in the versioned bucket.
+The general TEST runner now compares the change set's `Original` template with
+its sealed artifact before review or execution. A stale bootstrap object stops
+that release with `test_infra_change_set_template_invalid`.
+Rollback keeps the recorded source artifact and its release selection, but
+loads the current protected `test` runner and template guard from the workflow
+commit. It rechecks that checkout immediately before preparation. This lets a
+rollback using an older immutable artifact reject a stale S3 template before
+review or execution, even when its embedded helper predates the guard.
+
 The detailed review requires one direct non-replacing `FunctionCode` update on
 the admin TEST viewer function. The summary review accepts only the exact
 native dynamic reference chain from the viewer Function through the existing
@@ -196,9 +216,11 @@ Lambda, DNS, certificate, public release, and static asset inventory.
 The operation copies the sealed CDK assembly into runner temporary storage
 and projects only the private release. It restores the live historical Journal
 query policy inside that temporary copy, leaving the separately promoted
-`articleLocale` query patch pending. Full-template proof rejects any unrelated
-resource or route change. CDK prepares a change set; this may publish an
-unchanged CDK asset but does not update the stack. The reviewer requires exact
+`articleLocale` query patch pending. The projection rewrites its CDK template
+asset URL and destination to an isolated key based on the projected bytes, so
+it cannot overwrite or reuse the sealed artifact's content-addressed key.
+Full-template proof rejects any unrelated resource or route change. CDK
+prepares a change set without updating the stack. The reviewer requires exact
 non-replacing private SSR Lambda, admin viewer Function, and admin distribution
 changes, plus only the proved create-only admin alias/SSM dependencies.
 `review` prints a digest of the complete detailed and summary inventory and

@@ -2,7 +2,9 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const test = require("node:test");
 const { fixture } = require("./fixtures/thn-admin-selection");
 const release = require("../tools/thn-admin-release");
@@ -479,5 +481,65 @@ test("manual TEST workflow separates credential-free validation, review and exec
   assert.match(workflow, /--app "\$RUNNER_TEMP\/thn-private-projected-cdk\.out"/);
   assert.ok(!workflow.split("\n  validate:\n", 2)[1].split("\n  deploy:\n", 1)[0].includes("id-token: write"));
   assert.ok(workflow.indexOf("Project release into an isolated copy")
+    < workflow.indexOf("Prepare exact TEST change set without execution"));
+});
+
+test("projects template bytes to a distinct asset key and preserves the sealed assembly", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "thn-template-projection-"));
+  try {
+    const assemblyRoot = path.join(temporary, "release", "cdk.out", "assembly-ZoolandingTest");
+    fs.mkdirSync(assemblyRoot, { recursive: true });
+    const stackId = "Frontend";
+    const templateFile = `${stackId}.template.json`;
+    const original = { Resources: { Function: { Properties: { FunctionCode: "old" } } } };
+    const candidate = { Resources: { Function: { Properties: { FunctionCode: "new" } } } };
+    const originalBytes = Buffer.from(`${JSON.stringify(original, null, 2)}\n`);
+    const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+    const originalHash = hash(originalBytes);
+    const bucket = "cdk-hnb659fds-assets-765932874577-us-east-1";
+    const stack = { type: "aws:cloudformation:stack", properties: {
+      stackName: "ZoolandingTest-Zoolandingpage-test-Frontend", templateFile,
+      additionalDependencies: [`${stackId}.assets`],
+      stackTemplateAssetObjectUrl: `s3://${bucket}/${originalHash}.json`,
+    } };
+    const manifest = { artifacts: { [stackId]: stack } };
+    const assets = { files: { [originalHash]: { source: { path: templateFile, packaging: "file" },
+      destinations: { test: { bucketName: bucket, region: "us-east-1", objectKey: `${originalHash}.json` } },
+    } } };
+    fs.writeFileSync(path.join(assemblyRoot, templateFile), originalBytes);
+    fs.writeFileSync(path.join(assemblyRoot, "manifest.json"), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(assemblyRoot, `${stackId}.assets.json`), JSON.stringify(assets));
+    const artifact = { root: path.join(temporary, "release"), assemblyRoot, assembly: manifest, stack,
+      metadata: { run_id: "123", run_attempt: "1", expected_aws_account_id: "765932874577",
+        expected_aws_region: "us-east-1" } };
+    const destination = path.join(temporary, "projected");
+    const result = subject.writeProjectedAssembly(artifact, candidate, destination,
+      { RUNNER_TEMP: temporary }, "query-fence");
+    const projectedRoot = path.join(destination, "assembly-ZoolandingTest");
+    const projectedBytes = fs.readFileSync(path.join(projectedRoot, templateFile));
+    const projectedManifest = JSON.parse(fs.readFileSync(path.join(projectedRoot, "manifest.json")));
+    const projectedAssets = JSON.parse(fs.readFileSync(path.join(projectedRoot, `${stackId}.assets.json`)));
+    const projectedHash = hash(projectedBytes);
+    assert.equal(result.projectedTemplateBytesSha256, projectedHash);
+    assert.equal(projectedManifest.artifacts[stackId].properties.stackTemplateAssetObjectUrl,
+      `s3://${bucket}/${result.projectedTemplateAssetKey}`);
+    assert.equal(projectedAssets.files[projectedHash].destinations.test.objectKey,
+      result.projectedTemplateAssetKey);
+    assert.equal(projectedAssets.files[originalHash], undefined);
+    assert.equal(fs.readFileSync(path.join(assemblyRoot, templateFile)).equals(originalBytes), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(assemblyRoot, "manifest.json"))).artifacts[stackId]
+      .properties.stackTemplateAssetObjectUrl, `s3://${bucket}/${originalHash}.json`);
+    assert.throws(() => subject.writeProjectedAssembly(artifact, candidate,
+      path.join(temporary, "invalid"), { RUNNER_TEMP: temporary }, "other"),
+    /private_release_template_invalid/);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+test("query fence workflow deploys the projected assembly", () => {
+  const workflow = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows",
+    "deploy-thn-admin-query-fence-test.yml"), "utf8");
+  assert.match(workflow, /thn-admin-query-fence-patch\.js \\\s*project \.transport\/\.release/);
+  assert.match(workflow, /--app "\$RUNNER_TEMP\/thn-query-fence-projected-cdk\.out"/);
+  assert.ok(workflow.indexOf("Project template under an isolated content key")
     < workflow.indexOf("Prepare exact TEST change set without execution"));
 });

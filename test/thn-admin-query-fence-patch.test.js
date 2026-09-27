@@ -461,3 +461,16 @@ test("template diagnostics report bounded key paths without values", () => {
   assert.ok(!JSON.stringify(paths).includes("private-value"));
   assert.deepEqual(subject.templateDifferencePaths(expected, structuredClone(expected)), []);
 });
+
+test("function-code diagnostics distinguish formatting from code changes without logging source", () => {
+  const expected = "line one\nline two\nprivate source";
+  const actual = "line one\r\nline two\r\nprivate source";
+  const summary = subject.functionCodeDifference(expected, actual);
+  assert.equal(summary.lineEndingsOnly, true);
+  assert.equal(summary.trimOnly, false);
+  assert.equal(summary.firstDifferenceOffset, 8);
+  assert.equal(summary.actualMatchesLive, false);
+  assert.ok(!JSON.stringify(summary).includes("private source"));
+  assert.deepEqual(subject.functionCodeDifference(expected, { "Fn::Join": [] }),
+    { expectedKind: "string", actualKind: "object" });
+});

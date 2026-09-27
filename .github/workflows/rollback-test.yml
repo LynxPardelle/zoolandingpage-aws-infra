@@ -144,6 +144,21 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted-rollback
+          persist-credentials: false
+
+      - name: Pin current rollback template guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test"
+          test "$(git -C .trusted-rollback rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f .trusted-rollback/tools/run-test-infra-change-set.sh
+          test -f .trusted-rollback/tools/infra-test-aws.js
+
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
@@ -260,7 +275,11 @@ jobs:
           RELEASE_ROOT: .transport/.release
           THN_ADMIN_ORIGIN_ENABLED: ${{ steps.release.outputs.thn_admin_origin_enabled }}
           THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
-        run: bash .transport/.release/release-tools/run-test-infra-change-set.sh
+        run: |
+          set -euo pipefail
+          test "$(git -C .trusted-rollback rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git -C .trusted-rollback status --porcelain)"
+          bash .trusted-rollback/tools/run-test-infra-change-set.sh
 
       - name: Post-rollback TEST stack smoke
         shell: bash

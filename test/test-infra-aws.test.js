@@ -300,6 +300,36 @@ test("exact change-set execution rechecks identity, review and artifact before m
   assert.ok(!calls.includes("cloudformation execute-change-set"));
 });
 
+test("general TEST release rejects a change set built from stale template bytes", t => {
+  const f = artifact(t);
+  const name = "release-123-1";
+  const arn = `arn:aws:cloudformation:us-east-1:${account}:changeSet/${name}/fixture`;
+  const description = { StackName: stackName,
+    StackId: `arn:aws:cloudformation:us-east-1:${account}:stack/${stackName}/fixture`,
+    ChangeSetName: name, ChangeSetId: arn };
+  const calls = [];
+  let template = { Resources: {} };
+  const runAws = args => {
+    calls.push(args.slice(0, 2).join(" "));
+    if (args[0] === "sts") return assumeResponse(roles.lookup, args[args.indexOf("--role-session-name") + 1]);
+    if (args[1] === "describe-change-set") return bytes(description);
+    if (args[1] === "get-template") return bytes({ TemplateBody: template });
+    throw new Error("unexpected operation");
+  };
+  const options = { env: f.env, seals, runAws };
+  assert.equal(helper.main(["verify-change-set-template", f.root, name, arn], options), "verified\n");
+  assert.deepEqual(calls, ["sts assume-role", "cloudformation describe-change-set", "cloudformation get-template"]);
+  calls.length = 0;
+  template = { Resources: { Function: { Properties: { FunctionCode: "historical rule" } } } };
+  assert.throws(() => helper.main(["verify-change-set-template", f.root, name, arn], options),
+    /test_infra_change_set_template_invalid/);
+  assert.ok(!calls.includes("cloudformation execute-change-set"));
+  calls.length = 0;
+  assert.throws(() => helper.main(["verify-change-set-template", f.root, name,
+    arn.replace(account, "999999999999")], options), /test_infra_operation_invalid/);
+  assert.equal(calls.length, 0);
+});
+
 test("opaque admin evidence is retried only after an independent exact-origin proof", () => {
   assert.equal(typeof helper.reviewWithOriginProof, "function");
   const calls = [];

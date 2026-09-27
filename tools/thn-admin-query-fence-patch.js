@@ -235,6 +235,23 @@ function templateDifferencePaths(expected, actual) {
   return paths;
 }
 
+function functionCodeDifference(expected, actual, liveSha256) {
+  const asKind = value => typeof value === "string" ? "string"
+    : value == null ? "missing" : typeof value === "object" ? "object" : "other";
+  const result = { expectedKind: asKind(expected), actualKind: asKind(actual) };
+  if (typeof expected !== "string" || typeof actual !== "string") return result;
+  let offset = 0;
+  while (offset < Math.min(expected.length, actual.length) && expected[offset] === actual[offset]) offset++;
+  const normalize = value => value.replace(/\r\n/g, "\n");
+  return { ...result, expectedLength: expected.length, actualLength: actual.length,
+    expectedSha256: digest(expected), actualSha256: digest(actual),
+    actualMatchesLive: /^[a-f0-9]{64}$/.test(liveSha256 || "") && digest(actual) === liveSha256,
+    lineEndingsOnly: normalize(expected) === normalize(actual),
+    trimOnly: expected.trimEnd() === actual.trimEnd(),
+    actualHasNewQuery: actual.includes(NEW_QUERY), actualHasOldQuery: actual.includes(OLD_QUERY),
+    firstDifferenceOffset: offset };
+}
+
 function validateLiveState(desired, state, selectedRelease, patched = false) {
   const reject = () => fail("query_fence_live_state_invalid");
   try {
@@ -436,7 +453,7 @@ function readLive(root, desired, changeSetArn) {
   }
 }
 
-function readChangeSet(root, desired, arn) {
+function readChangeSet(root, desired, arn, liveFunctionCodeSha256) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "thn-query-fence-review-"));
   const outputPath = path.join(directory, "unused.js");
   try {
@@ -455,6 +472,12 @@ function readChangeSet(root, desired, arn) {
         const error = new Error("query_fence_change_set_template_invalid");
         error.templateStage = stage;
         error.templatePaths = templateDifferencePaths(desired, template);
+        if (error.templatePaths.includes(`Resources.${FUNCTION_ID}.Properties.FunctionCode`)) {
+          error.functionCodeDiagnostic = functionCodeDifference(
+            desired.Resources?.[FUNCTION_ID]?.Properties?.FunctionCode,
+            template?.Resources?.[FUNCTION_ID]?.Properties?.FunctionCode,
+            liveFunctionCodeSha256);
+        }
         throw error;
       }
     }
@@ -464,8 +487,8 @@ function readChangeSet(root, desired, arn) {
 
 async function main(argv = process.argv.slice(2)) {
   const [mode, root, name] = argv;
-  if (!root || !["preflight", "review", "execute", "verify"].includes(mode)
-    || argv.length !== (["review", "execute"].includes(mode) ? 3 : 2)) fail("query_fence_arguments_invalid");
+  if (!root || !["preflight", "project", "review", "execute", "verify"].includes(mode)
+    || argv.length !== (["project", "review", "execute"].includes(mode) ? 3 : 2)) fail("query_fence_arguments_invalid");
   const artifact = loadArtifact(root);
   if (artifact.metadata.thn_admin_origin_enabled !== "true"
     || artifact.metadata.thn_admin_route53_enabled !== "true"
@@ -490,6 +513,12 @@ async function main(argv = process.argv.slice(2)) {
     const snapshot = await preflight();
     return { decision: "preflight-ok", template_sha256: snapshot.templateSha256,
       function_code_sha256: snapshot.functionCodeSha256 };
+  }
+  if (mode === "project") {
+    await preflight();
+    return { decision: "projected-no-execution",
+      ...require("./thn-admin-private-release-rotation").writeProjectedAssembly(
+        artifact, desired, name, process.env, "query-fence") };
   }
   if (mode === "verify") {
     const first = validateLiveState(desired, readLive(root, desired), selectedRelease, true);
@@ -521,7 +550,7 @@ async function main(argv = process.argv.slice(2)) {
     context,
     expectedReviewDigest: process.env.EXPECTED_REVIEW_DIGEST,
     preflight,
-    describe: async () => readChangeSet(root, desired, arn),
+    describe: async () => readChangeSet(root, desired, arn, baseline.functionCodeSha256),
     cleanup: async () => deploy(["cloudformation", "delete-change-set", "--stack-name", stackName,
       "--change-set-name", arn]),
     execute: async () => deploy(["cloudformation", "execute-change-set", "--stack-name", stackName,
@@ -568,7 +597,8 @@ async function probeRoutes(fetcher = fetch, { attempts = 12, delayMs = 10000 } =
 
 module.exports = { verifyExactQueryFenceDiff, reviewQueryFenceChangeSet, validateLiveState, validatePostState,
   collectLiveState, probeRoutes, main,
-  runGuardedRelease, changeSetEvidenceDigest, templateDifferencePaths, FUNCTION_ID, DISTRIBUTION_ID };
+  runGuardedRelease, changeSetEvidenceDigest, templateDifferencePaths, functionCodeDifference,
+  FUNCTION_ID, DISTRIBUTION_ID };
 
 if (require.main === module) {
   main().then(result => { process.stdout.write(`${JSON.stringify(result)}\n`); })
@@ -582,7 +612,8 @@ if (require.main === module) {
         ...(["Original", "Processed"].includes(error?.templateStage)
           && Array.isArray(error?.templatePaths) ? {
             template_stage: error.templateStage, template_paths: error.templatePaths,
-          } : {}) })}\n`);
+          } : {}),
+        ...(error?.functionCodeDiagnostic ? { function_code_diagnostic: error.functionCodeDiagnostic } : {}) })}\n`);
       process.exitCode = 1;
     });
 }
