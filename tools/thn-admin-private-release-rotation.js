@@ -7,7 +7,7 @@ const path = require("node:path");
 const adminRelease = require("./thn-admin-release");
 const queryFence = require("./thn-admin-query-fence-patch");
 const changeSetReviewer = require("./review-test-infra-change-set");
-const { loadArtifact, createRoleClient, validChangeSetArn } = require("./infra-test-aws");
+const { loadArtifact, createRoleClient, readPrivateLambdaConfiguration, validChangeSetArn } = require("./infra-test-aws");
 
 const FUNCTION_ID = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
 const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
@@ -230,7 +230,7 @@ function collectRotationState(artifact, desired, env = process.env) {
       privateRotation: { lambdaName, hostedZoneId: zoneId } };
     const read = createRoleClient(artifact.root, "lookup", options);
     const state = queryFence.collectLiveState(desired, read, outputPath);
-    state.lambda = JSON.parse(read(["lambda", "get-function-configuration", "--function-name", lambdaName, "--output", "json"]));
+    state.lambda = readPrivateLambdaConfiguration({ env });
     state.dns = JSON.parse(read(["route53", "list-resource-record-sets", "--hosted-zone-id", zoneId,
       "--start-record-name", `${HOST}.`, "--start-record-type", "A", "--max-items", "2",
       "--no-paginate", "--output", "json"]));

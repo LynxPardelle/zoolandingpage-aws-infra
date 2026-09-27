@@ -60,6 +60,39 @@ function runAws(args, env) {
   return result.stdout;
 }
 
+function readPrivateLambdaConfiguration(options = {}) {
+  const env = options.env || process.env;
+  const call = options.runAws || runAws;
+  if (env.AWS_REGION !== REGION || env.AWS_DEFAULT_REGION !== REGION
+    || !/^ASIA[A-Z0-9]{16}$/.test(env.AWS_ACCESS_KEY_ID || "")
+    || typeof env.AWS_SECRET_ACCESS_KEY !== "string" || env.AWS_SECRET_ACCESS_KEY.length < 20
+    || typeof env.AWS_SESSION_TOKEN !== "string" || env.AWS_SESSION_TOKEN.length === 0
+    || ["AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
+      "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_LAMBDA", "AWS_ENDPOINT_URL_STS"].some(key => env[key])) {
+    fail("private_release_oidc_identity_invalid");
+  }
+  let identity;
+  try { identity = JSON.parse(call(["sts", "get-caller-identity", "--output", "json"], env)); }
+  catch { fail("private_release_oidc_identity_invalid"); }
+  if (identity?.Account !== "765932874577"
+    || !/^arn:aws:sts::765932874577:assumed-role\/zoolandingpage-infra-test-github-oidc-deploy\/[^/]+$/.test(identity.Arn)) {
+    fail("private_release_oidc_identity_invalid");
+  }
+  let lambda;
+  try {
+    lambda = JSON.parse(call(["lambda", "get-function-configuration", "--function-name",
+      "zoolandingpage-test-frontend-thn-admin-ssr", "--output", "json"], env));
+  } catch { fail("private_release_lambda_read_invalid"); }
+  const variables = lambda?.Environment?.Variables;
+  if (lambda?.FunctionName !== "zoolandingpage-test-frontend-thn-admin-ssr"
+    || lambda.Environment?.Error || !variables || typeof variables !== "object"
+    || Array.isArray(variables) || Object.keys(variables).length === 0
+    || Object.values(variables).some(value => typeof value !== "string")) {
+    fail("private_release_lambda_read_invalid");
+  }
+  return lambda;
+}
+
 function validChangeSetName(value) { return /^(release|rollback)-[1-9][0-9]*-[1-9][0-9]*$/.test(value); }
 function validChangeSetArn(value, account, name) {
   return typeof value === "string" && validChangeSetName(name)
@@ -115,7 +148,6 @@ function createRoleClient(releaseRoot, kind, options = {}) {
       deploy.add("cloudformation delete-change-set");
     }
     if (privateRotation) {
-      lookup.add("lambda get-function-configuration");
       lookup.add("route53 list-resource-record-sets");
     }
     if (!(kind === "lookup" ? lookup : deploy).has(operation) || args.includes("--profile") || args.includes("--endpoint-url")) fail("test_infra_operation_invalid");
@@ -126,9 +158,6 @@ function createRoleClient(releaseRoot, kind, options = {}) {
       || value("--stage") !== "LIVE" || args.at(-1) !== queryFence.outputPath)) fail("test_infra_operation_invalid");
     if (operation === "cloudfront describe-function" && (!queryFence || value("--name") !== queryFence.functionName
       || value("--stage") !== "LIVE")) fail("test_infra_operation_invalid");
-    if (operation === "lambda get-function-configuration" && (!privateRotation
-      || JSON.stringify(args) !== JSON.stringify(["lambda", "get-function-configuration",
-        "--function-name", privateRotation.lambdaName, "--output", "json"]))) fail("test_infra_operation_invalid");
     if (operation === "route53 list-resource-record-sets" && (!privateRotation
       || JSON.stringify(args) !== JSON.stringify(["route53", "list-resource-record-sets",
         "--hosted-zone-id", privateRotation.hostedZoneId,
@@ -267,5 +296,5 @@ if (require.main === module) {
   try { const result = main(process.argv.slice(2)); if (result) process.stdout.write(result); }
   catch { process.stderr.write("test_infra_aws_guard_failed\n"); process.exitCode = 1; }
 }
-module.exports = { loadArtifact, createRoleClient, validChangeSetArn, validChangeSetName,
+module.exports = { loadArtifact, createRoleClient, readPrivateLambdaConfiguration, validChangeSetArn, validChangeSetName,
   reviewWithOriginProof, reviewWithAdminProof, main };

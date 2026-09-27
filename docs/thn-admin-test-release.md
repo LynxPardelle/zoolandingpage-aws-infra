@@ -75,7 +75,9 @@ checks their account/region/kind and reviewed ARN hash seals, then uses isolated
 ephemeral child-process credentials. Lookup handles read-only preflights and
 smoke checks; deploy handles only the existing reviewed change-set execution and
 wait. CDK itself retains the original parent OIDC identity. There is no freely
-selectable role ARN, credential file, new trust, or IAM policy change.
+selectable role ARN, credential file, new trust, or IAM policy change in this
+general release path. The manual private rotation has the single OIDC Lambda
+read described below.
 
 The helper independently authenticates the full artifact inventory, external
 manifest digest, source SHA, run and TEST target before each role assumption and
@@ -144,6 +146,29 @@ change-set ARN from the workflow output. The patch touches only AWS TEST; the
 QA article remains unpublished until the separate editorial acceptance flow.
 
 ## Manual private admin release rotation in TEST
+
+The 2026-09-27 review stopped before a change set because the CDK lookup role's
+`DontReadSecrets` policy explicitly denies `kms:Decrypt`. Its Lambda response
+contains `Environment.Error=AccessDeniedException` and omits variables, although
+the live Lambda variables match the active Original template when read with an
+authorized account session. Do not loosen that bootstrap policy or skip the
+variable comparison. The manual rotation instead reads only
+`zoolandingpage-test-frontend-thn-admin-ssr` with its already authenticated TEST
+GitHub OIDC session. It verifies the exact OIDC role and account first, rejects
+missing variables or `Environment.Error`, and keeps all other reads on the CDK
+lookup role. Neither variables nor the AWS error message are logged.
+
+Before using this path, verify that the OIDC role trust is still restricted to
+`repo:LynxPardelle/zoolandingpage-aws-infra:environment:test` and that inline
+policy `ThnAdminPrivateReleaseLambdaRead` does not already exist. Apply only
+the reviewed JSON in `tools/thn-admin-private-lambda-read-policy.json` to role
+`zoolandingpage-infra-test-github-oidc-deploy`. It allows only
+`lambda:GetFunctionConfiguration` for the exact TEST private SSR function ARN.
+It grants no KMS action and changes no CDK bootstrap policy. Verify the policy
+with IAM readback and a real `execution=review` run. If the read still returns
+an environment error, stop before a change set and revise the design. Rollback
+of this permission deletes only that named inline policy after confirming its
+contents still match the reviewed JSON.
 
 The `THN Admin TEST Private Release Rotation` workflow activates the already
 published APP release `4f45ffc615d3864a167fdccd87535e244ef01971` (APP run
