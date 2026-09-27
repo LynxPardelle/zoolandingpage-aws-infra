@@ -109,14 +109,14 @@ test("rejects a live private Lambda whose code and release ID point to different
   const { live, desired } = templates();
   live.Resources[SSR_ID].Properties.Environment.Variables.ZLP_RELEASE_ID = "another-release";
   assert.throws(() => subject.projectPrivateReleaseTemplate(desired, live, selected),
-    /private_release_template_invalid/);
+    /^Error: private_release_template_invalid_ssr_coordinates$/);
 });
 
 test("rejects unrelated template changes and nonstatic route changes", () => {
   const unrelated = templates();
   unrelated.desired.Resources.Other.Properties.BucketName = "different";
   assert.throws(() => subject.projectPrivateReleaseTemplate(unrelated.desired, unrelated.live, selected),
-    /private_release_template_invalid/);
+    /^Error: private_release_template_invalid_static_rotation$/);
   const route = templates();
   route.desired.Resources[FUNCTION_ID].Properties.FunctionCode = route.desired.Resources[FUNCTION_ID]
     .Properties.FunctionCode.replace('"methods":["GET"]', '"methods":["GET","POST"]');
@@ -351,6 +351,32 @@ function runtimeState(template, sha = "A".repeat(43) + "=") {
       Type, AliasTarget: structuredClone(alias) })) },
   };
 }
+
+test("live preflight reports a safe failing stage without exposing AWS values", () => {
+  const { live, desired } = templates();
+  const cases = [
+    ["stack", state => { state.stack.RoleARN = "private-sentinel"; }],
+    ["lambda", state => { state.lambda.State = "private-sentinel"; }],
+    ["dns", state => { state.dns.ResourceRecordSets[0].AliasTarget.DNSName = ""; }],
+  ];
+  for (const [stage, mutate] of cases) {
+    const state = runtimeState(structuredClone(live));
+    mutate(state);
+    assert.throws(() => subject.validateRotationState(desired, state, selected,
+      "public-release", "before"), error =>
+      error.message === `private_release_live_state_invalid_${stage}`
+        && !error.message.includes("private-sentinel"));
+  }
+});
+
+test("live preflight preserves only the safe template projection stage", () => {
+  const { live, desired } = templates();
+  desired.Resources.Other.Properties.BucketName = "private-sentinel";
+  assert.throws(() => subject.validateRotationState(desired, runtimeState(live), selected,
+    "public-release", "before"), error =>
+    error.message === "private_release_live_state_invalid_template_projection_static_rotation"
+      && !error.message.includes("private-sentinel"));
+});
 
 test("live and post state keep identities, DNS, public release and nonstatic distribution", () => {
   const { live, desired } = templates();
