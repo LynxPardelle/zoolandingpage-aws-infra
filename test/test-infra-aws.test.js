@@ -95,6 +95,41 @@ test("lookup credentials stay in child memory, preserve parent environment and c
   assert.equal(calls.length, 2);
 });
 
+test("query fence adds only pinned read and change-set cleanup commands", t => {
+  const f = artifact(t);
+  const name = "release-123-1";
+  const arn = `arn:aws:cloudformation:us-east-1:${account}:changeSet/${name}/fixture`;
+  const functionName = "zoolanding-test-admin-viewer";
+  const outputPath = path.join(f.root, "live-function.js");
+  const calls = [];
+  const options = { env: f.env, seals, queryFence: { changeSetArn: arn, functionName, outputPath },
+    runAws: args => {
+      if (args[0] === "sts") return assumeResponse(roles.lookup, args[args.indexOf("--role-session-name") + 1]);
+      calls.push(args.slice(0, 2).join(" "));
+      return bytes({});
+    } };
+  const lookup = helper.createRoleClient(f.root, "lookup", options);
+  lookup(["cloudfront", "describe-function", "--name", functionName, "--stage", "LIVE"]);
+  lookup(["cloudfront", "get-function", "--name", functionName, "--stage", "LIVE", outputPath]);
+  lookup(["cloudformation", "get-template", "--stack-name", stackName, "--change-set-name", arn,
+    "--template-stage", "Original"]);
+  assert.throws(() => lookup(["cloudfront", "get-function", "--name", "other", "--stage", "LIVE", outputPath]), /test_infra_operation_invalid/);
+  assert.throws(() => lookup(["cloudformation", "get-template", "--stack-name", stackName,
+    "--change-set-name", "other", "--template-stage", "Original"]), /test_infra_operation_invalid/);
+  assert.throws(() => lookup(["cloudformation", "delete-change-set", "--stack-name", stackName,
+    "--change-set-name", arn]), /test_infra_operation_invalid/);
+  assert.deepEqual(calls, ["cloudfront describe-function", "cloudfront get-function", "cloudformation get-template"]);
+  const deploy = helper.createRoleClient(f.root, "deploy", { ...options, runAws: args => {
+    if (args[0] === "sts") return assumeResponse(roles.deploy, args[args.indexOf("--role-session-name") + 1]);
+    calls.push(args.slice(0, 2).join(" "));
+    return bytes({});
+  } });
+  assert.throws(() => deploy(["cloudformation", "execute-change-set", "--stack-name", stackName,
+    "--change-set-name", "release-999-1"]), /test_infra_operation_invalid/);
+  deploy(["cloudformation", "execute-change-set", "--stack-name", stackName, "--change-set-name", arn]);
+  assert.equal(calls.at(-1), "cloudformation execute-change-set");
+});
+
 test("swapped, unsealed, wrong-account, wrong-region and wrong-partition roles fail before STS", t => {
   assert.equal(typeof helper.createRoleClient, "function");
   for (const replacement of [roles.deploy, roles.lookup.replace("fixture1", "other"),
