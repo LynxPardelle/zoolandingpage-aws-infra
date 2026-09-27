@@ -11,8 +11,39 @@ const adminRelease = require("../tools/thn-admin-release");
 const ID = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2";
 const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
 const PAGES = ["/admin/journal", "/admin/journal/new", "/admin/journal/:articleId/edit", "/admin/journal/:articleId/preview"];
-const OLD_QUERY = `      if (queryKey !== "lang" || !rule.allowLanguageQuery) {`;
-const NEW_QUERY = `      if ((queryKey !== "lang" || !rule.allowLanguageQuery)\n        && (queryKey !== "articleLocale" || !rule.allowArticleLocaleQuery)) {`;
+const OLD_QUERY = `    var queryKeys = [];
+    for (var queryKey in querystring) {
+      queryKeys.push(queryKey);
+    }
+    if (queryKeys.length === 0) {
+      return true;
+    }
+    if (!rule.allowLanguageQuery || queryKeys.length !== 1 || queryKeys[0] !== "lang") {
+      return false;
+    }
+    var language = querystring.lang || {};
+    if (language.multiValue && language.multiValue.length > 0) {
+      return false;
+    }
+    return language.value === "en" || language.value === "es";`;
+const NEW_QUERY = `    for (var queryKey in querystring) {
+      if ((queryKey !== "lang" || !rule.allowLanguageQuery)
+        && (queryKey !== "articleLocale" || !rule.allowArticleLocaleQuery)) {
+        return false;
+      }
+      var language = querystring[queryKey] || {};
+      if ((language.multiValue && language.multiValue.length > 0)
+        || (language.value !== "en" && language.value !== "es")) {
+        return false;
+      }
+    }
+    return true;`;
+
+test("fixture matches the current viewer function source exactly", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "lib", "stacks", "frontend-stack.js"), "utf8")
+    .replace(/\r\n/g, "\n");
+  assert.equal(source.split(NEW_QUERY).length, 2);
+});
 
 test("CLI publishes the query fence proof before starting preflight", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "tools", "thn-admin-query-fence-patch.js"), "utf8");
@@ -24,7 +55,7 @@ test("CLI publishes the query fence proof before starting preflight", () => {
 const oldRules = [...PAGES.map(path => ({ path, methods: ["GET"], allowLanguageQuery: true })),
   { path: "/admin/journal/api", methods: ["POST"], allowLanguageQuery: false }];
 const newRules = oldRules.map(rule => PAGES.includes(rule.path) ? { ...rule, allowArticleLocaleQuery: true } : rule);
-const code = (rules, query) => `function handler(event) {\n  var expectedHost = "admin-test.thehairnarrative.com";\n  var rules = ${JSON.stringify(rules)};\n  function queryAllowed(rule, querystring) {\n    for (var queryKey in querystring) {\n${query}\n        return false;\n      }\n    }\n  }\n  return event.request;\n}`;
+const code = (rules, query) => `function handler(event) {\n  var expectedHost = "admin-test.thehairnarrative.com";\n  var rules = ${JSON.stringify(rules)};\n  function queryAllowed(rule, querystring) {\n${query}\n  }\n  return event.request;\n}`;
 const live = () => ({ Resources: { [ID]: { Type: "AWS::CloudFront::Function", Properties: {
   Name: "admin-test", FunctionCode: code(oldRules, OLD_QUERY), AutoPublish: true } },
   [DISTRIBUTION_ID]: { Type: "AWS::CloudFront::Distribution", Properties: { Host: "admin-test.thehairnarrative.com" } } } });
@@ -37,6 +68,14 @@ const desired = () => {
 test("proof accepts exactly four Journal flags and the locale query check", () => {
   assert.equal(subject.verifyExactQueryFenceDiff(desired(), live()), true);
   assert.equal(adminRelease.determineAdminProofMode({}, desired(), live(), true), "query-fence");
+});
+
+test("proof rejects drift from the historical single-lang baseline", () => {
+  const changed = live();
+  changed.Resources[ID].Properties.FunctionCode = code(oldRules,
+    OLD_QUERY.replace("queryKeys.length !== 1", "queryKeys.length > 1"));
+  assert.throws(() => subject.verifyExactQueryFenceDiff(desired(), changed),
+    /query_fence_diff_invalid/);
 });
 
 test("proof rejects any other code, route, or template change", () => {

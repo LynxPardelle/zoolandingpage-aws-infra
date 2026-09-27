@@ -9,9 +9,35 @@ const FUNCTION_ID = "FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD7
 const DISTRIBUTION_ID = "FrontendDistributionThehairnarrativeAdminTest5B029562";
 const JOURNAL_PAGES = new Set(["/admin/journal", "/admin/journal/new",
   "/admin/journal/:articleId/edit", "/admin/journal/:articleId/preview"]);
-const OLD_QUERY = '      if (queryKey !== "lang" || !rule.allowLanguageQuery) {';
-const NEW_QUERY = '      if ((queryKey !== "lang" || !rule.allowLanguageQuery)\n'
-  + '        && (queryKey !== "articleLocale" || !rule.allowArticleLocaleQuery)) {';
+// The deployed pre-patch handler accepts zero or one lang key. Match the whole
+// historical body so a different live query policy cannot be treated as this patch.
+const OLD_QUERY = `    var queryKeys = [];
+    for (var queryKey in querystring) {
+      queryKeys.push(queryKey);
+    }
+    if (queryKeys.length === 0) {
+      return true;
+    }
+    if (!rule.allowLanguageQuery || queryKeys.length !== 1 || queryKeys[0] !== "lang") {
+      return false;
+    }
+    var language = querystring.lang || {};
+    if (language.multiValue && language.multiValue.length > 0) {
+      return false;
+    }
+    return language.value === "en" || language.value === "es";`;
+const NEW_QUERY = `    for (var queryKey in querystring) {
+      if ((queryKey !== "lang" || !rule.allowLanguageQuery)
+        && (queryKey !== "articleLocale" || !rule.allowArticleLocaleQuery)) {
+        return false;
+      }
+      var language = querystring[queryKey] || {};
+      if ((language.multiValue && language.multiValue.length > 0)
+        || (language.value !== "en" && language.value !== "es")) {
+        return false;
+      }
+    }
+    return true;`;
 const RULE_LINE = /^  var rules = (\[[^\n]*\]);$/gm;
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
