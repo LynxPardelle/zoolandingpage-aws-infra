@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -1180,17 +1181,31 @@ test("production front doors exclude retired zoolandingpage.com.mx aliases", () 
   }
 });
 
-test("production front doors model Eros Barajas with traffic cutover enabled", () => {
-  const production = environments.find((environment) => environment.name === "production");
-  assert.ok(production);
-  const erosFrontDoor = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "erosbarajas");
-  assert.ok(erosFrontDoor);
-  assert.equal(erosFrontDoor.domainName, "erosbarajas.com");
-  assert.equal(erosFrontDoor.auditHostHint, "erosbarajas.com");
-  assert.match(erosFrontDoor.certificateArn, /certificate\/4b190eff-7dde-435f-933b-da411d30ab50$/);
-  assert.deepEqual(erosFrontDoor.aliasRecordGroups[0].domainNames, ["erosbarajas.com"]);
-  assert.equal(production.frontendHosting.route53RecordsEnabled, true);
-});
+for (const customDomainNamesEnabled of [false, true]) {
+  test(`production Eros Barajas front door with custom domains ${customDomainNamesEnabled}`, () => {
+    // Load the module in a fresh process: its deployment flags are read at import.
+    // Both fixtures must remain deterministic under the production job's env.
+    const production = JSON.parse(execFileSync(process.execPath, ["-e", `
+      const { environments } = require('./config/environments');
+      console.log(JSON.stringify(environments.find(({ name }) => name === 'production')));
+    `], {
+      cwd: path.resolve(__dirname, ".."),
+      env: {
+        ...process.env,
+        FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED: String(customDomainNamesEnabled),
+      },
+      encoding: "utf8",
+    }));
+    const erosFrontDoor = production.frontendHosting.frontDoors.find((frontDoor) => frontDoor.id === "erosbarajas");
+    assert.ok(erosFrontDoor);
+    assert.equal(erosFrontDoor.domainName, "erosbarajas.com");
+    assert.equal(erosFrontDoor.customDomainNamesEnabled, customDomainNamesEnabled);
+    assert.equal(erosFrontDoor.auditHostHint, customDomainNamesEnabled ? undefined : "erosbarajas.com");
+    assert.match(erosFrontDoor.certificateArn, /certificate\/4b190eff-7dde-435f-933b-da411d30ab50$/);
+    assert.deepEqual(erosFrontDoor.aliasRecordGroups[0].domainNames, ["erosbarajas.com"]);
+    assert.equal(production.frontendHosting.route53RecordsEnabled, true);
+  });
+}
 
 test("production front doors activate Astra Legal aliases and Route53 cutover", () => {
   const production = environments.find((environment) => environment.name === "production");
