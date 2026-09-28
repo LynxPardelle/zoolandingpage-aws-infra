@@ -53,16 +53,30 @@ module.exports={assertCdkTrust,composeCertificateTemplate,reviewCertificateChang
 const BASE_ROLE=`arn:aws:iam::${ACCOUNT}:role/zoolandingpage-infra-production-github-oidc-deploy`;
 const roles=Object.freeze(Object.fromEntries(["lookup","deploy","file-publishing","cfn-exec"].map(k=>[k,`arn:aws:iam::${ACCOUNT}:role/cdk-hnb659fds-${k}-role-${ACCOUNT}-${REGION}`])));
 const ASSET_BUCKET=`cdk-hnb659fds-assets-${ACCOUNT}-${REGION}`;
+function buildAwsCliArguments(service,operation,input,inputFile,outputFile,extra=[]){
+ if(service==="s3api"&&operation==="get-object"){
+  // The AWS CLI's custom streaming command does not support --cli-input-json.
+  const fields={Bucket:"bucket",Key:"key",VersionId:"version-id",ExpectedBucketOwner:"expected-bucket-owner"};
+  if(!object(input)||Object.keys(input).some(k=>!Object.hasOwn(fields,k))
+    ||typeof input.Bucket!=="string"||!input.Bucket||typeof input.Key!=="string"||!input.Key
+    ||input.ExpectedBucketOwner!==ACCOUNT||!path.isAbsolute(outputFile||"")||extra.length
+    ||Object.hasOwn(input,"VersionId")&&(typeof input.VersionId!=="string"||!input.VersionId))fail("production_cli_input_invalid");
+  const flags=Object.entries(fields).filter(([k])=>Object.hasOwn(input,k)).map(([k,flag])=>`--${flag}=${input[k]}`);
+  return [service,operation,...flags,"--region",REGION,"--output","json","--no-cli-pager",outputFile];
+ }
+ return [service,operation,...(outputFile?[outputFile]:[]),"--cli-input-json",`file://${inputFile}`,...extra,"--region",REGION,"--output","json","--no-cli-pager"];
+}
+module.exports.buildAwsCliArguments=buildAwsCliArguments;
 function awsCall(service,operation,input,env=process.env,outputFile){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"thn-prod-cli-"));
  try{
   const body={...input},extra=[];
   if(service==="s3api"&&operation==="put-object"){if(!path.isAbsolute(body.Body||""))fail("production_cli_input_invalid");extra.push("--body",body.Body);delete body.Body;}
   const file=path.join(dir,"input.json");fs.writeFileSync(file,JSON.stringify(body),{mode:0o600,flag:"wx"});
-  const args=[service,operation,...(outputFile?[outputFile]:[]),"--cli-input-json",`file://${file}`,...extra,"--region",REGION,"--output","json","--no-cli-pager"];
+  const args=buildAwsCliArguments(service,operation,body,file,outputFile,extra);
   if(service==="route53"&&operation==="list-resource-record-sets")args.push("--no-paginate");
   const result=spawnSync("aws",args,{env:{...env,AWS_PAGER:"",AWS_MAX_ATTEMPTS:"1"},timeout:45000,maxBuffer:16*1024*1024});
-  if(result.error||result.status!==0){const code=String(result.stderr||"").match(/\(([A-Za-z0-9]+)\) when calling/)?.[1]||"AwsCliFailed";const error=new Error(`production_aws_${service}_${operation}_failed`.replace(/-/g,"_"));error.causeCode=code;throw error;}
+  if(result.error||result.status!==0){const code=String(result.stderr||"").match(/An error occurred \(([A-Za-z0-9]+)\)/)?.[1]||result.error?.code||"AwsCliFailed";const error=new Error(`production_aws_${service}_${operation}_failed`.replace(/-/g,"_"));error.causeCode=code;error.cliExitCode=result.status;throw error;}
   return result.stdout.length?JSON.parse(result.stdout.toString("utf8")):{};
  }finally{if(path.dirname(dir)!==os.tmpdir())fail("production_cli_cleanup_invalid");fs.rmSync(dir,{recursive:true});}
 }
@@ -268,7 +282,7 @@ if(require.main===module){
   const record=e.EXECUTION==="review"?undefined:JSON.parse(fs.readFileSync(path.resolve(e.REVIEW_FILE),"utf8"));
   const result=await runCertificateOperation({execution:e.EXECUTION,sourceSha:e.EXPECTED_SOURCE_SHA,sourcePackageSha256:fingerprint,runId:`${e.GITHUB_RUN_ID}-${e.GITHUB_RUN_ATTEMPT}`,verifySource:()=>assertCurrentProductionSource(e.EXPECTED_SOURCE_SHA,e),call:productionClients(e,`${e.GITHUB_RUN_ID}-${e.GITHUB_RUN_ATTEMPT}`),record,approvedDigest:e.EXPECTED_REVIEW_DIGEST,outputPath:path.resolve(e.REVIEW_OUTPUT_FILE||"certificate-review.json")});
   console.log(JSON.stringify(result));
- })().catch(error=>{console.error(JSON.stringify({error:/^[a-z_]+$/.test(error.message)?error.message:"production_certificate_operation_failed",...(error.causeCode?{cause_code:error.causeCode}:{})}));process.exitCode=1;});
+ })().catch(error=>{console.error(JSON.stringify({error:/^[a-z0-9_]+$/.test(error.message)?error.message:"production_certificate_operation_failed",...(error.causeCode?{cause_code:error.causeCode}:{}),...(Number.isInteger(error.cliExitCode)?{cli_exit_status:error.cliExitCode}:{})}));process.exitCode=1;});
 }
 
 module.exports.productionClients=productionClients;
