@@ -1554,7 +1554,7 @@ test("production configuration contains no THN admin origin, alias, certificate,
   assert.doesNotMatch(JSON.stringify(production), /auth-v2|content-hub-v2/);
 });
 
-test("THN admin front doors cannot be synthesized outside TEST", () => {
+test("THN production front door rejects a reused TEST door without native production owners", () => {
   const environment = releasedEnvironmentWithThnAdmin("production");
   const app = new cdk.App();
   assert.throws(
@@ -1562,7 +1562,7 @@ test("THN admin front doors cannot be synthesized outside TEST", () => {
       env: { account: environment.account, region: environment.region },
       environment,
     }),
-    /THN admin front door is TEST-only/
+    /production_owner_snapshot_invalid/
   );
 });
 

@@ -4,6 +4,7 @@ const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { createRoleClient } = require("./infra-test-aws");
+const { deploymentProfile } = require("./thn-production-profile");
 
 const ADMIN_ORIGIN = "https://admin-test.thehairnarrative.com";
 const STACK_NAME = "ZoolandingTest-Zoolandingpage-test-Frontend";
@@ -31,12 +32,14 @@ function isHashedStaticAssetPath(value) {
 
 // Environment inputs are public-safe, operator-selected bytes from an independently
 // verified APP artifact. This job needs neither cloud credentials nor cross-repo tokens.
-function selectThnAdminRelease(source = process.env) {
-  if (!source.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || source.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED === "false") return null;
-  if (source.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED !== "true") fail();
+function selectThnAdminRelease(source = process.env, environment = "test") {
+  const profile = deploymentProfile(environment);
+  const prefix = `FRONTEND_${environment.toUpperCase()}_THN_ADMIN`;
+  if (!source[`${prefix}_ORIGIN_ENABLED`] || source[`${prefix}_ORIGIN_ENABLED`] === "false") return null;
+  if (source[`${prefix}_ORIGIN_ENABLED`] !== "true") fail();
   try {
-    const encoded = source.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64;
-    const metadataJson = source.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON;
+    const encoded = source[`${prefix}_MANIFEST_BASE64`];
+    const metadataJson = source[`${prefix}_RELEASE_METADATA_JSON`];
     if (typeof encoded !== "string" || encoded.length === 0 || encoded.length > 32768
       || typeof metadataJson !== "string" || metadataJson.length > 2048) fail();
     const raw = Buffer.from(encoded, "base64");
@@ -44,7 +47,7 @@ function selectThnAdminRelease(source = process.env) {
     const metadata = JSON.parse(metadataJson);
     if (JSON.stringify(metadata) !== metadataJson
       || !exactKeys(metadata, ["schemaVersion", "environment", "releaseId", "sourceCommit", "runId", "runAttempt", "deliverySha256", "manifestSha256"])
-      || metadata.schemaVersion !== 1 || metadata.environment !== "test" || !releaseIdValid(metadata.releaseId)
+      || metadata.schemaVersion !== 1 || metadata.environment !== profile.environment || !releaseIdValid(metadata.releaseId)
       || !/^[a-f0-9]{40}$/.test(metadata.sourceCommit) || !/^[1-9][0-9]{0,19}$/.test(metadata.runId)
       || !/^[1-9][0-9]{0,9}$/.test(metadata.runAttempt) || typeof metadata.runId !== "string"
       || typeof metadata.runAttempt !== "string" || !SHA256.test(metadata.deliverySha256)
@@ -52,21 +55,23 @@ function selectThnAdminRelease(source = process.env) {
     const manifest = JSON.parse(raw.toString("utf8"));
     if (!jsonBytes(manifest).equals(raw)
       || !exactKeys(manifest, ["version", "environment", "releaseId", "staticAssetPaths"])
-      || manifest.version !== 1 || manifest.environment !== "test" || manifest.releaseId !== metadata.releaseId
+      || manifest.version !== 1 || manifest.environment !== profile.environment || manifest.releaseId !== metadata.releaseId
       || !Array.isArray(manifest.staticAssetPaths) || manifest.staticAssetPaths.length < 1
       || manifest.staticAssetPaths.length > 64 || !manifest.staticAssetPaths.every(isHashedStaticAssetPath)
       || new Set(manifest.staticAssetPaths.map(value => value.toLowerCase())).size !== manifest.staticAssetPaths.length) fail();
-    return { manifest, metadata, manifestBase64: encoded, originPrefix: `frontend/angular-ssr/test/releases/${metadata.releaseId}` };
+    return { manifest, metadata, manifestBase64: encoded, originPrefix: `frontend/angular-ssr/${profile.environment}/releases/${metadata.releaseId}` };
   } catch { fail(); }
 }
 
-function validateSelection(selection) {
+function validateSelection(selection, environment = "test") {
+  const profile = deploymentProfile(environment);
+  const prefix = `FRONTEND_${profile.environment.toUpperCase()}_THN_ADMIN`;
   if (!selection) fail();
   const normalized = selectThnAdminRelease({
-    FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true",
-    FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: selection.manifestBase64,
-    FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: JSON.stringify(selection.metadata),
-  });
+    [`${prefix}_ORIGIN_ENABLED`]: "true",
+    [`${prefix}_MANIFEST_BASE64`]: selection.manifestBase64,
+    [`${prefix}_RELEASE_METADATA_JSON`]: JSON.stringify(selection.metadata),
+  }, profile.environment);
   if (!same(normalized, selection)) fail();
   return normalized;
 }
@@ -84,9 +89,10 @@ function routeSignatures(routes) {
   }).sort();
 }
 
-async function verifyPublishedAdminRelease(selection, readObject) {
+async function verifyPublishedAdminRelease(selection, readObject, environment = "test") {
   try {
-    const selected = validateSelection(selection);
+    const profile = deploymentProfile(environment);
+    const selected = validateSelection(selection, environment);
     const { metadata, originPrefix } = selected;
     const names = ["manifest.json", "delivery.json", "thn-admin-release.json", "thn-route-manifest.json"];
     const objects = new Map();
@@ -100,9 +106,9 @@ async function verifyPublishedAdminRelease(selection, readObject) {
       || objects.get("thn-admin-release.json").toString("base64") !== selected.manifestBase64) fail();
     const delivery = JSON.parse(objects.get("delivery.json"));
     if (!exactKeys(delivery, ["schemaVersion", "environment", "releaseId", "sourceCommit", "runId", "runAttempt", "deployed", "thnAdmin", "files"])
-      || delivery.schemaVersion !== 1 || delivery.environment !== "test" || delivery.deployed !== false
+      || delivery.schemaVersion !== 1 || delivery.environment !== profile.environment || delivery.deployed !== false
       || !exactKeys(delivery.thnAdmin, ["enabled", "origin"]) || delivery.thnAdmin.enabled !== true
-      || delivery.thnAdmin.origin !== ADMIN_ORIGIN
+      || delivery.thnAdmin.origin !== `https://${profile.adminHost}`
       || ["releaseId", "sourceCommit", "runId", "runAttempt"].some(key => delivery[key] !== metadata[key])
       || !Array.isArray(delivery.files) || delivery.files.length < 5 || delivery.files.length > 20000) fail();
     const inventory = new Map();
@@ -122,15 +128,15 @@ async function verifyPublishedAdminRelease(selection, readObject) {
     }
     if (selected.manifest.staticAssetPaths.some(asset => !inventory.has(`staging${asset}`))) fail();
     const source = JSON.parse(objects.get("manifest.json"));
-    if (source.schemaVersion !== 1 || source.app !== "zoolandingpage" || source.environment !== "test"
+    if (source.schemaVersion !== 1 || source.app !== "zoolandingpage" || source.environment !== profile.environment
       || source.releaseId !== metadata.releaseId || source.sourceCommit !== metadata.sourceCommit
       || source.browserPrefix !== `${originPrefix}/browser`
       || source.serverBundleKey !== `${originPrefix}/server/ssr-handler.zip`
       || !inventory.has("ssr-handler.zip") || source.checksums?.["server/ssr-handler.zip"] !== inventory.get("ssr-handler.zip")) fail();
     const routes = JSON.parse(objects.get("thn-route-manifest.json"));
     const admin = routes.origins?.admin;
-    if (routes.version !== 1 || routes.environment !== "test" || routes.domain !== "thehairnarrative.com"
-      || admin?.host !== "admin-test.thehairnarrative.com" || admin.originRole !== "protected-admin"
+    if (routes.version !== 1 || routes.environment !== profile.environment || routes.domain !== "thehairnarrative.com"
+      || admin?.host !== profile.adminHost || admin.originRole !== "protected-admin"
       || admin.defaultDecision !== "deny" || admin.staticAssets?.mode !== "selected-release-manifest-only"
       || !same(routeSignatures(admin.pageRoutes), pagePaths.map(value => `GET ${value}`).sort())
       || !same(routeSignatures(admin.backendRoutes), [...backendSignatures].sort())) fail();
