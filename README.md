@@ -96,6 +96,11 @@ The closed APP manifest transport, exact static-origin projection, certificate
 preflight, and publish-versus-select sequence are documented in
 [THN TEST admin release selection](docs/thn-admin-test-release.md).
 
+The manual [private TEST editor rotation](docs/thn-admin-private-release-rotation.md)
+pins the independently verified APP artifact and preserves the deployed Journal
+query policy. A review never executes its change set; activation requires the
+separately approved inventory digest.
+
 The [bounded THN TEST resource inventory check](docs/thn-test-resource-inventory.md)
 compares independently sealed local inventories, requires zero QA infrastructure
 delta, and never deletes resources or changes protection.
