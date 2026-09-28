@@ -293,50 +293,52 @@ function buildBackendRoutes(environmentName) {
 function buildThnAdminTestFrontDoor(
   source = process.env,
   account = environmentDefaults.account,
-  trustedApiFrontDoors = backendApiFrontDoors.test
+  trustedApiFrontDoors = backendApiFrontDoors.test,
+  profileEnvironment = "test"
 ) {
-  if (!parseBooleanFlag(source.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED)) {
+  if (!parseBooleanFlag(source[`FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_ORIGIN_ENABLED`])) {
     return null;
   }
 
-  const certificateArn = requiredInput(source, "FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN");
+  const certificateArn = requiredInput(source, `FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_CERTIFICATE_ARN`);
   const certificatePrefix = `arn:aws:acm:us-east-1:${account}:certificate/`;
   const certificateId = certificateArn.slice(certificatePrefix.length);
   if (!certificateArn.startsWith(certificatePrefix) || !/^[a-zA-Z0-9-]+$/.test(certificateId)) {
     throw new Error(
-      `FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN must be an ACM certificate in us-east-1 for AWS account ${account}.`
+      `FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_CERTIFICATE_ARN must be an ACM certificate in us-east-1 for AWS account ${account}.`
     );
   }
 
-  const hostedZoneId = requiredInput(source, "FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID");
+  const hostedZoneId = requiredInput(source, `FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_HOSTED_ZONE_ID`);
   if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
-    throw new Error("FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID must be an exact public Route 53 hosted zone ID.");
+    throw new Error("FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_HOSTED_ZONE_ID must be an exact public Route 53 hosted zone ID.");
   }
 
   const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthRuntime");
   const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthAdmin");
   const contentHubOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "contentHub");
-  const staticRelease = selectThnAdminRelease(source);
+  const staticRelease = selectThnAdminRelease(source, profileEnvironment);
+  const adminHost = profileEnvironment === "test" ? thnAdminTestHost : "admin.thehairnarrative.com";
 
   return {
-    id: "thehairnarrative-admin-test",
-    securityProfile: "thn-admin-test",
-    domainName: thnAdminTestHost,
+    id: `thehairnarrative-admin-${profileEnvironment}`,
+    securityProfile: `thn-admin-${profileEnvironment}`,
+    domainName: adminHost,
     alternateDomainNames: [],
     customDomainNamesEnabled: true,
     certificateArn,
-    certificateDomainName: thnAdminTestHost,
+    certificateDomainName: adminHost,
     certificateVerification: "exact-cn-san-preflight-required",
     minimumProtocolVersion: "TLSv1.2_2021",
     route53RecordsEnabled: parseBooleanFlag(
-      source.FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED
+      source[`FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_ROUTE53_RECORDS_ENABLED`]
     ),
     route53RecordManagement: "create-only",
     aliasRecordGroups: [
       {
         hostedZoneName: thnAdminHostedZoneName,
         hostedZoneId,
-        domainNames: [thnAdminTestHost],
+        domainNames: [adminHost],
       },
     ],
     hsts: {
@@ -390,6 +392,27 @@ function buildThnAdminTestFrontDoor(
   };
 }
 
+// Production activation is deliberately unavailable until retained service
+// resources are provisioned and their native API identities are independently
+// captured. No operator-provided domain or TEST endpoint is a substitute.
+function buildThnAdminProductionFrontDoor(source = process.env) {
+  const enabled = source.FRONTEND_PRODUCTION_THN_ADMIN_ORIGIN_ENABLED;
+  if (enabled === undefined || enabled === "" || enabled === "false") return null;
+  if (enabled !== "true") throw new Error("THN production admin enable flag is invalid.");
+  if (!source.FRONTEND_PRODUCTION_THN_ADMIN_OWNER_SNAPSHOT_JSON) throw new Error("THN production backend coordinates are unavailable; provision and review exact owner identities before activation.");
+  const snapshot = JSON.parse(source.FRONTEND_PRODUCTION_THN_ADMIN_OWNER_SNAPSHOT_JSON);
+  const trusted = require("../tools/thn-production-origins").validateProductionOrigins(snapshot);
+  const door = buildThnAdminTestFrontDoor(source, expectedAccount, trusted, "production");
+  if (door.aliasRecordGroups[0].hostedZoneId !== hostedZones.theHairNarrativeCom.hostedZoneId) throw new Error("production_owner_snapshot_invalid");
+  return { ...door, productionOwnerSnapshot: snapshot };
+}
+
+function buildThnAdminProductionCertificate(source = process.env) {
+  const certificateArn = source.FRONTEND_PRODUCTION_THN_ADMIN_CERTIFICATE_ARN;
+  if (!certificateArn) return null;
+  if (!/^arn:aws:acm:us-east-1:765932874577:certificate\/[a-f0-9-]{36}$/.test(certificateArn) || source.FRONTEND_PRODUCTION_THN_ADMIN_HOSTED_ZONE_ID !== hostedZones.theHairNarrativeCom.hostedZoneId) throw new Error("production_certificate_input_invalid");
+  return { certificateArn, hostedZoneId: hostedZones.theHairNarrativeCom.hostedZoneId };
+}
 function buildThnAdminTestCertificate(source = process.env, account = environmentDefaults.account) {
   const certificateArn = String(source.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN || "").trim();
   if (!certificateArn) return null;
@@ -467,6 +490,7 @@ function requiredOriginPath(value, name) {
 
 const thnAdminTestFrontDoor = buildThnAdminTestFrontDoor();
 const thnPublicProductionFrontDoor = buildThnPublicProductionFrontDoor();
+const thnAdminProductionFrontDoor = buildThnAdminProductionFrontDoor();
 
 const environments = [
   {
@@ -506,6 +530,7 @@ const environments = [
     serviceRepositoryBootstrap,
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
+      thnAdminCertificate: buildThnAdminProductionCertificate(),
       route53RecordsEnabled: true,
       frontDoors: [
         {
@@ -601,6 +626,7 @@ const environments = [
           ],
         },
         ...(thnPublicProductionFrontDoor ? [thnPublicProductionFrontDoor] : []),
+        ...(thnAdminProductionFrontDoor ? [thnAdminProductionFrontDoor] : []),
       ],
     },
     removalPolicy: "retain",
@@ -612,6 +638,7 @@ function parseBooleanFlag(value) {
 }
 
 module.exports = {
+  buildThnAdminProductionFrontDoor,
   buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
   buildThnPublicProductionFrontDoor,
