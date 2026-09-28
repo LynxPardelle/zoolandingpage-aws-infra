@@ -30908,7 +30908,8 @@
     },
     {
       "actions": [
-        "lambda:GetFunctionConfiguration"
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetRuntimeManagementConfig"
       ],
       "condition": {},
       "evidence": "actual source-required metadata/policy read delta; proposed until approved bootstrap",
@@ -33039,7 +33040,8 @@
               },
               {
                 "Action": [
-                  "lambda:GetFunctionConfiguration"
+                  "lambda:GetFunctionConfiguration",
+                  "lambda:GetRuntimeManagementConfig"
                 ],
                 "Effect": "Allow",
                 "Resource": "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-config-runtime-ConfigRuntimeReadFunctio-tyt19jOfQNXg",

@@ -114,7 +114,8 @@
           },
           {
             "Action": [
-              "lambda:GetFunctionConfiguration"
+              "lambda:GetFunctionConfiguration",
+              "lambda:GetRuntimeManagementConfig"
             ],
             "Effect": "Allow",
             "Resource": "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-config-runtime-ConfigRuntimeReadFunctio-tyt19jOfQNXg",
@@ -184,7 +185,7 @@
         ],
         "Version": "2012-10-17"
       },
-      "policySha256": "748babc6368560d53c099a5b6e95da7bd300dc2965a91421982b7b3d55f2ffcc"
+      "policySha256": "7746ee02cf48d256bfc96adb3a78ad4b6d949159ddaefd4123d8d653855c0018"
     }
   },
   "environment": "production",
