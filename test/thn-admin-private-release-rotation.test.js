@@ -46,6 +46,24 @@ const NEW_QUERY = `    for (var queryKey in querystring) {
     return true;`;
 
 const selected = release.selectThnAdminRelease(fixture(["/browser/chunk-12345678.js", "/browser/styles-abcdef12.css"]).inputs);
+test("pins the verified replacement APP artifact and rejects another source run", () => {
+  const reviewed = require("./fixtures/thn-private-reviewed-app.json");
+  const coordinates = reviewed.coordinates;
+  const metadata = { schemaVersion: 1, environment: "test", releaseId: reviewed.manifest.releaseId,
+    sourceCommit: coordinates.sourceSha, runId: coordinates.runId, runAttempt: coordinates.runAttempt,
+    deliverySha256: coordinates.deliverySha256, manifestSha256: coordinates.manifestSha256 };
+  const selection = release.selectThnAdminRelease({ FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true",
+    FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: Buffer.from(`${JSON.stringify(reviewed.manifest, null, 2)}\n`).toString("base64"),
+    FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: JSON.stringify(metadata) });
+  assert.deepEqual(subject.validatePinnedAppCoordinates(selection, coordinates), coordinates);
+  assert.throws(() => subject.validatePinnedAppCoordinates(selection, { ...coordinates, artifactId: "10939780047" }),
+    /private_release_coordinates_invalid/);
+  const changedSelection = structuredClone(selection);
+  changedSelection.metadata.runId = "123";
+  const changedCoordinates = { ...coordinates, runId: "123" };
+  assert.deepEqual(subject.validateAppCoordinates(changedSelection, changedCoordinates), changedCoordinates);
+  assert.throws(() => subject.validatePinnedAppCoordinates(changedSelection, changedCoordinates), /private_release_coordinates_invalid/);
+});
 test("requires exact independent APP artifact coordinates", () => {
   const coordinates = { artifactId: "10939780047", sourceSha: selected.metadata.sourceCommit,
     runId: selected.metadata.runId, runAttempt: selected.metadata.runAttempt,
@@ -105,6 +123,26 @@ test("projects only the private release while keeping the deployed query policy"
   assert.ok(!candidate.Resources[FUNCTION_ID].Properties.FunctionCode.includes("articleLocale"));
   assert.equal(candidate.Resources[DISTRIBUTION_ID].Properties.DistributionConfig.Origins[0].OriginPath, `/${selected.originPrefix}`);
   assert.deepEqual(live.Resources[SSR_ID].Properties.Environment.Variables.ZLP_RELEASE_ID, "previous");
+});
+
+test("rotates assets after Query Fence is deployed without changing its policy", () => {
+  const { live, desired } = templates();
+  live.Resources[FUNCTION_ID].Properties.FunctionCode = code([
+    ...pageRules.map(rule => JOURNAL_PAGES.includes(rule.path)
+      ? { ...rule, allowArticleLocaleQuery: true } : rule), ...assetRules(oldPaths)], NEW_QUERY);
+  const candidate = subject.projectPrivateReleaseTemplate(desired, live, selected);
+  assert.equal(candidate.Resources[FUNCTION_ID].Properties.FunctionCode,
+    desired.Resources[FUNCTION_ID].Properties.FunctionCode);
+  for (const mutation of [
+    source => source + "\n// unexpected handler change",
+    source => source.replace('"allowArticleLocaleQuery":true', '"allowArticleLocaleQuery":false'),
+    source => source.replace('"methods":["GET"]', '"methods":["GET","POST"]'),
+  ]) {
+    const changed = structuredClone(desired);
+    changed.Resources[FUNCTION_ID].Properties.FunctionCode = mutation(changed.Resources[FUNCTION_ID].Properties.FunctionCode);
+    assert.throws(() => subject.projectPrivateReleaseTemplate(changed, live, selected),
+      /^Error: private_release_template_invalid_query_policy$/);
+  }
 });
 
 test("rejects a live private Lambda whose code and release ID point to different artifacts", () => {
@@ -450,6 +488,25 @@ test("live and post state keep identities, DNS, public release and nonstatic dis
     "public-release", baseline, "b".repeat(64)).stackId, STACK_ID);
   updated.dns.ResourceRecordSets[0].AliasTarget.DNSName = "other.cloudfront.net.";
   assert.throws(() => subject.validatePostRotationState(desired, updated, selected,
+    "public-release", baseline, "b".repeat(64)), /private_release_post_state_invalid/);
+});
+
+test("postcheck accepts the exact release with the already deployed locale fence and rejects drift", () => {
+  const { live, desired } = templates();
+  live.Resources[FUNCTION_ID].Properties.FunctionCode = code([
+    ...pageRules.map(rule => JOURNAL_PAGES.includes(rule.path)
+      ? { ...rule, allowArticleLocaleQuery: true } : rule), ...assetRules(oldPaths)], NEW_QUERY);
+  const baseline = subject.validateRotationState(desired, runtimeState(live), selected, "public-release", "before");
+  const updated = runtimeState(baseline.candidate, Buffer.from("b".repeat(64), "hex").toString("base64"));
+  updated.function.ETag = "viewer-new";
+  updated.distribution.ETag = "distribution-new";
+  assert.equal(subject.validatePostRotationState(desired, updated, selected,
+    "public-release", baseline, "b".repeat(64)).stackId, STACK_ID);
+  const drifted = structuredClone(updated);
+  drifted.original.Resources[FUNCTION_ID].Properties.FunctionCode += "\n// changed";
+  drifted.processed = structuredClone(drifted.original);
+  drifted.functionCode = drifted.original.Resources[FUNCTION_ID].Properties.FunctionCode;
+  assert.throws(() => subject.validatePostRotationState(desired, drifted, selected,
     "public-release", baseline, "b".repeat(64)), /private_release_post_state_invalid/);
 });
 

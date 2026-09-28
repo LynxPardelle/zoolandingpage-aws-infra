@@ -20,10 +20,10 @@ const INVOKE_PERMISSION_ID = "FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFu
 const URL_PERMISSION_ID = "FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminTestA8483BAF";
 const STACK = "ZoolandingTest-Zoolandingpage-test-Frontend";
 const HOST = "admin-test.thehairnarrative.com";
-const PINNED_APP = Object.freeze({ artifactId: "10939780047",
-  sourceSha: "4f45ffc615d3864a167fdccd87535e244ef01971", runId: "36342080059", runAttempt: "1",
-  deliverySha256: "cbdceb0c07ae525329a22db6456662465ad32e68bc1944d3de57778fc3f4d227",
-  manifestSha256: "dab06e876322601c2a578233d106a19aa4524fbfa5afc88a76021b507d1d86d0" });
+const PINNED_APP = Object.freeze({ artifactId: "10946585127",
+  sourceSha: "9850f5f3d5b435d90387cf6a2f73323a249452d1", runId: "36362456029", runAttempt: "1",
+  deliverySha256: "8e50e06e655ff6d50d40188ebdf79ebc93d149275627c066ad986c15d7da623a",
+  manifestSha256: "84c7ed5861acebe193e0da0b3848b566bb133c8842875e5d91e86bc3d789f78d" });
 const RULE_LINE = /^  var rules = (\[[^\n]*\]);$/gm;
 const fail = () => { throw new Error("private_release_template_invalid"); };
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
@@ -31,6 +31,12 @@ const stable = value => Array.isArray(value) ? value.map(stable) : value && type
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const digest = value => createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
 const sha256 = value => createHash("sha256").update(value).digest("hex");
+
+function verifyUnchangedOrHistoricalQueryFence(desired, live) {
+  // Accept no query/template change, or only the previously proven historical
+  // query delta. The standalone Query Fence release still requires its diff.
+  if (!same(stable(desired), stable(live))) queryFence.verifyExactQueryFenceDiff(desired, live);
+}
 
 function validateAppCoordinates(selection, coordinates) {
   try {
@@ -116,7 +122,7 @@ function projectPrivateReleaseTemplate(desired, live, selection) {
     queryOnly.Resources[FUNCTION_ID].Properties.FunctionCode = newViewerCode.replace(newViewer.line,
       `  var rules = ${JSON.stringify(queryRules)};`);
     stage = "query_policy";
-    queryFence.verifyExactQueryFenceDiff(queryOnly, live);
+    verifyUnchangedOrHistoricalQueryFence(queryOnly, live);
 
     stage = "static_rotation";
     const staticOnly = structuredClone(candidate);
@@ -342,7 +348,7 @@ function validateRotationState(desired, state, selection, publicRelease, mode, e
     stage = "template_projection";
     const candidate = mode === "before"
       ? projectPrivateReleaseTemplate(desired, state.original, selected)
-      : (queryFence.verifyExactQueryFenceDiff(desired, state.original), state.original);
+      : (verifyUnchangedOrHistoricalQueryFence(desired, state.original), state.original);
     stage = "candidate_identity";
     if (expectedCandidate && !same(stable(candidate), stable(expectedCandidate))) fail();
     stage = "stack";
