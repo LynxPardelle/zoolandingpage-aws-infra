@@ -42,4 +42,4 @@ if(require.main===module){(async()=>{
  const record=e.EXECUTION==="review"?undefined:JSON.parse(fs.readFileSync(path.resolve(e.REVIEW_FILE),"utf8"));
  const result=await runProtection({call:productionClients(e,`${e.GITHUB_RUN_ID}-${e.GITHUB_RUN_ATTEMPT}`),sourceSha:e.EXPECTED_SOURCE_SHA,fingerprint,execution:e.EXECUTION,record,approvedDigest:e.EXPECTED_REVIEW_DIGEST,verifySource:()=>cert.assertCurrentProductionSource(e.EXPECTED_SOURCE_SHA,e)});
  if(e.EXECUTION==="review")fs.writeFileSync("protection-review.json",JSON.stringify(result,null,2)+"\n",{flag:"wx",mode:0o600});console.log(JSON.stringify(result));
-})().catch(error=>{console.error(JSON.stringify({error:/^[a-z_]+$/.test(error.message)?error.message:"production_protection_failed"}));process.exitCode=1;});}
+})().catch(error=>{console.error(JSON.stringify({error:/^[a-z0-9_]+$/.test(error.message)?error.message:"production_protection_failed",...(error.causeCode?{cause_code:error.causeCode}:{}),...(Number.isInteger(error.cliExitCode)?{cli_exit_status:error.cliExitCode}:{})}));process.exitCode=1;});}
