@@ -1,0 +1,1002 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const { existsSync, readFileSync } = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const { spawnSync } = require("node:child_process");
+const cdk = require("aws-cdk-lib");
+const { fixture: adminReleaseFixture } = require("./fixtures/thn-admin-selection");
+const { Template } = require("aws-cdk-lib/assertions");
+
+const { FrontendStack } = require("../lib/stacks/frontend-stack");
+const {
+  buildThnAdminTestFrontDoor,
+  environments,
+} = require("../config/environments");
+
+const root = path.join(__dirname, "..");
+const deployPath = path.join(root, ".github", "workflows", "deploy-test.yml");
+const rollbackPath = path.join(root, ".github", "workflows", "rollback-test.yml");
+const reviewerPath = path.join(root, "tools", "review-test-infra-change-set.js");
+const runnerPath = path.join(root, "tools", "run-test-infra-change-set.sh");
+const deploy = readFileSync(deployPath, "utf8");
+const runner = readFileSync(runnerPath, "utf8");
+
+test("generated CDK proof assemblies cannot enter source delivery", () => {
+  for (const output of ["cdk.out/manifest.json", "cdk.out-thn-origin-proof/manifest.json", "logs/local-check.log"]) {
+    const result = spawnSync("git", ["check-ignore", "--no-index", "--", output], { cwd: root, encoding: "utf8" });
+    assert.equal(result.status, 0, `Generated output must be ignored: ${output}`);
+  }
+});
+
+function count(haystack, needle) {
+  return haystack.split(needle).length - 1;
+}
+
+test("TEST transports safe selection before credentials and verifies published bytes before each mutation", () => {
+  const validate = deploy.slice(deploy.indexOf("  validate:"), deploy.indexOf("  deploy:"));
+  assert.match(validate, /FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: \$\{\{ vars\.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 \}\}/);
+  assert.match(validate, /FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: \$\{\{ vars\.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON \}\}/);
+  assert.match(validate, /thn-admin-release\.js prepare .release\/thn-admin-selection\.json/);
+  assert.ok(validate.indexOf("thn-admin-release.js prepare .release/thn-admin-selection.json") < validate.indexOf("cdk synth"));
+  assert.match(validate, /cp tools\/thn-admin-release\.js .release\/release-tools\//);
+  const deployJob = deploy.slice(deploy.indexOf("  deploy:"));
+  assert.match(deployJob, /thn-admin-release\.js compare .transport\/.release\/thn-admin-selection\.json/);
+  assert.ok(deployJob.indexOf("thn-admin-release.js compare .transport/.release/thn-admin-selection.json") < deployJob.indexOf("aws-actions/configure-aws-credentials"));
+  const preflight = 'node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json"';
+  assert.equal(count(runner, preflight), 2);
+  assert.ok(runner.indexOf(preflight) < runner.indexOf("npx --no-install cdk deploy"));
+  assert.ok(runner.lastIndexOf(preflight) < runner.indexOf('infra-test-aws.js" execute-change-set'));
+  assert.ok(runner.lastIndexOf(preflight) > runner.indexOf('test "$decision" = "execute"'));
+  const rollback = readFileSync(rollbackPath, "utf8");
+  assert.match(rollback, /test -f .transport\/\.release\/thn-admin-selection\.json/);
+  assert.match(rollback, /test -f .transport\/\.release\/release-tools\/thn-admin-release\.js/);
+  assert.doesNotMatch(validate, /id-token: write|configure-aws-credentials|secrets\.|aws s3|curl/);
+});
+
+function changeSet(changes) {
+  return {
+    StackName: "ZoolandingTest-Zoolandingpage-test-Frontend",
+    StackId:
+      "arn:aws:cloudformation:us-east-1:765932874577:stack/ZoolandingTest-Zoolandingpage-test-Frontend/00000000-0000-0000-0000-000000000001",
+    ChangeSetName: "release-123-1",
+    ChangeSetId:
+      "arn:aws:cloudformation:us-east-1:765932874577:changeSet/release-123-1/00000000-0000-0000-0000-000000000001",
+    Status: "CREATE_COMPLETE",
+    ExecutionStatus: "AVAILABLE",
+    Changes: changes.map((resource) => ({ Type: "Resource", ResourceChange: resource })),
+  };
+}
+
+const reviewOptions = {
+  expectedStackName: "ZoolandingTest-Zoolandingpage-test-Frontend",
+  expectedChangeSetName: "release-123-1",
+  expectedChangeSetArn:
+    "arn:aws:cloudformation:us-east-1:765932874577:changeSet/release-123-1/00000000-0000-0000-0000-000000000001",
+  expectedChangeSetType: "UPDATE",
+  expectedAccountId: "765932874577",
+  expectedRegion: "us-east-1",
+  adminInfrastructureApproved: true,
+  adminRouteAssociationApproved: true,
+};
+
+function metadataOnlyFixture() {
+  const lambda = {
+    Properties: { Runtime: "nodejs22.x", Handler: "index.handler", Code: { S3Key: "unchanged.zip" } },
+    Metadata: { "aws:asset:path": "../asset-before", "aws:asset:property": "Code", "aws:cdk:path": "fixture/provider" },
+  };
+  const analytics = { Properties: { Analytics: "v2:deflate64:before" }, Metadata: { "aws:cdk:path": "fixture/CDKMetadata" } };
+  return [
+    {
+      Action: "Modify", LogicalResourceId: "FixtureProviderAABBCCDD", ResourceType: "AWS::Lambda::Function", Replacement: "False", Scope: ["Metadata"],
+      BeforeContext: JSON.stringify(lambda), AfterContext: JSON.stringify({ ...lambda, Metadata: { ...lambda.Metadata, "aws:asset:path": "asset-after" } }),
+      Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: { Attribute: "Metadata", Path: "/Metadata/aws:asset:path", RequiresRecreation: "Never", AttributeChangeType: "Modify", BeforeValue: "../asset-before", AfterValue: "asset-after" } }],
+    },
+    {
+      Action: "Modify", LogicalResourceId: "CDKMetadata", ResourceType: "AWS::CDK::Metadata", Replacement: "Conditional", Scope: ["Properties"],
+      BeforeContext: JSON.stringify(analytics), AfterContext: JSON.stringify({ ...analytics, Properties: { Analytics: "v2:deflate64:after" } }),
+      Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: { Attribute: "Properties", Name: "Analytics", Path: "/Properties/Analytics", RequiresRecreation: "Conditionally", AttributeChangeType: "Modify", BeforeValue: "v2:deflate64:before", AfterValue: "v2:deflate64:after" } }],
+    },
+  ];
+}
+
+const ordinaryReview = { ...reviewOptions, adminInfrastructureApproved: false, adminRouteAssociationApproved: false };
+
+test("native CDK-only metadata drift is a non-executing ordinary TEST no-op", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const fixture = metadataOnlyFixture();
+  for (const resources of [fixture, [fixture[0]], [fixture[1]]]) {
+    assert.equal(reviewChangeSet(changeSet(resources), ordinaryReview), "noop");
+  }
+});
+
+test("metadata review preserves object contexts across repeated reviews", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const resources = metadataOnlyFixture().map(value => ({ ...value,
+    BeforeContext: JSON.parse(value.BeforeContext), AfterContext: JSON.parse(value.AfterContext) }));
+  const payload = changeSet(resources), snapshot = JSON.stringify(payload);
+  assert.equal(reviewChangeSet(payload, ordinaryReview), "noop");
+  assert.equal(JSON.stringify(payload), snapshot);
+  assert.equal(reviewChangeSet(payload, ordinaryReview), "noop");
+});
+
+test("metadata is not evidence of an approved admin activation", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  assert.throws(() => reviewChangeSet(changeSet(metadataOnlyFixture()), reviewOptions), /admin_change_evidence_missing/);
+});
+
+function opaquePrivateOriginResource() {
+  const context = domain => JSON.stringify({ Properties: { DistributionConfig: domain, Tags: [{ Key: "owner", Value: "thn" }] },
+    Metadata: { "aws:cdk:path": "ZoolandingTest/Zoolandingpage-test-Frontend/FrontendDistributionThehairnarrativeAdminTest/Resource" } });
+  return {
+    Action: "Modify", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution", Replacement: "False", Scope: ["Properties"],
+    BeforeContext: context("opaque-before"), AfterContext: context("opaque-after"),
+    Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: {
+      Attribute: "Properties", Name: "DistributionConfig", Path: "/Properties/DistributionConfig",
+      RequiresRecreation: "Never", AttributeChangeType: "Modify", BeforeValue: "opaque-before", AfterValue: "opaque-after",
+    } }],
+  };
+}
+
+test("opaque CloudFormation context needs a separately verified exact private-origin diff", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const resource = opaquePrivateOriginResource();
+  assert.throws(() => reviewChangeSet(changeSet([resource]), reviewOptions), /admin_change_evidence_missing/);
+  assert.equal(reviewChangeSet(changeSet([resource]), { ...reviewOptions, adminOriginOnlyProof: true }), "execute");
+  for (const changed of [
+    { ...resource, Replacement: "True" },
+    { ...resource, Scope: ["Properties", "Metadata"] },
+    { ...resource, LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestFFFFFFFF" },
+    { ...resource, Details: [{ ...resource.Details[0], Evaluation: "Dynamic" }] },
+    { ...resource, AfterContext: resource.BeforeContext },
+  ]) assert.throws(() => reviewChangeSet(changeSet([changed]), { ...reviewOptions, adminOriginOnlyProof: true }));
+  assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), resource]),
+    { ...reviewOptions, adminOriginOnlyProof: true }), /admin_change_evidence_missing/);
+});
+
+test("origin-only proof requires the complete unvalued change inventory", () => {
+  const { reviewCompleteChangeSet } = require(reviewerPath);
+  assert.equal(typeof reviewCompleteChangeSet, "function");
+  const distributionId = "FrontendDistributionThehairnarrativeAdminTest5B029562";
+  const source = `${distributionId}.DomainName`;
+  const detail = (name, recreation) => ({ Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
+    CausingEntity: source, Target: { Attribute: "Properties", Name: name, RequiresRecreation: recreation } });
+  const dynamic = [
+    { Action: "Modify", LogicalResourceId: "FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+      ResourceType: "Custom::ZoolandingFrontendAliasRecords", Replacement: "Conditional", Scope: ["Properties"],
+      Details: [detail("Create", "Conditionally")] },
+    { Action: "Modify", LogicalResourceId: "FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+      ResourceType: "AWS::SSM::Parameter", Replacement: "False", Scope: ["Properties"],
+      Details: [detail("Value", "Never")] },
+  ];
+  const detailed = changeSet([opaquePrivateOriginResource()]);
+  const staticSummary = structuredClone(opaquePrivateOriginResource());
+  delete staticSummary.BeforeContext;
+  delete staticSummary.AfterContext;
+  const summary = changeSet([...dynamic, staticSummary]);
+  const options = { ...reviewOptions, adminOriginOnlyProof: true };
+  assert.equal(reviewCompleteChangeSet(detailed, summary, options), "execute");
+  assert.throws(() => reviewCompleteChangeSet(detailed, undefined, options), /admin_change_summary_invalid/);
+  for (const mutate of [
+    value => { value.Changes.pop(); },
+    value => { value.Changes[0].ResourceChange.Details[0].CausingEntity = "Other.DomainName"; },
+    value => { value.Changes[0].ResourceChange.Replacement = "True"; },
+    value => { value.Changes[1].ResourceChange.Details[0].Target.Name = "Name"; },
+    value => { value.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Unrelated" } }); },
+    value => { value.ChangeSetId = "other"; },
+  ]) {
+    const changed = structuredClone(summary); mutate(changed);
+    assert.throws(() => reviewCompleteChangeSet(detailed, changed, options), /admin_change_summary_invalid/);
+  }
+  assert.equal(reviewCompleteChangeSet(changeSet([{ Action: "Add", LogicalResourceId: distributionId,
+    ResourceType: "AWS::CloudFront::Distribution", AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }) }]),
+  undefined, reviewOptions), "execute");
+});
+
+test("static release rotation accepts exact derived changes in the unvalued view", () => {
+  const { reviewCompleteChangeSet } = require(reviewerPath);
+  const signature = token => `(Truncated-Signature):${token.repeat(64)}`;
+  const resource = (id, type, property, properties) => {
+    const before = { Properties: { ...properties, [property]: signature("a") },
+      Metadata: { "aws:cdk:path": `ZoolandingTest/Zoolandingpage-test-Frontend/${id.replace(/[A-F0-9]{8}$/, "")}/Resource` } };
+    const after = structuredClone(before);
+    after.Properties[property] = signature("b");
+    return { Action: "Modify", LogicalResourceId: id, ResourceType: type, Replacement: "False", Scope: ["Properties"],
+      BeforeContext: JSON.stringify(before), AfterContext: JSON.stringify(after),
+      Details: [{ Evaluation: "Static", ChangeSource: "DirectModification", Target: { Attribute: "Properties",
+        Name: property, Path: `/Properties/${property}`, RequiresRecreation: "Never", AttributeChangeType: "Modify",
+        BeforeValue: signature("a"), AfterValue: signature("b") } }] };
+  };
+  const distribution = resource("FrontendDistributionThehairnarrativeAdminTest5B029562",
+    "AWS::CloudFront::Distribution", "DistributionConfig", { Tags: [{ Key: "Environment", Value: "test" }] });
+  const edge = resource("FrontendViewerHostHeaderFunctionThehairnarrativeAdminTestD75B90C2",
+    "AWS::CloudFront::Function", "FunctionCode", { FunctionConfig: { Runtime: "cloudfront-js-2.0" }, AutoPublish: "true",
+      Tags: [{ Key: "Environment", Value: "test" }], Name: "private-admin-test" });
+  const detailed = changeSet([distribution, edge]);
+  const summary = structuredClone(detailed);
+  for (const change of summary.Changes) {
+    delete change.ResourceChange.BeforeContext;
+    delete change.ResourceChange.AfterContext;
+    delete change.ResourceChange.Details[0].Target.BeforeValue;
+    delete change.ResourceChange.Details[0].Target.AfterValue;
+  }
+  const distributionId = distribution.LogicalResourceId;
+  const edgeId = edge.LogicalResourceId;
+  const dynamic = (id, type, replacement, name, recreation) => ({ Type: "Resource", ResourceChange: {
+    Action: "Modify", LogicalResourceId: id, ResourceType: type, Replacement: replacement, Scope: ["Properties"],
+    Details: [{ Evaluation: "Dynamic", ChangeSource: "ResourceAttribute",
+      CausingEntity: `${distributionId}.DomainName`, Target: { Attribute: "Properties", Name: name,
+        RequiresRecreation: recreation } }],
+  } });
+  summary.Changes.unshift(
+    dynamic("FrontendAliasUpsertThehairnarrativeAdminTestThehairnarrativeComD6748622",
+      "Custom::ZoolandingFrontendAliasRecords", "Conditional", "Create", "Conditionally"),
+    dynamic("FrontendDistributionDomainParameterThehairnarrativeAdminTest95A70218",
+      "AWS::SSM::Parameter", "False", "Value", "Never")
+  );
+  summary.Changes[2].ResourceChange.Details = [
+    { Evaluation: "Dynamic", ChangeSource: "ResourceAttribute", CausingEntity: `${edgeId}.FunctionARN`,
+      Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } },
+    { Evaluation: "Dynamic", ChangeSource: "DirectModification",
+      Target: { Attribute: "Properties", Name: "DistributionConfig", RequiresRecreation: "Never" } },
+  ];
+  const options = { ...reviewOptions, adminStaticRotationProof: true };
+  assert.equal(reviewCompleteChangeSet(detailed, summary, options), "execute");
+  assert.throws(() => reviewCompleteChangeSet(detailed, summary, reviewOptions), /admin_change_evidence_missing/);
+  const extra = structuredClone(summary);
+  extra.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Other" } });
+  assert.throws(() => reviewCompleteChangeSet(detailed, extra, options), /admin_change_summary_invalid/);
+  for (const mutate of [
+    value => { value.Changes.pop(); },
+    value => { value.Changes[0].ResourceChange.Details[0].CausingEntity = "Other.DomainName"; },
+    value => { value.Changes[0].ResourceChange.Replacement = "False"; },
+    value => { value.Changes[1].ResourceChange.Details[0].Target.Name = "Name"; },
+    value => { value.Changes[2].ResourceChange.Details[0].CausingEntity = "Other.FunctionARN"; },
+    value => { value.Changes[2].ResourceChange.Details[1].ChangeSource = "ResourceAttribute"; },
+  ]) {
+    const changed = structuredClone(summary); mutate(changed);
+    assert.throws(() => reviewCompleteChangeSet(detailed, changed, options), /admin_change_summary_invalid/);
+  }
+  for (const mutate of [
+    value => { value.Changes.push({ Type: "Resource", ResourceChange: { Action: "Modify", LogicalResourceId: "Other" } }); },
+    value => { value.Changes[0].ResourceChange.Replacement = "True"; },
+    value => { value.Changes[0].ResourceChange.AfterContext = value.Changes[0].ResourceChange.BeforeContext; },
+    value => { value.Changes[1].ResourceChange.Details[0].Target.Name = "FunctionConfig"; },
+  ]) {
+    const changed = structuredClone(detailed); mutate(changed);
+    assert.throws(() => reviewCompleteChangeSet(changed, summary, options));
+  }
+  assert.throws(() => reviewCompleteChangeSet(detailed, undefined, options), /admin_change_summary_invalid/);
+  assert.throws(() => reviewCompleteChangeSet(detailed, summary,
+    { ...options, adminInfrastructureApproved: false, adminRouteAssociationApproved: false }));
+});
+
+test("native metadata may accompany a genuine separately approved admin addition", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const addition = { Action: "Add", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestAABBCCDD", ResourceType: "AWS::CloudFront::Distribution", AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }) };
+  assert.equal(reviewChangeSet(changeSet([...metadataOnlyFixture(), addition]), reviewOptions), "execute");
+  assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), addition]), ordinaryReview), /admin_change_requires_approvals/);
+});
+
+test("metadata classification cannot hide runtime, unknown-context or extra-property changes", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const [index, mutate] of [
+    [0, value => { value.Properties.Code.S3Key = "changed.zip"; }],
+    [0, value => { value.Metadata["aws:asset:property"] = "Role"; }],
+    [0, value => { value.Extra = "unexpected"; }],
+    [1, value => { value.Properties.Unexpected = true; }],
+    [1, value => { value.Metadata["aws:cdk:path"] = "changed"; }],
+  ]) {
+    const resources = metadataOnlyFixture();
+    const after = JSON.parse(resources[index].AfterContext); mutate(after);
+    resources[index].AfterContext = JSON.stringify(after);
+    assert.throws(() => reviewChangeSet(changeSet(resources), ordinaryReview), /metadata_change_forbidden/);
+  }
+});
+
+test("native metadata requires matching complete static detail and scope", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const index of [0, 1]) for (const mutate of [
+    value => { delete value.BeforeContext; },
+    value => { delete value.Details; },
+    value => { value.Details[0].Evaluation = "Dynamic"; },
+    value => { value.Details[0].Target.AfterValue = "mismatch"; },
+    value => { value.Details[0].Target.Path = "/Properties/Code"; },
+    value => { value.Details[0].Target.RequiresRecreation = "Always"; },
+    value => { value.Scope.push("Properties", "Metadata"); },
+  ]) {
+    const resources = metadataOnlyFixture(); mutate(resources[index]);
+    assert.throws(() => reviewChangeSet(changeSet(resources), ordinaryReview), /metadata_change_forbidden|context_invalid/);
+  }
+});
+
+test("metadata no-op never skips stateful, production, deletion, replacement or unknown entries", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const resource of [
+    { LogicalResourceId: "RetainedTable", ResourceType: "AWS::DynamoDB::Table", Action: "Modify", Replacement: "Conditional" },
+    { LogicalResourceId: "RetainedBucket", ResourceType: "AWS::S3::Bucket", Action: "Remove" },
+    { LogicalResourceId: "OtherFunction", ResourceType: "AWS::Lambda::Function", Action: "Modify", Replacement: "True" },
+    { ...metadataOnlyFixture()[0], LogicalResourceId: "ProductionProvider" },
+    { ...metadataOnlyFixture()[1], LogicalResourceId: "OtherMetadata" },
+    { ...metadataOnlyFixture()[1], Action: "Add" },
+    { ...metadataOnlyFixture()[1], Replacement: "True" },
+  ]) assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), resource]), ordinaryReview));
+  const payload = changeSet(metadataOnlyFixture());
+  payload.Changes.push({ Type: "Unknown" });
+  assert.throws(() => reviewChangeSet(payload, ordinaryReview), /change_set_entry_invalid/);
+});
+
+test("functional ordinary changes never become metadata no-ops", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const functionChange = { Action: "Modify", LogicalResourceId: "FrontendSsrFunction47B61DD8", ResourceType: "AWS::Lambda::Function", Replacement: "False", Scope: ["Properties"], BeforeContext: JSON.stringify({ Code: { S3Key: "before.zip" }, Environment: { Variables: { NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx" } } }), AfterContext: JSON.stringify({ Code: { S3Key: "after.zip" }, Environment: { Variables: { NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx" } } }) };
+  assert.equal(reviewChangeSet(changeSet([...metadataOnlyFixture(), functionChange]), ordinaryReview), "execute");
+  assert.throws(() => reviewChangeSet(changeSet([...metadataOnlyFixture(), functionChange]), reviewOptions), /shared_ssr_change_forbidden/);
+});
+
+test("normal deploy and rollback never add, modify, replace or remove the retained prerequisite certificate", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  for (const approved of [false, true]) for (const action of ["Add", "Modify", "Remove"]) {
+    const options = { ...reviewOptions, adminInfrastructureApproved: approved, adminRouteAssociationApproved: approved };
+    assert.throws(() => reviewChangeSet(changeSet([{ LogicalResourceId: "ThnAdminTestCertificate", ResourceType: "AWS::CertificateManager::Certificate",
+      Action: action, Replacement: "False" }]), options), /certificate_prerequisite|stateful_resource_change/);
+    assert.throws(() => reviewChangeSet(changeSet([{ LogicalResourceId: "ThnAdminTestCertificate", ResourceType: "AWS::CertificateManager::Certificate",
+      Action: "Modify", Replacement: "True" }]), options), /stateful_resource_change/);
+  }
+});
+
+function synthesizeDeliveryTemplate(adminEnabled) {
+  const environment = structuredClone(
+    environments.find((candidate) => candidate.name === "test")
+  );
+  const releaseId = "task027-fixture-release";
+  environment.frontendHosting.releaseId = releaseId;
+  environment.frontendHosting.manifestKey =
+    `frontend/angular-ssr/test/releases/${releaseId}/manifest.json`;
+  environment.frontendHosting.staticPrefix =
+    `frontend/angular-ssr/test/releases/${releaseId}/browser`;
+  environment.frontendHosting.serverBundleKey =
+    `frontend/angular-ssr/test/releases/${releaseId}/server/ssr-handler.zip`;
+  environment.frontendHosting.frontDoors = environment.frontendHosting.frontDoors.filter(
+    (frontDoor) => frontDoor.id !== "thehairnarrative-admin-test"
+  );
+  if (adminEnabled) {
+    environment.frontendHosting.frontDoors.push(buildThnAdminTestFrontDoor({
+      ...adminReleaseFixture().inputs,
+      FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: "true",
+      FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN:
+        `arn:aws:acm:us-east-1:${environment.account}:certificate/task027-fixture`,
+      FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID: "ZTHNTASK027",
+      FRONTEND_TEST_THN_ADMIN_ROUTE53_RECORDS_ENABLED: "true",
+    }, environment.account));
+  }
+  const app = new cdk.App();
+  const stack = new FrontendStack(app, "Task027DeliveryFixture", {
+    env: { account: environment.account, region: environment.region },
+    environment,
+  });
+  return Template.fromStack(stack).toJSON();
+}
+
+test("TEST deploy exposes two distinct, default-off THN admin approvals", () => {
+  assert.match(deploy, /approve_thn_admin_dns_tls_distribution:/);
+  assert.match(deploy, /approve_thn_admin_route_association:/);
+  assert.match(
+    deploy,
+    /ADMIN_INFRASTRUCTURE_APPROVED:.*inputs\.approve_thn_admin_dns_tls_distribution/
+  );
+  assert.match(
+    deploy,
+    /ADMIN_ROUTE_ASSOCIATION_APPROVED:.*inputs\.approve_thn_admin_route_association/
+  );
+  assert.match(deploy, /admin_approval_pair_invalid/);
+});
+
+test("TEST deploy requires the exact non-forced dev merge tree", () => {
+  assert.match(deploy, /git fetch --no-tags origin refs\/heads\/dev:refs\/remotes\/origin\/dev/);
+  assert.match(deploy, /test "\$parent_count" = "2"/);
+  assert.match(deploy, /test "\$first_parent" = "\$BEFORE_SHA"/);
+  assert.match(deploy, /test "\$second_parent" = "\$\(git rev-parse refs\/remotes\/origin\/dev\)"/);
+  assert.match(
+    deploy,
+    /test "\$\(git rev-parse 'HEAD\^\{tree\}'\)" = "\$\(git rev-parse 'refs\/remotes\/origin\/dev\^\{tree\}'\)"/
+  );
+});
+
+test("TEST deploy transports and re-verifies one immutable CDK assembly", () => {
+  assert.match(deploy, /actions\/upload-artifact@[a-f0-9]{40}/);
+  assert.match(deploy, /actions\/download-artifact@[a-f0-9]{40}/);
+  assert.match(deploy, /artifact-ids:/);
+  assert.match(deploy, /source_sha/);
+  assert.match(deploy, /source_manifest_sha256/);
+  assert.match(deploy, /recomputed-release-manifest\.sha256/);
+  assert.match(deploy, /cmp --silent .*release-manifest\.sha256/);
+  assert.match(deploy, /retention-days: 30/);
+});
+
+test("TEST validation reads TEST Environment variables without credentials or secrets", () => {
+  const validate = deploy.replace(/\r\n/g, "\n").split("  validate:\n")[1]?.split("\n  deploy:")[0];
+  assert.ok(validate, "validate job must exist");
+  assert.match(validate, /\n    environment: test\n/);
+  assert.match(validate, /\n    permissions:\n      contents: read\n/);
+  assert.doesNotMatch(validate, /id-token:|secrets\.|configure-aws-credentials|role-to-assume/);
+});
+
+test("AWS-shaped descriptions allow no type field but reject any explicit mismatch", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const payload = changeSet([{
+    Action: "Add",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: null,
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+  }]);
+  assert.equal(reviewChangeSet(payload, reviewOptions), "execute");
+  assert.equal(reviewChangeSet({ ...payload, ChangeSetType: "UPDATE" }, reviewOptions), "execute");
+  for (const responseType of [null, "", "CREATE", "IMPORT"]) {
+    assert.throws(
+      () => reviewChangeSet({ ...payload, ChangeSetType: responseType }, reviewOptions),
+      /change_set_identity_invalid/
+    );
+  }
+  assert.throws(
+    () => reviewChangeSet(payload, { ...reviewOptions, expectedChangeSetType: "IMPORT" }),
+    /change_set_type_invalid/
+  );
+});
+
+test("AWS-shaped no-op descriptions still require exact status and identity", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const payload = {
+    ...changeSet([]), Status: "FAILED", ExecutionStatus: "UNAVAILABLE",
+    StatusReason: "The submitted information didn't contain changes. Submit different information to create a change set.",
+  };
+  assert.equal(reviewChangeSet(payload, reviewOptions), "noop");
+  assert.throws(() => reviewChangeSet({ ...payload, StatusReason: "unexpected" }, reviewOptions), /change_set_not_available/);
+  for (const key of ["StackName", "ChangeSetName", "ChangeSetId"]) {
+    assert.throws(() => reviewChangeSet({ ...payload, [key]: "unexpected" }, reviewOptions), /change_set_identity_invalid/);
+  }
+});
+
+test("TEST deploy reviews the prepared change set before exact execution", () => {
+  const prepare = runner.indexOf("--method prepare-change-set");
+  const review = runner.lastIndexOf("review-test-infra-change-set.js");
+  const execute = runner.indexOf('infra-test-aws.js" execute-change-set');
+  assert.ok(prepare >= 0, "prepare-change-set step missing");
+  assert.ok(review > prepare, "review must follow change-set preparation");
+  const templateProof = runner.indexOf('infra-test-aws.js" verify-change-set-template');
+  assert.ok(templateProof > prepare && templateProof < review,
+    "sealed template must match the prepared change set before review");
+  assert.ok(execute > review, "execution must follow review");
+  assert.match(readFileSync(path.join(root, "tools", "infra-test-aws.js"), "utf8"), /--include-property-values/);
+  assert.match(runner, /npx --no-install cdk deploy/);
+  assert.match(deploy, /npx --no-install cdk synth/);
+  assert.doesNotMatch(`${deploy}\n${runner}`, /npx cdk/);
+  assert.match(runner, /--expected-host "\$EXPECTED_HOST"/);
+  assert.match(deploy, /run-test-infra-change-set\.sh/);
+  assert.match(deploy, /Post-deploy TEST stack smoke/);
+  assert.match(runner, /if \[ "\$prepare_exit" -eq 0 \]; then/);
+  assert.ok(
+    runner.indexOf('test "$prepare_exit" -eq 0') > review,
+    "a non-noop execution must require successful CDK preparation"
+  );
+  assert.equal(count(deploy, "id-token: write"), 1);
+});
+
+test("TEST helpers use only sealed artifact-derived CDK roles and preserve the parent CDK identity", () => {
+  const rollback = readFileSync(rollbackPath, "utf8");
+  for (const workflow of [deploy, rollback]) {
+    assert.match(workflow, /EXPECTED_RELEASE_MANIFEST_SHA256:/);
+    assert.match(workflow, /EXPECTED_RELEASE_SOURCE_SHA:/);
+    assert.match(workflow, /EXPECTED_RELEASE_RUN_ID:/);
+    assert.match(workflow, /infra-test-aws\.js verify-public-release/);
+    assert.doesNotMatch(workflow, /aws cloudformation describe-stacks/);
+  }
+  assert.match(deploy, /cp tools\/infra-test-aws\.js .release\/release-tools\//);
+  assert.match(runner, /infra-test-aws\.js" describe-change-set/);
+  assert.match(runner, /proof_mode="\$\(node "\$RELEASE_ROOT\/release-tools\/thn-admin-release\.js" verify/);
+  assert.match(runner, /if \[ "\$proof_mode" != "none" \]; then[\s\S]*describe-change-set-summary/);
+  assert.match(runner, /--admin-static-rotation-proof "\$static_rotation_proof"/);
+  assert.match(runner, /summary_args\+=\(--summary-description-path "\$summary"\)/);
+  assert.match(runner, /"\$\{summary_args\[@\]\}"\)/);
+  assert.match(runner, /infra-test-aws\.js" execute-change-set/);
+  assert.match(runner, /infra-test-aws\.js" wait-stack/);
+  assert.doesNotMatch(runner, /aws cloudformation|export AWS_ACCESS_KEY_ID|GITHUB_ENV/);
+  const smoke = readFileSync(path.join(root, "tools", "smoke-test-infra-stack.sh"), "utf8");
+  assert.match(smoke, /infra-test-aws\.js" smoke/);
+  assert.doesNotMatch(smoke, /aws cloudformation|aws cloudfront/);
+});
+
+test("TEST deploy and rollback bind credentials and change sets to the exact AWS target", () => {
+  const rollback = readFileSync(rollbackPath, "utf8");
+  for (const workflow of [deploy, rollback]) {
+    assert.match(workflow, /EXPECTED_AWS_ACCOUNT_ID: ['"]?765932874577['"]?/);
+    assert.match(workflow, /EXPECTED_AWS_REGION: us-east-1/);
+    assert.match(workflow, /aws sts get-caller-identity/);
+    assert.match(workflow, /test "\$caller_account" = "\$EXPECTED_AWS_ACCOUNT_ID"/);
+    assert.match(workflow, /test "\$AWS_REGION" = "\$EXPECTED_AWS_REGION"/);
+    assert.match(workflow, /aws-region: us-east-1/);
+    assert.match(workflow, /arn:aws:iam::765932874577:role\//);
+    assert.doesNotMatch(workflow, /vars\.AWS_REGION/);
+  }
+  assert.match(runner, /--expected-account-id "\$EXPECTED_AWS_ACCOUNT_ID"/);
+  assert.match(runner, /--expected-region "\$EXPECTED_AWS_REGION"/);
+});
+
+test("TEST rollback selects a recorded immutable Deploy Test artifact", () => {
+  assert.ok(existsSync(rollbackPath), "rollback-test.yml must exist");
+  const rollback = readFileSync(rollbackPath, "utf8");
+  for (const input of [
+    "source_run_id",
+    "source_artifact_id",
+    "source_sha",
+    "source_manifest_sha256",
+    "approve_thn_admin_dns_tls_distribution",
+    "approve_thn_admin_route_association",
+  ]) {
+    assert.match(rollback, new RegExp(`${input}:`));
+  }
+  assert.match(rollback, /run\.path !== '\.github\/workflows\/deploy-test\.yml'/);
+  assert.match(rollback, /listWorkflowRunArtifacts/);
+  assert.match(rollback, /artifact\.id !== artifactId/);
+  assert.match(rollback, /artifact\.expired/);
+  assert.match(rollback, /expectedArtifactName/);
+  assert.match(rollback, /artifact-ids:/);
+  assert.match(rollback, /run-id:/);
+  assert.match(rollback, /ref: \$\{\{ github\.sha \}\}[\s\S]*path: \.trusted-rollback/);
+  assert.match(rollback, /git -C \.trusted-rollback rev-parse HEAD/);
+  assert.match(rollback, /git -C \.trusted-rollback status --porcelain/);
+  assert.match(rollback, /bash \.trusted-rollback\/tools\/run-test-infra-change-set\.sh/);
+  assert.doesNotMatch(rollback, /bash \.transport\/\.release\/release-tools\/run-test-infra-change-set\.sh/);
+  assert.match(runner, /node "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)\/infra-test-aws\.js" verify-change-set-template/);
+  assert.equal(count(rollback, "id-token: write"), 1);
+});
+
+test("change-set reviewer accepts only the exact approved THN admin surface", () => {
+  assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
+  const { reviewChangeSet } = require(reviewerPath);
+  const result = reviewChangeSet(
+    changeSet([
+      {
+        Action: "Modify",
+        LogicalResourceId: "CDKMetadata",
+        ResourceType: "AWS::CDK::Metadata",
+        Replacement: "False",
+        BeforeContext: JSON.stringify({ Analytics: "v2:deflate64:before" }),
+        AfterContext: JSON.stringify({ Analytics: "v2:deflate64:after" }),
+      },
+      {
+        Action: "Add",
+        LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+        ResourceType: "AWS::CloudFront::Distribution",
+        Replacement: null,
+        AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+      },
+      {
+        Action: "Modify",
+        LogicalResourceId: "FrontendSsrFunction47B61DD8",
+        ResourceType: "AWS::Lambda::Function",
+        Replacement: "False",
+        BeforeContext: JSON.stringify({
+          Environment: {
+            Variables: {
+              NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx",
+            },
+          },
+        }),
+        AfterContext: JSON.stringify({
+          Environment: {
+            Variables: {
+              NG_ALLOWED_HOSTS:
+                "test.zoolandingpage.com.mx,admin-test.thehairnarrative.com",
+            },
+          },
+        }),
+      },
+    ]),
+    reviewOptions
+  );
+  assert.equal(result, "execute");
+});
+
+test("actual synthesized THN activation inventory passes the exact reviewer", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const before = synthesizeDeliveryTemplate(false);
+  const after = synthesizeDeliveryTemplate(true);
+  const logicalIds = [...new Set([
+    ...Object.keys(before.Resources),
+    ...Object.keys(after.Resources),
+  ])].sort();
+  const resourceChanges = [];
+  for (const logicalId of logicalIds) {
+    const oldResource = before.Resources[logicalId];
+    const newResource = after.Resources[logicalId];
+    if (!oldResource && newResource) {
+      resourceChanges.push({
+        Action: "Add",
+        LogicalResourceId: logicalId,
+        ResourceType: newResource.Type,
+        Replacement: null,
+        AfterContext: JSON.stringify(newResource.Properties || {}),
+      });
+    } else if (
+      oldResource
+      && newResource
+      && JSON.stringify(oldResource) !== JSON.stringify(newResource)
+    ) {
+      resourceChanges.push({
+        Action: "Modify",
+        LogicalResourceId: logicalId,
+        ResourceType: newResource.Type,
+        Replacement: "False",
+        BeforeContext: JSON.stringify(oldResource.Properties || {}),
+        AfterContext: JSON.stringify(newResource.Properties || {}),
+      });
+    }
+  }
+  assert.ok(resourceChanges.length > 0);
+  assert.equal(resourceChanges.some((change) => change.Action === "Remove"), false);
+  assert.equal(
+    resourceChanges.some((change) => change.LogicalResourceId.startsWith("FrontendSsrFunction")),
+    true
+  );
+  assert.equal(reviewChangeSet(changeSet(resourceChanges), reviewOptions), "execute");
+});
+
+test("private SSR resources require paired approval and exact admin identities", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const privateFunction = {
+    Action: "Add",
+    LogicalResourceId: "FrontendThnAdminSsrFunction874373CC",
+    ResourceType: "AWS::Lambda::Function",
+    Replacement: null,
+    AfterContext: JSON.stringify({
+      FunctionName: "zoolandingpage-test-frontend-thn-admin-ssr",
+      Code: { S3Key: "frontend/angular-ssr/test/releases/selected/server/ssr-handler.zip" },
+      Environment: { Variables: { NG_ALLOWED_HOSTS: "admin-test.thehairnarrative.com,*.lambda-url.us-east-1.on.aws", ZLP_RELEASE_ID: "selected" } },
+    }),
+  };
+  assert.equal(reviewChangeSet(changeSet([privateFunction]), reviewOptions), "execute");
+  assert.throws(() => reviewChangeSet(changeSet([privateFunction]), ordinaryReview), /admin_change_requires_approvals/);
+  for (const changed of [
+    { ...privateFunction, LogicalResourceId: "FrontendSsrFunction47B61DD8" },
+    { ...privateFunction, LogicalResourceId: "FrontendThnAdminSsrFunctionEvil874373CC" },
+    { ...privateFunction, ResourceType: "AWS::IAM::Role" },
+    { ...privateFunction, Action: "Modify", Replacement: "False" },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([changed]), reviewOptions));
+  }
+});
+
+test("admin migration retires only the old shared Lambda permissions for its distribution", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const hostChange = {
+    Action: "Modify",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: "False",
+    BeforeContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"], Origins: ["shared-ssr"] }),
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"], Origins: ["private-ssr"] }),
+  };
+  const oldPermission = {
+    Action: "Remove",
+    LogicalResourceId: "FrontendSsrFunctionAllowCloudFrontInvokeFunctionThehairnarrativeAdminTest0899BBD5",
+    ResourceType: "AWS::Lambda::Permission",
+    Replacement: null,
+  };
+  const changes = [hostChange, oldPermission, {
+    ...oldPermission,
+    LogicalResourceId: "FrontendSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminTest8C77CFB7",
+  }];
+  assert.equal(reviewChangeSet(changeSet(changes), reviewOptions), "execute");
+  assert.throws(() => reviewChangeSet(changeSet(changes), ordinaryReview), /admin_change_requires_approvals/);
+  for (const changed of [
+    { ...oldPermission, LogicalResourceId: "FrontendSsrFunctionAllowCloudFrontInvokeFunctionOtherHostAABBCCDD" },
+    { ...oldPermission, ResourceType: "AWS::Lambda::Function" },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([hostChange, changed]), reviewOptions));
+  }
+});
+
+test("admin migration may replace only its origin URL permission with the private Lambda URL", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const oldProperties = {
+    Action: "lambda:InvokeFunctionUrl",
+    Principal: "cloudfront.amazonaws.com",
+    SourceArn: { Ref: "FrontendDistributionThehairnarrativeAdminTest5B029562" },
+    FunctionName: { "Fn::GetAtt": ["FrontendSsrFunctionFunctionUrlD978E4C7", "FunctionArn"] },
+  };
+  const newProperties = {
+    ...oldProperties,
+    FunctionName: { "Fn::GetAtt": ["FrontendThnAdminSsrFunctionFunctionUrlA847D4A7", "FunctionArn"] },
+  };
+  const permission = {
+    Action: "Modify",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C",
+    ResourceType: "AWS::Lambda::Permission",
+    Replacement: "True",
+    BeforeContext: JSON.stringify(oldProperties),
+    AfterContext: JSON.stringify(newProperties),
+  };
+  assert.equal(reviewChangeSet(changeSet([permission, {
+    Action: "Modify",
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: "False",
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+  }]), reviewOptions), "execute");
+  for (const changed of [
+    { ...permission, AfterContext: JSON.stringify({ ...newProperties, Principal: "*" }) },
+    { ...permission, AfterContext: JSON.stringify({ ...newProperties, FunctionName: { "Fn::GetAtt": ["FrontendSsrFunctionFunctionUrlD978E4C7", "FunctionArn"] } }) },
+    { ...permission, LogicalResourceId: permission.LogicalResourceId.replace("ThehairnarrativeAdminTest", "Other") },
+    { ...permission, ResourceType: "AWS::IAM::Role" },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([changed]), reviewOptions));
+  }
+});
+
+test("native CloudFormation permission replacement proves the private URL dependency", () => {
+  const { reviewChangeSet } = require(reviewerPath);
+  const logicalId = "FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiForZoolandingTestZoolandingpagetestFrontendFrontendDistributionThehairnarrativeAdminTestOrigin16C8F5824458F999C";
+  const oldArn = "arn:aws:lambda:us-east-1:765932874577:function:zoolandingpage-test-frontend-ssr";
+  const pending = "{{changeSet:KNOWN_AFTER_APPLY}}";
+  const properties = {
+    FunctionName: oldArn,
+    Action: "lambda:InvokeFunctionUrl",
+    SourceArn: "arn:aws:cloudfront::765932874577:distribution/E3FIRFPVARY6BX",
+    Principal: "cloudfront.amazonaws.com",
+  };
+  const metadata = { "aws:cdk:path": `ZoolandingTest/Zoolandingpage-test-Frontend/FrontendDistributionThehairnarrativeAdminTest/Origin1/InvokeFromApiFor${logicalId.slice("FrontendDistributionThehairnarrativeAdminTestOrigin1InvokeFromApiFor".length)}` };
+  const target = { Attribute: "Properties", Name: "FunctionName", RequiresRecreation: "Always",
+    Path: "/Properties/FunctionName", BeforeValue: oldArn, AfterValue: pending, AttributeChangeType: "Modify" };
+  const permission = {
+    Action: "Modify", LogicalResourceId: logicalId, ResourceType: "AWS::Lambda::Permission",
+    Replacement: "True", Scope: ["Properties"],
+    BeforeContext: JSON.stringify({ Properties: properties, Metadata: metadata }),
+    AfterContext: JSON.stringify({ Properties: { ...properties, FunctionName: pending }, Metadata: metadata }),
+    Details: [
+      { Target: target, Evaluation: "Dynamic", ChangeSource: "DirectModification" },
+      { Target: target, Evaluation: "Static", ChangeSource: "ResourceAttribute",
+      CausingEntity: "FrontendThnAdminSsrFunctionFunctionUrlA847D4A7.FunctionArn" },
+    ],
+  };
+  const hostChange = {
+    Action: "Modify", LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution", Replacement: "False",
+    AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+  };
+  assert.equal(reviewChangeSet(changeSet([permission, hostChange]), reviewOptions), "execute");
+  for (const changed of [
+    { ...permission, Details: [permission.Details[0]] },
+    { ...permission, Details: [permission.Details[0], { ...permission.Details[1], CausingEntity: "FrontendSsrFunctionFunctionUrlD978E4C7.FunctionArn" }] },
+    { ...permission, AfterContext: JSON.stringify({ Properties: { ...properties, FunctionName: pending, Principal: "*" }, Metadata: metadata }) },
+    { ...permission, BeforeContext: JSON.stringify({ Properties: { ...properties, FunctionName: "arn:aws:lambda:us-east-1:765932874577:function:other" }, Metadata: metadata }) },
+  ]) {
+    assert.throws(() => reviewChangeSet(changeSet([changed, hostChange]), reviewOptions));
+  }
+});
+
+test("change-set reviewer allows ordinary SSR drift when the admin host membership is unchanged", () => {
+  assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
+  const { reviewChangeSet } = require(reviewerPath);
+  const before = {
+    Code: { S3Key: "before.zip" },
+    Environment: {
+      Variables: {
+        NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx,admin-test.thehairnarrative.com",
+      },
+    },
+  };
+  const after = {
+    ...before,
+    Code: { S3Key: "after.zip" },
+  };
+  const result = reviewChangeSet(
+    changeSet([{
+      Action: "Modify",
+      LogicalResourceId: "FrontendSsrFunction47B61DD8",
+      ResourceType: "AWS::Lambda::Function",
+      Replacement: "False",
+      BeforeContext: JSON.stringify(before),
+      AfterContext: JSON.stringify(after),
+    }]),
+    {
+      ...reviewOptions,
+      adminInfrastructureApproved: false,
+      adminRouteAssociationApproved: false,
+    }
+  );
+  assert.equal(result, "execute");
+});
+
+test("change-set reviewer rejects collateral SSR changes during admin activation", () => {
+  assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
+  const { reviewChangeSet } = require(reviewerPath);
+  assert.throws(
+    () => reviewChangeSet(
+      changeSet([{
+        Action: "Modify",
+        LogicalResourceId: "FrontendSsrFunction47B61DD8",
+        ResourceType: "AWS::Lambda::Function",
+        Replacement: "False",
+        BeforeContext: JSON.stringify({
+          MemorySize: 512,
+          Environment: { Variables: { NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx" } },
+        }),
+        AfterContext: JSON.stringify({
+          MemorySize: 1024,
+          Environment: {
+            Variables: {
+              NG_ALLOWED_HOSTS:
+                "test.zoolandingpage.com.mx,admin-test.thehairnarrative.com",
+            },
+          },
+        }),
+      }]),
+      reviewOptions
+    ),
+    /shared_ssr_change_forbidden/
+  );
+});
+
+test("change-set reviewer requires approvals only when admin host membership changes", () => {
+  assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
+  const { reviewChangeSet } = require(reviewerPath);
+  assert.throws(
+    () => reviewChangeSet(
+      changeSet([{
+        Action: "Modify",
+        LogicalResourceId: "FrontendSsrFunction47B61DD8",
+        ResourceType: "AWS::Lambda::Function",
+        Replacement: "False",
+        BeforeContext: JSON.stringify({
+          Environment: { Variables: { NG_ALLOWED_HOSTS: "test.zoolandingpage.com.mx" } },
+        }),
+        AfterContext: JSON.stringify({
+          Environment: {
+            Variables: {
+              NG_ALLOWED_HOSTS:
+                "test.zoolandingpage.com.mx,admin-test.thehairnarrative.com",
+            },
+          },
+        }),
+      }]),
+      {
+        ...reviewOptions,
+        adminInfrastructureApproved: false,
+        adminRouteAssociationApproved: false,
+      }
+    ),
+    /admin_change_requires_approvals/
+  );
+});
+
+test("change-set reviewer requires both approvals and rejects unrelated drift", () => {
+  assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
+  const { reviewChangeSet } = require(reviewerPath);
+  const payload = changeSet([
+    {
+      Action: "Add",
+      LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+      ResourceType: "AWS::CloudFront::Distribution",
+      Replacement: null,
+      AfterContext: JSON.stringify({ Aliases: ["admin-test.thehairnarrative.com"] }),
+    },
+  ]);
+  assert.throws(
+    () => reviewChangeSet(payload, { ...reviewOptions, adminRouteAssociationApproved: false }),
+    /admin_approval_pair_invalid/
+  );
+  assert.throws(
+    () =>
+      reviewChangeSet(
+        changeSet([
+          {
+            Action: "Modify",
+            LogicalResourceId: "FrontendDistributionTest9CFE0000",
+            ResourceType: "AWS::CloudFront::Distribution",
+            Replacement: "False",
+            AfterContext: "{}",
+          },
+        ]),
+        reviewOptions
+      ),
+    /non_admin_resource_change_forbidden/
+  );
+});
+
+test("change-set reviewer rejects production aliases, deletion, and replacement", () => {
+  assert.ok(existsSync(reviewerPath), "change-set reviewer must exist");
+  const { reviewChangeSet } = require(reviewerPath);
+  const adminBase = {
+    LogicalResourceId: "FrontendDistributionThehairnarrativeAdminTest5B029562",
+    ResourceType: "AWS::CloudFront::Distribution",
+    Replacement: null,
+  };
+  assert.throws(
+    () =>
+      reviewChangeSet(
+        changeSet([
+          {
+            ...adminBase,
+            Action: "Add",
+            AfterContext: JSON.stringify({ Aliases: ["thehairnarrative.com"] }),
+          },
+        ]),
+        reviewOptions
+      ),
+    /production_alias_forbidden/
+  );
+  assert.throws(
+    () =>
+      reviewChangeSet(
+        changeSet([
+          {
+            Action: "Remove",
+            LogicalResourceId: "FrontendArtifactBucket",
+            ResourceType: "AWS::S3::Bucket",
+            Replacement: null,
+          },
+        ]),
+        { ...reviewOptions, adminInfrastructureApproved: false, adminRouteAssociationApproved: false }
+      ),
+    /stateful_resource_change_forbidden/
+  );
+  assert.throws(
+    () =>
+      reviewChangeSet(
+        changeSet([{ ...adminBase, Action: "Modify", Replacement: "True" }]),
+        reviewOptions
+      ),
+    /stateful_resource_change_forbidden/
+  );
+  assert.throws(
+    () =>
+      reviewChangeSet(
+        changeSet([{
+          Action: "Modify",
+          LogicalResourceId: "CDKMetadata",
+          ResourceType: "AWS::CDK::Metadata",
+          Replacement: "False",
+          BeforeContext: JSON.stringify({ Analytics: "before" }),
+          AfterContext: JSON.stringify({ Analytics: "after", Unexpected: true }),
+        }]),
+        reviewOptions
+      ),
+    /cdk_metadata_change_forbidden/
+  );
+  assert.throws(
+    () => reviewChangeSet(
+      {
+        ...changeSet([{ ...adminBase, Action: "Add", AfterContext: "{}" }]),
+        ChangeSetId:
+          "arn:aws:cloudformation:us-east-1:999999999999:changeSet/release-123-1/00000000-0000-0000-0000-000000000001",
+      },
+      {
+        ...reviewOptions,
+        expectedChangeSetArn:
+          "arn:aws:cloudformation:us-east-1:999999999999:changeSet/release-123-1/00000000-0000-0000-0000-000000000001",
+      }
+    ),
+    /change_set_arn_invalid/
+  );
+  assert.throws(
+    () => reviewChangeSet(
+      {
+        ...changeSet([{ ...adminBase, Action: "Add", AfterContext: "{}" }]),
+        StackId:
+          "arn:aws:cloudformation:us-east-1:999999999999:stack/ZoolandingTest-Zoolandingpage-test-Frontend/00000000-0000-0000-0000-000000000001",
+      },
+      reviewOptions
+    ),
+    /stack_arn_invalid/
+  );
+  assert.throws(
+    () => reviewChangeSet(
+      changeSet([{ ...adminBase, Action: "Add", AfterContext: "{}" }]),
+      { ...reviewOptions, expectedRegion: "us-west-2" }
+    ),
+    /test_target_invalid/
+  );
+});

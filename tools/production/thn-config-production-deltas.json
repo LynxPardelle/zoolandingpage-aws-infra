@@ -1,0 +1,194 @@
+{
+  "account": "765932874577",
+  "deltas": {
+    "zoolanding-config-authoring-production-deploy": {
+      "baseline": {
+        "policies": [
+          {
+            "name": "ConfigAuthoringProductionDeployRoleDefaultPolicyAA503F49",
+            "sha256": "70515cf61ed78662807435a6324d684f85ed6d28819954428068884d3cddac31",
+            "type": "inline"
+          }
+        ],
+        "policySetSha256": "722883dcc5e8ea27d61ac1dc9715846a7a877d95e02f5553cbcf7a5721081759",
+        "policySha256": "722883dcc5e8ea27d61ac1dc9715846a7a877d95e02f5553cbcf7a5721081759",
+        "roleId": "AROA3EVJIFNIXS7QJUARU",
+        "trustSha256": "3382155c2edc4e49667564dbf8eada6e1ed3e6ce678adbdc2d46f6f58aefbb2c"
+      },
+      "policy": {
+        "Statement": [
+          {
+            "Action": [
+              "cloudformation:ListStackResources",
+              "cloudformation:GetTemplate"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-config-authoring/6ee44bd0-2cee-11f1-8f03-0afff5552ab7",
+            "Sid": "NativeAuthoringStackSnapshotRead"
+          },
+          {
+            "Action": [
+              "s3:GetBucketVersioning"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::zoolanding-config-payloads",
+            "Sid": "AuthoringVersionedPackageBucketRead"
+          },
+          {
+            "Action": [
+              "iam:ListRolePolicies",
+              "iam:ListAttachedRolePolicies"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:iam::765932874577:role/zoolanding-config-authoring-production-deploy",
+            "Sid": "SealedAuthoringPolicyMetadataList"
+          }
+        ],
+        "Version": "2012-10-17"
+      },
+      "policySha256": "d7682fbc6d2f84b14cb913c75ce42eb14096ae50173f6424a4e45c18c94d89b2"
+    },
+    "zoolanding-config-runtime-read-production-cfn-exec": {
+      "baseline": {
+        "policies": [
+          {
+            "name": "RuntimeReadCloudFormationExecutionRoleDefaultPolicy764300E8",
+            "sha256": "6a6e4812533f8f1884163704da6d0ac9121a0cb11fdd99a8ccdba5e50ed329f8",
+            "type": "inline"
+          }
+        ],
+        "policySetSha256": "69830de97c5b18987127011892269d850c69df2b94b70f78b25f78c7dd5c3f04",
+        "policySha256": "69830de97c5b18987127011892269d850c69df2b94b70f78b25f78c7dd5c3f04",
+        "roleId": "AROA3EVJIFNIW265AVQGQ",
+        "trustSha256": "9807ebf5cf955270cb96973d9512cfefa44bf1d342556d22f16700959955df18"
+      },
+      "policy": {
+        "Statement": [
+          {
+            "Action": [
+              "s3:GetObject",
+              "s3:GetObjectVersion"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::zoolanding-config-payloads/system/thn-runtime/releases/*",
+            "Sid": "SealedRuntimeCodePackageRead"
+          }
+        ],
+        "Version": "2012-10-17"
+      },
+      "policySha256": "1359830dadae0d4b0db4ed3a667389abad4551472f74ca3eede0f95ec4a7f7fc"
+    },
+    "zoolanding-config-runtime-read-production-github-deploy": {
+      "baseline": {
+        "policies": [
+          {
+            "name": "RuntimeReadGithubDeployRoleDefaultPolicy5B21C224",
+            "sha256": "1d25788cf14a73b724c48dd3a1fc635ffd5642fca64357af685305d816fb4d0d",
+            "type": "inline"
+          }
+        ],
+        "policySetSha256": "a3ab01344f8cb6c27cf938648b62ec321f6dcdb10f279e9520fbf30af3977a34",
+        "policySha256": "a3ab01344f8cb6c27cf938648b62ec321f6dcdb10f279e9520fbf30af3977a34",
+        "roleId": "AROA3EVJIFNIQEFH2AA6T",
+        "trustSha256": "8e309a9e70bf4567c8e0f2445d43cd517a488275e8191e0f3693fdf21762c260"
+      },
+      "policy": {
+        "Statement": [
+          {
+            "Action": [
+              "cloudformation:ListStackResources",
+              "cloudformation:GetTemplate"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-config-runtime-read/af37bbe0-2cee-11f1-990e-12b05513a495",
+            "Sid": "NativeProductionBaselineReads"
+          },
+          {
+            "Action": [
+              "cloudformation:DescribeStacks",
+              "cloudformation:DescribeStackResource"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-config-runtime-read-test/654d8f60-6d02-11f1-aa08-0e6c5445b1d9",
+            "Sid": "TrustedTestArtifactStackReads"
+          },
+          {
+            "Action": [
+              "lambda:GetFunctionConfiguration",
+              "lambda:GetRuntimeManagementConfig"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-config-runtime-ConfigRuntimeReadFunctio-tyt19jOfQNXg",
+            "Sid": "ProductionCodePostflightRead"
+          },
+          {
+            "Action": [
+              "lambda:GetFunctionConfiguration",
+              "lambda:GetAlias"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-config-runtime-ConfigRuntimeReadFunctio-h2B86UU86X18",
+            "Sid": "TrustedTestLiveVersionRead"
+          },
+          {
+            "Action": [
+              "lambda:GetFunction"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-config-runtime-ConfigRuntimeReadFunctio-h2B86UU86X18:*",
+            "Sid": "TrustedTestZipVersionRead"
+          },
+          {
+            "Action": [
+              "s3:GetBucketVersioning"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::zoolanding-config-payloads",
+            "Sid": "VersionedReleaseBucketRead"
+          },
+          {
+            "Action": [
+              "s3:GetObject",
+              "s3:GetObjectVersion"
+            ],
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::zoolanding-config-payloads/system/thn-runtime/releases/*",
+            "Sid": "ImmutableRuntimePackageRead"
+          },
+          {
+            "Action": [
+              "s3:PutObject"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "s3:x-amz-server-side-encryption": "AES256"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": "arn:aws:s3:::zoolanding-config-payloads/system/thn-runtime/releases/*",
+            "Sid": "ImmutableRuntimePackageWrite"
+          },
+          {
+            "Action": [
+              "iam:GetRole",
+              "iam:GetRolePolicy",
+              "iam:ListRolePolicies",
+              "iam:ListAttachedRolePolicies"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:iam::765932874577:role/zoolanding-config-runtime-read-production-github-deploy",
+              "arn:aws:iam::765932874577:role/zoolanding-config-runtime-read-production-cfn-exec"
+            ],
+            "Sid": "SealedDeploymentPolicyMetadataRead"
+          }
+        ],
+        "Version": "2012-10-17"
+      },
+      "policySha256": "7746ee02cf48d256bfc96adb3a78ad4b6d949159ddaefd4123d8d653855c0018"
+    }
+  },
+  "environment": "production",
+  "region": "us-east-1",
+  "schemaVersion": 1
+}

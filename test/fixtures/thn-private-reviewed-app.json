@@ -1,0 +1,53 @@
+{
+  "manifest": {
+    "version": 1,
+    "environment": "test",
+    "releaseId": "9850f5f3d5b435d90387cf6a2f73323a249452d1",
+    "staticAssetPaths": [
+      "/browser/chunk-B0O2UpYB.js",
+      "/browser/chunk-B4NB1lQT.js",
+      "/browser/chunk-BHagW0NF.js",
+      "/browser/chunk-BpXjAlKe.js",
+      "/browser/chunk-BVQ2HJPU.js",
+      "/browser/chunk-BXO6m1KQ.js",
+      "/browser/chunk-BZRHtE8W.js",
+      "/browser/chunk-C8iVmUu4.js",
+      "/browser/chunk-C8Shrigl.js",
+      "/browser/chunk-CDlzRN_n.js",
+      "/browser/chunk-CdslFKqx.js",
+      "/browser/chunk-Ch8xgX-A.js",
+      "/browser/chunk-CnEsEV8Q.js",
+      "/browser/chunk-CPwH5gut.js",
+      "/browser/chunk-CufHKOuA.js",
+      "/browser/chunk-Db25SHZb.js",
+      "/browser/chunk-DEanXAbQ.js",
+      "/browser/chunk-DiaQA9vL.js",
+      "/browser/chunk-DLamCbEu.js",
+      "/browser/chunk-DTAJ8sob.js",
+      "/browser/chunk-DUXtHD0n.js",
+      "/browser/chunk-eVyr0aOw.js",
+      "/browser/chunk-fESrdgGw.js",
+      "/browser/chunk-KFx0GTIz.js",
+      "/browser/chunk-Q_aXTDli.js",
+      "/browser/chunk-zJ2gXa_q.js",
+      "/browser/main-HSRXLKKK.js",
+      "/browser/styles-4RCU3HW5.css",
+      "/browser/thn-admin-assets/0e44026ad31376af.open-sans-latin-400-normal.woff2",
+      "/browser/thn-admin-assets/5a9706f9000054c7.angora-styles.css",
+      "/browser/thn-admin-assets/725d78a558da7c48.newsreader-latin-400-normal.woff2",
+      "/browser/thn-admin-assets/7ce74c920e6a5532.animations.css",
+      "/browser/thn-admin-assets/a97a6ed7ef9f75c4.open-sans-latin-600-normal.woff2",
+      "/browser/thn-admin-assets/d3f39a455917af8b.angora-styles-responsive.css",
+      "/browser/thn-admin-assets/d411a65041e3042e.newsreader-latin-500-normal.woff2",
+      "/browser/thn-admin-assets/fd83d736926363ca.zoolandingpage-default-favicon.svg"
+    ]
+  },
+  "coordinates": {
+    "artifactId": "10946585127",
+    "sourceSha": "9850f5f3d5b435d90387cf6a2f73323a249452d1",
+    "runId": "36362456029",
+    "runAttempt": "1",
+    "deliverySha256": "8e50e06e655ff6d50d40188ebdf79ebc93d149275627c066ad986c15d7da623a",
+    "manifestSha256": "84c7ed5861acebe193e0da0b3848b566bb133c8842875e5d91e86bc3d789f78d"
+  }
+}

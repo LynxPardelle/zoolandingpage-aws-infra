@@ -1,5 +1,7 @@
 "use strict";
 
+const { selectThnAdminRelease } = require("../tools/thn-admin-release");
+
 const expectedAccount = "765932874577";
 const defaultRegion = "us-east-1";
 
@@ -114,12 +116,18 @@ const runtimeReadDeploymentTargets = {
   },
 };
 
+const serviceRepositoryBootstrap = {
+  samArtifactBucketName: "aws-sam-cli-managed-default-samclisourcebucket-obthkeitxden",
+};
+
 const backendApiFrontDoors = {
   test: {
     authAdmin: { domainName: "tcuqltoeig.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
+    thnAuthAdmin: { domainName: "d6h2nzsn0i.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     comboCatalog: { domainName: "5g5e63f3g4.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     contentHub: { domainName: "z1pub0v0c7.execute-api.us-east-1.amazonaws.com", originPath: "/test" },
     apiProxy: { domainName: "11zpm6wug2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
+    thnAuthRuntime: { domainName: "5paiwwz4zl.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
   },
   production: {
     authAdmin: { domainName: "88fcmasim1.execute-api.us-east-1.amazonaws.com", originPath: "/prod" },
@@ -128,6 +136,10 @@ const backendApiFrontDoors = {
     apiProxy: { domainName: "yxp97qlog2.execute-api.us-east-1.amazonaws.com", originPath: "/Prod" },
   },
 };
+
+const thnAdminTestHost = "admin-test.thehairnarrative.com";
+const thnAdminHostedZoneName = "thehairnarrative.com";
+const thnPublicProductionHost = "thehairnarrative.com";
 
 function buildThnPublicProductionFrontDoor(source = process.env) {
   const enabled = parseBooleanFlag(source.FRONTEND_PRODUCTION_THN_PUBLIC_ORIGIN_ENABLED);
@@ -142,7 +154,7 @@ function buildThnPublicProductionFrontDoor(source = process.env) {
   }
   return {
     id: "thehairnarrative-public",
-    domainName: "thehairnarrative.com",
+    domainName: thnPublicProductionHost,
     alternateDomainNames: [],
     customDomainNamesEnabled: true,
     route53RecordsEnabled: recordsEnabled,
@@ -150,7 +162,7 @@ function buildThnPublicProductionFrontDoor(source = process.env) {
     certificateArn,
     aliasRecordGroups: [{
       ...hostedZones.theHairNarrativeCom,
-      domainNames: ["thehairnarrative.com"],
+      domainNames: [thnPublicProductionHost],
     }],
   };
 }
@@ -278,7 +290,207 @@ function buildBackendRoutes(environmentName) {
   ];
 }
 
+function buildThnAdminTestFrontDoor(
+  source = process.env,
+  account = environmentDefaults.account,
+  trustedApiFrontDoors = backendApiFrontDoors.test,
+  profileEnvironment = "test"
+) {
+  if (!parseBooleanFlag(source[`FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_ORIGIN_ENABLED`])) {
+    return null;
+  }
+
+  const certificateArn = requiredInput(source, `FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_CERTIFICATE_ARN`);
+  const certificatePrefix = `arn:aws:acm:us-east-1:${account}:certificate/`;
+  const certificateId = certificateArn.slice(certificatePrefix.length);
+  if (!certificateArn.startsWith(certificatePrefix) || !/^[a-zA-Z0-9-]+$/.test(certificateId)) {
+    throw new Error(
+      `FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_CERTIFICATE_ARN must be an ACM certificate in us-east-1 for AWS account ${account}.`
+    );
+  }
+
+  const hostedZoneId = requiredInput(source, `FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_HOSTED_ZONE_ID`);
+  if (!/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
+    throw new Error("FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_HOSTED_ZONE_ID must be an exact public Route 53 hosted zone ID.");
+  }
+
+  const authRuntimeOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthRuntime");
+  const authOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "thnAuthAdmin");
+  const contentHubOrigin = requiredOwnedApiOrigin(trustedApiFrontDoors, "contentHub");
+  const staticRelease = selectThnAdminRelease(source, profileEnvironment);
+  const adminHost = profileEnvironment === "test" ? thnAdminTestHost : "admin.thehairnarrative.com";
+
+  return {
+    id: `thehairnarrative-admin-${profileEnvironment}`,
+    securityProfile: `thn-admin-${profileEnvironment}`,
+    domainName: adminHost,
+    alternateDomainNames: [],
+    customDomainNamesEnabled: true,
+    certificateArn,
+    certificateDomainName: adminHost,
+    certificateVerification: "exact-cn-san-preflight-required",
+    minimumProtocolVersion: "TLSv1.2_2021",
+    route53RecordsEnabled: parseBooleanFlag(
+      source[`FRONTEND_${profileEnvironment.toUpperCase()}_THN_ADMIN_ROUTE53_RECORDS_ENABLED`]
+    ),
+    route53RecordManagement: "create-only",
+    aliasRecordGroups: [
+      {
+        hostedZoneName: thnAdminHostedZoneName,
+        hostedZoneId,
+        domainNames: [adminHost],
+      },
+    ],
+    hsts: {
+      maxAgeSeconds: 2_592_000,
+      includeSubdomains: false,
+      preload: false,
+    },
+    pageRoutes: [
+      { path: "/admin/journal/access", methods: ["GET"] },
+      { path: "/admin/journal/mfa", methods: ["GET"] },
+      { path: "/admin/journal", methods: ["GET"] },
+      { path: "/admin/journal/new", methods: ["GET"] },
+      { path: "/admin/journal/:articleId/edit", methods: ["GET"] },
+      { path: "/admin/journal/:articleId/preview", methods: ["GET"] },
+    ],
+    staticAssetPaths: [...staticRelease.manifest.staticAssetPaths],
+    staticOriginPrefix: staticRelease.originPrefix,
+    staticRelease,
+    backendRoutes: [
+      {
+        id: "thn-admin-auth-runtime-v2",
+        domainName: authRuntimeOrigin.domainName,
+        originPath: authRuntimeOrigin.originPath,
+        routes: [
+          { path: "/auth-v2/runtime-config", methods: ["GET", "POST"] },
+        ],
+      },
+      {
+        id: "thn-admin-auth-v2",
+        domainName: authOrigin.domainName,
+        originPath: authOrigin.originPath,
+        routes: [
+          { path: "/auth-v2/session/signin", methods: ["POST"] },
+          { path: "/auth-v2/session/challenge/respond", methods: ["POST"] },
+          { path: "/auth-v2/session/mfa/setup", methods: ["POST"] },
+          { path: "/auth-v2/session/mfa/verify", methods: ["POST"] },
+          { path: "/auth-v2/session/me", methods: ["GET"] },
+          { path: "/auth-v2/session/logout", methods: ["POST"] },
+        ],
+      },
+      {
+        id: "thn-admin-content-hub-v2",
+        domainName: contentHubOrigin.domainName,
+        originPath: contentHubOrigin.originPath,
+        routes: [
+          { path: "/features/content-hub-v2/read", methods: ["POST"] },
+          { path: "/features/content-hub-v2/action", methods: ["POST"] },
+        ],
+      },
+    ],
+  };
+}
+
+// Production activation is deliberately unavailable until retained service
+// resources are provisioned and their native API identities are independently
+// captured. No operator-provided domain or TEST endpoint is a substitute.
+function buildThnAdminProductionFrontDoor(source = process.env) {
+  const enabled = source.FRONTEND_PRODUCTION_THN_ADMIN_ORIGIN_ENABLED;
+  if (enabled === undefined || enabled === "" || enabled === "false") return null;
+  if (enabled !== "true") throw new Error("THN production admin enable flag is invalid.");
+  if (!source.FRONTEND_PRODUCTION_THN_ADMIN_OWNER_SNAPSHOT_JSON) throw new Error("THN production backend coordinates are unavailable; provision and review exact owner identities before activation.");
+  const snapshot = JSON.parse(source.FRONTEND_PRODUCTION_THN_ADMIN_OWNER_SNAPSHOT_JSON);
+  const trusted = require("../tools/thn-production-origins").validateProductionOrigins(snapshot);
+  const door = buildThnAdminTestFrontDoor(source, expectedAccount, trusted, "production");
+  if (door.aliasRecordGroups[0].hostedZoneId !== hostedZones.theHairNarrativeCom.hostedZoneId) throw new Error("production_owner_snapshot_invalid");
+  return { ...door, productionOwnerSnapshot: snapshot };
+}
+
+function buildThnAdminProductionCertificate(source = process.env) {
+  const certificateArn = source.FRONTEND_PRODUCTION_THN_ADMIN_CERTIFICATE_ARN;
+  if (!certificateArn) return null;
+  if (!/^arn:aws:acm:us-east-1:765932874577:certificate\/[a-f0-9-]{36}$/.test(certificateArn) || source.FRONTEND_PRODUCTION_THN_ADMIN_HOSTED_ZONE_ID !== hostedZones.theHairNarrativeCom.hostedZoneId) throw new Error("production_certificate_input_invalid");
+  return { certificateArn, hostedZoneId: hostedZones.theHairNarrativeCom.hostedZoneId };
+}
+function buildThnAdminTestCertificate(source = process.env, account = environmentDefaults.account) {
+  const certificateArn = String(source.FRONTEND_TEST_THN_ADMIN_CERTIFICATE_ARN || "").trim();
+  if (!certificateArn) return null;
+  const hostedZoneId = String(source.FRONTEND_TEST_THN_ADMIN_HOSTED_ZONE_ID || "").trim();
+  if (!new RegExp(`^arn:aws:acm:us-east-1:${account}:certificate/[A-Za-z0-9-]+$`).test(certificateArn) || !/^Z[A-Z0-9]+$/.test(hostedZoneId)) {
+    throw new Error("THN TEST certificate preservation requires its exact ARN and hosted zone inputs.");
+  }
+  return { certificateArn, hostedZoneId };
+}
+
+function requiredInput(source, name) {
+  const value = String(source[name] || "").trim();
+  if (!value) {
+    throw new Error(`${name} is required when FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED=true.`);
+  }
+  return value;
+}
+
+function requiredOwnedApiOrigin(trustedApiFrontDoors, ownerKey) {
+  const owner = trustedApiFrontDoors && trustedApiFrontDoors[ownerKey];
+  if (!owner) {
+    throw new Error(`Missing verified TEST API owner coordinates for ${ownerKey}.`);
+  }
+  return {
+    domainName: requiredOriginDomain(owner.domainName, `${ownerKey}.domainName`),
+    originPath: requiredOriginPath(owner.originPath, `${ownerKey}.originPath`),
+  };
+}
+
+function requiredOriginDomain(value, name) {
+  const domainName = String(value || "").trim().toLowerCase();
+  const labels = domainName.split(".");
+  if (
+    domainName.length > 253
+    || labels.length < 2
+    || labels.some((label) => (
+      !label
+      || label.length > 63
+      || !/^[a-z0-9-]+$/.test(label)
+      || label.startsWith("-")
+      || label.endsWith("-")
+    ))
+  ) {
+    throw new Error(`${name} must be a bare HTTPS origin domain name.`);
+  }
+  const apiGatewaySuffix = `.execute-api.${defaultRegion}.amazonaws.com`;
+  const apiId = domainName.slice(0, -apiGatewaySuffix.length);
+  if (!domainName.endsWith(apiGatewaySuffix) || !/^[a-z0-9]+$/.test(apiId)) {
+    throw new Error(`${name} must be an exact regional API Gateway origin in ${defaultRegion}.`);
+  }
+  return domainName;
+}
+
+function requiredOriginPath(value, name) {
+  const originPath = String(value || "").trim();
+  const segments = originPath.split("/").slice(1);
+  if (
+    !originPath.startsWith("/")
+    || originPath.includes("//")
+    || originPath.includes("\\")
+    || originPath.includes("%")
+    || originPath.includes("?")
+    || originPath.includes("#")
+    || segments.some((segment) => (
+      !segment
+      || segment === "."
+      || segment === ".."
+      || !/^[a-zA-Z0-9._~-]+$/.test(segment)
+    ))
+  ) {
+    throw new Error(`${name} must be an absolute path without a query or fragment.`);
+  }
+  return originPath.replace(/\/+$/, "") || "/";
+}
+
+const thnAdminTestFrontDoor = buildThnAdminTestFrontDoor();
 const thnPublicProductionFrontDoor = buildThnPublicProductionFrontDoor();
+const thnAdminProductionFrontDoor = buildThnAdminProductionFrontDoor();
 
 const environments = [
   {
@@ -287,8 +499,10 @@ const environments = [
     stageId: "ZoolandingTest",
     branch: "test",
     runtimeReadDeployment: runtimeReadDeploymentTargets.test,
+    serviceRepositoryBootstrap,
     frontendHosting: {
       ...buildFrontendHostingConfig("test"),
+      thnAdminCertificate: buildThnAdminTestCertificate(),
       frontDoors: [
         {
           id: "test",
@@ -302,6 +516,7 @@ const environments = [
             },
           ],
         },
+        ...(thnAdminTestFrontDoor ? [thnAdminTestFrontDoor] : []),
       ],
     },
     removalPolicy: "destroy",
@@ -312,8 +527,10 @@ const environments = [
     stageId: "ZoolandingProduction",
     branch: "main",
     runtimeReadDeployment: runtimeReadDeploymentTargets.production,
+    serviceRepositoryBootstrap,
     frontendHosting: {
       ...buildFrontendHostingConfig("production"),
+      thnAdminCertificate: buildThnAdminProductionCertificate(),
       route53RecordsEnabled: true,
       frontDoors: [
         {
@@ -409,6 +626,7 @@ const environments = [
           ],
         },
         ...(thnPublicProductionFrontDoor ? [thnPublicProductionFrontDoor] : []),
+        ...(thnAdminProductionFrontDoor ? [thnAdminProductionFrontDoor] : []),
       ],
     },
     removalPolicy: "retain",
@@ -420,6 +638,9 @@ function parseBooleanFlag(value) {
 }
 
 module.exports = {
+  buildThnAdminProductionFrontDoor,
+  buildThnAdminTestCertificate,
+  buildThnAdminTestFrontDoor,
   buildThnPublicProductionFrontDoor,
   environments,
   expectedAccount,

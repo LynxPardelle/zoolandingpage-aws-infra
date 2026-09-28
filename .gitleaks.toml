@@ -1,0 +1,4 @@
+title = "Zoolanding Infra: default rules, exact committed fingerprints only"
+
+[extend]
+useDefault = true
