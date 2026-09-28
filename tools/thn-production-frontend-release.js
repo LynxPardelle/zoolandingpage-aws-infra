@@ -209,5 +209,5 @@ if(require.main===module){
   const record=e.EXECUTION==="review"?undefined:JSON.parse(fs.readFileSync(path.resolve(e.REVIEW_FILE),"utf8"));
   const result=await runFrontendOperation({verifySource:()=>certificate.assertCurrentProductionSource(e.EXPECTED_SOURCE_SHA,e),call:certificate.productionClients(e,`${e.GITHUB_RUN_ID}-${e.GITHUB_RUN_ATTEMPT}`),input,desired,fingerprint,execution:e.EXECUTION,runId:`${e.GITHUB_RUN_ID}-${e.GITHUB_RUN_ATTEMPT}`,originSecret:e.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET,record,approvedDigest:e.EXPECTED_REVIEW_DIGEST,outputPath:path.resolve("frontend-review.json")});
   console.log(JSON.stringify(result));
- })().catch(error=>{console.error(JSON.stringify({error:/^[a-z_]+$/.test(error.message)?error.message:"production_frontend_operation_failed",...(error.causeCode?{cause_code:error.causeCode}:{})}));process.exitCode=1;});
+ })().catch(error=>{console.error(JSON.stringify({error:/^[a-z0-9_]+$/.test(error.message)?error.message:"production_frontend_operation_failed",...(error.causeCode?{cause_code:error.causeCode}:{}),...(Number.isInteger(error.cliExitCode)?{cli_exit_status:error.cliExitCode}:{})}));process.exitCode=1;});
 }
