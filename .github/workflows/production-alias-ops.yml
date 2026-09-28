@@ -34,6 +34,20 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Validate production authority before credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = LynxPardelle/zoolandingpage-aws-infra
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -68,8 +82,12 @@ jobs:
         run: aws sts get-caller-identity
 
       - name: Audit or clean production aliases
+        env:
+          APPLY_CLEANUP: ${{ inputs.apply_cleanup_retired_aliases }}
+          CONFIRM_CLEANUP: ${{ inputs.confirm_cleanup }}
+          PREFLIGHT_CUSTOM_ALIASES: ${{ inputs.preflight_custom_aliases }}
         run: |
           node tools/ops/frontend-alias-ops.mjs \
-            --apply-cleanup=${{ inputs.apply_cleanup_retired_aliases }} \
-            --confirm-cleanup="${{ inputs.confirm_cleanup }}" \
-            --preflight-custom-aliases=${{ inputs.preflight_custom_aliases }}
+            --apply-cleanup="$APPLY_CLEANUP" \
+            --confirm-cleanup="$CONFIRM_CLEANUP" \
+            --preflight-custom-aliases="$PREFLIGHT_CUSTOM_ALIASES"

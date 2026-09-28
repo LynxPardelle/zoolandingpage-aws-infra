@@ -54,7 +54,8 @@ The DNS operation creates only the apex A and AAAA aliases in hosted zone
 `Z08032292DKYZ4QGCIZDR`. It is create-only and does not manage `www` or change
 the private TEST host. Before enabling DNS, verify that no apex A or AAAA record
 already exists. Disabling the flag later does not remove a retained DNS record;
-rollback must explicitly restore the previous DNS state.
+rollback must explicitly restore the previous DNS state. After cutover, verify
+desktop and mobile browser rendering on the public domain.
 The TEST frontend workflow deploys only the Frontend stack and fails closed when its immutable release ID is absent; service repository bootstrap stacks remain independent operator targets.
 The proposed standalone THN TEST runtime identity uses a separate, manual
 [three-resource bootstrap release](docs/thn-dedicated-identity-test.md); it is
@@ -135,3 +136,13 @@ an exact one validates/tests/synthesizes but neither publishes an ordinary
 deployable artifact nor enters its AWS deployment job, including manual runs.
 Absence preserves the ordinary flow. Do not remove the selector to bypass a
 blocked promotion; subsequent ordinary delivery requires its own exact review.
+
+## THN production promotion source boundary
+
+Full source promotion is separated from AWS activation. The exact six-field
+`INFRA_PRODUCTION_PROMOTION_SELECTION_JSON` selects a reviewed TEST-to-main
+merge, including the native merged tree. The production workflow validates
+without credentials; missing/stale selectors fail closed and main pushes cannot
+run a broad infrastructure deployment. Production admin activation remains
+blocked until its exact dedicated owners and protected release operation are
+reviewed. See [the production promotion boundary](docs/thn-production-promotion.md).

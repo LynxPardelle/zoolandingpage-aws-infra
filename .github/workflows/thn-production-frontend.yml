@@ -1,0 +1,190 @@
+name: THN Production Frontend Native Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      execution:
+        required: true
+        type: choice
+        options: [review, execute, cleanup]
+        default: review
+      expected_source_sha:
+        required: true
+        type: string
+      release_input_json:
+        description: Closed release input with independently captured production owner coordinates
+        required: true
+        type: string
+      reviewed_run_id:
+        required: false
+        type: string
+      expected_review_digest:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zoolandingpage-production-frontend-reviewed-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_package_sha256: ${{ steps.source.outputs.fingerprint }}
+      input_sha256: ${{ steps.source.outputs.input_sha256 }}
+      desired_sha256: ${{ steps.source.outputs.desired_sha256 }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Validate exact current MAIN and manual authority without AWS
+        id: source
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXECUTION: ${{ inputs.execution }}
+          REVIEWED_RUN_ID: ${{ inputs.reviewed_run_id }}
+          EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+          RELEASE_INPUT_JSON: ${{ inputs.release_input_json }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = LynxPardelle/zoolandingpage-aws-infra
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$EXPECTED_SOURCE_SHA"
+          case "$EXECUTION" in
+            review) test -z "$REVIEWED_RUN_ID"; test -z "$EXPECTED_REVIEW_DIGEST" ;;
+            execute|cleanup)
+              [[ "$REVIEWED_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+              [[ "$EXPECTED_REVIEW_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_RUN_ID" > run.json
+              node -e 'const r=require("./run.json");if(r.head_branch!=="main"||r.head_sha!==process.env.EXPECTED_SOURCE_SHA||r.event!=="workflow_dispatch"||r.status!=="completed"||r.conclusion!=="success"||r.path!==".github/workflows/thn-production-frontend.yml")throw Error("review_run_authority_invalid")'
+              ;;
+            *) exit 1 ;;
+          esac
+          npm ci
+          node --test test/thn-production-profile.test.js test/thn-production-frontend-release.test.js test/thn-production-retained-review.test.js
+          mkdir -p transport
+          node -e 'const fs=require("node:fs"),r=JSON.parse(process.env.RELEASE_INPUT_JSON);require("./tools/thn-production-frontend-release").validateInput(r);if(r.sourceSha!==process.env.EXPECTED_SOURCE_SHA)throw Error("source_mismatch");fs.writeFileSync("transport/release-input.json",JSON.stringify(r,null,2)+"\n")'
+          app_run="$(node -p 'require("./transport/release-input.json").appCoordinates.runId')"
+          app_artifact="$(node -p 'require("./transport/release-input.json").appCoordinates.artifactId')"
+          gh api "repos/LynxPardelle/zoolandingpage/actions/runs/$app_run" > app-run.json
+          gh api "repos/LynxPardelle/zoolandingpage/actions/artifacts/$app_artifact" > app-artifact.json
+          node -e 'const i=require("./transport/release-input.json"),r=require("./app-run.json"),a=require("./app-artifact.json");if(r.head_sha!==i.appCoordinates.sourceSha||r.head_branch!=="main"||r.event!=="workflow_dispatch"||r.path!==".github/workflows/publish-ssr-artifact.yml"||r.conclusion!=="success"||r.status!=="completed"||String(r.run_attempt)!==i.appCoordinates.runAttempt||a.expired!==false||String(a.workflow_run?.id)!==i.appCoordinates.runId||a.workflow_run?.head_sha!==i.appCoordinates.sourceSha)throw Error("APP_artifact_provenance_invalid")'
+          node tools/thn-production-frontend-release.js prepare transport/release-input.json transport > prepared.json
+          node -e 'const p=require("./prepared.json");console.log("input_sha256="+p.inputSha256+"\ndesired_sha256="+p.desiredTemplateSha256)' >> "$GITHUB_OUTPUT"
+          node -e 'process.stdout.write("fingerprint="+require("./tools/thn-production-frontend-release").sourcePackageHash()+"\n")' >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: inputs.execution != 'review'
+        with:
+          name: thn-production-frontend-review-${{ inputs.expected_source_sha }}
+          path: retained-review
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reviewed_run_id }}
+      - name: Validate reviewed record before credentials
+        if: inputs.execution != 'review'
+        env:
+          EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXPECTED_SOURCE_PACKAGE_SHA256: ${{ steps.source.outputs.fingerprint }}
+        run: |
+          node -e 'const r=require("./retained-review/frontend-review.json");require("./tools/thn-production-retained-review").validateReview(r);if(r.digest!==process.env.EXPECTED_REVIEW_DIGEST||r.sourceSha!==process.env.EXPECTED_SOURCE_SHA||r.sourcePackageSha256!==process.env.EXPECTED_SOURCE_PACKAGE_SHA256||!["private-frontdoor","public-visual"].includes(r.purpose))throw Error("retained_review_invalid")'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.execution != 'review'
+        with:
+          name: thn-production-frontend-execute-input-${{ github.run_id }}
+          path: retained-review/frontend-review.json
+          if-no-files-found: error
+          retention-days: 2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: thn-production-frontend-transport-${{ github.run_id }}
+          path: |
+            transport/desired-template.json
+            transport/release-input.json
+          if-no-files-found: error
+          retention-days: 2
+  operation:
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXECUTION: ${{ inputs.execution }}
+      EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+      EXPECTED_SOURCE_PACKAGE_SHA256: ${{ needs.validate.outputs.source_package_sha256 }}
+      EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+      EXPECTED_INPUT_SHA256: ${{ needs.validate.outputs.input_sha256 }}
+      EXPECTED_DESIRED_SHA256: ${{ needs.validate.outputs.desired_sha256 }}
+      REVIEW_FILE: retained-review/frontend-review.json
+      REVIEW_OUTPUT_FILE: frontend-review.json
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Repeat sealed source before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$EXPECTED_SOURCE_SHA"
+          node -e 'if(require("./tools/thn-production-frontend-release").sourcePackageHash()!==process.env.EXPECTED_SOURCE_PACKAGE_SHA256)throw Error("source_package_changed")'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: inputs.execution != 'review'
+        with:
+          name: thn-production-frontend-execute-input-${{ github.run_id }}
+          path: retained-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: thn-production-frontend-transport-${{ github.run_id }}
+          path: transport
+      - name: Verify transported source bytes and production secret before credentials
+        env:
+          THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
+        run: |
+          node -e 'const fs=require("node:fs"),c=require("./tools/thn-production-certificate-release"),r=JSON.parse(fs.readFileSync("transport/release-input.json")),t=JSON.parse(fs.readFileSync("transport/desired-template.json"));require("./tools/thn-production-frontend-release").validateInput(r);if(c.sha(c.canonical(r))!==process.env.EXPECTED_INPUT_SHA256||c.sha(c.canonical(t))!==process.env.EXPECTED_DESIRED_SHA256||r.purpose==="private-frontdoor"&&!/^[A-Za-z0-9_-]{43}$/.test(process.env.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET||""))throw Error("transport_or_secret_invalid")'
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: arn:aws:iam::765932874577:role/zoolandingpage-infra-production-github-oidc-deploy
+          aws-region: us-east-1
+          allowed-account-ids: "765932874577"
+          role-session-name: thn-production-frontend-${{ github.run_id }}
+      - name: Run exact retained native operation
+        env:
+          THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
+        run: node tools/thn-production-frontend-release.js operate transport/release-input.json transport/desired-template.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.execution == 'review'
+        with:
+          name: thn-production-frontend-review-${{ inputs.expected_source_sha }}
+          path: frontend-review.json
+          if-no-files-found: error
+          retention-days: 2
