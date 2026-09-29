@@ -31000,6 +31000,81 @@
         "arn:aws:iam::765932874577:role/zoolanding-config-runtime-read-production-github-deploy",
         "arn:aws:iam::765932874577:role/zoolanding-config-runtime-read-production-cfn-exec"
       ]
+    },
+    {
+      "group": "SAMTransform",
+      "principalArn": "arn:aws:iam::765932874577:role/zoolanding-deployer-auth-admin-production-cfn-exec",
+      "actions": [
+        "cloudformation:CreateChangeSet"
+      ],
+      "resources": [
+        "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+      ],
+      "condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "group": "SAMTransform",
+      "principalArn": "arn:aws:iam::765932874577:role/zoolanding-deployer-thn-auth-runtime-production-cfn-exec",
+      "actions": [
+        "cloudformation:CreateChangeSet"
+      ],
+      "resources": [
+        "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+      ],
+      "condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "group": "SAMTransform",
+      "principalArn": "arn:aws:iam::765932874577:role/zoolanding-deployer-content-hub-production-cfn-exec",
+      "actions": [
+        "cloudformation:CreateChangeSet"
+      ],
+      "resources": [
+        "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+      ],
+      "condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "group": "SAMTransform",
+      "principalArn": "arn:aws:iam::765932874577:role/zoolanding-deployer-image-upload-production-cfn-exec",
+      "actions": [
+        "cloudformation:CreateChangeSet"
+      ],
+      "resources": [
+        "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+      ],
+      "condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    },
+    {
+      "group": "SAMTransform",
+      "principalArn": "arn:aws:iam::765932874577:role/zoolanding-deployer-api-proxy-production-cfn-exec",
+      "actions": [
+        "cloudformation:CreateChangeSet"
+      ],
+      "resources": [
+        "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+      ],
+      "condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
     }
   ],
   "providerSchemaHashes": {
@@ -34707,6 +34782,50 @@
         },
         "Type": "AWS::IAM::Policy",
         "UpdateReplacePolicy": "Retain"
+      },
+      "ThnProductionSamTransformPolicy": {
+        "Type": "AWS::IAM::Policy",
+        "DeletionPolicy": "Retain",
+        "UpdateReplacePolicy": "Retain",
+        "Properties": {
+          "PolicyName": "ThnProductionSamTransformV1",
+          "Roles": [
+            {
+              "Ref": "AuthCfnExecutionRole"
+            },
+            {
+              "Ref": "ApiCfnExecutionRole"
+            },
+            {
+              "Ref": "HubCfnExecutionRole"
+            },
+            {
+              "Ref": "ImageCfnExecutionRole"
+            },
+            {
+              "Ref": "ApiGeneralCfnExecutionRole"
+            }
+          ],
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "cloudformation:CreateChangeSet"
+                ],
+                "Resource": [
+                  "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
+                ],
+                "Condition": {
+                  "StringEquals": {
+                    "aws:RequestedRegion": "us-east-1"
+                  }
+                }
+              }
+            ]
+          }
+        }
       }
     }
   }
