@@ -31579,7 +31579,6 @@
                 "Condition": {
                   "StringEquals": {
                     "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                    "token.actions.githubusercontent.com:ref": "refs/heads/main",
                     "token.actions.githubusercontent.com:sub": "repo:LynxPardelle/zoolanding-api-proxy:environment:production"
                   }
                 },
@@ -31755,7 +31754,6 @@
                 "Condition": {
                   "StringEquals": {
                     "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                    "token.actions.githubusercontent.com:ref": "refs/heads/main",
                     "token.actions.githubusercontent.com:sub": "repo:LynxPardelle/zoolanding-api-proxy:environment:production"
                   }
                 },
@@ -34518,7 +34516,6 @@
                 "Condition": {
                   "StringEquals": {
                     "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                    "token.actions.githubusercontent.com:ref": "refs/heads/main",
                     "token.actions.githubusercontent.com:sub": "repo:LynxPardelle/zoolanding-image-upload:environment:production"
                   }
                 },
