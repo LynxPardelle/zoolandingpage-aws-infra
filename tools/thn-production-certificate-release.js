@@ -108,6 +108,24 @@ function assertCdkTrust(policy,service=false){
  });
  if(!selected)fail("production_role_trust_unproved");
 }
+const permittedProductionOperations={lookup:new Set(["cloudformation:describe-stacks","cloudformation:get-template","cloudformation:list-stack-resources","cloudformation:describe-type","iam:simulate-principal-policy","iam:simulate-custom-policy","iam:get-role","iam:list-role-policies","iam:list-attached-role-policies","iam:get-role-policy","iam:get-policy","iam:get-policy-version","iam:list-policy-versions","iam:list-entities-for-policy","route53:get-hosted-zone","route53:list-resource-record-sets","cloudfront:get-distribution-config","cloudfront:get-distribution","acm:list-certificates","acm:describe-certificate","s3api:head-bucket","s3api:get-public-access-block","s3api:get-bucket-ownership-controls","s3api:get-bucket-versioning","s3api:get-bucket-encryption","s3api:get-bucket-policy","s3api:get-bucket-acl","kms:describe-key","kms:get-key-policy","lambda:get-function-configuration","lambda:get-function","lambda:get-policy","s3api:head-object","s3api:get-object","acm:describe-certificate"]),deploy:new Set(["cloudformation:create-change-set","cloudformation:describe-change-set","cloudformation:get-template","cloudformation:delete-change-set","cloudformation:execute-change-set","cloudformation:update-termination-protection","cloudformation:describe-stacks","cloudformation:list-stack-resources"]),"file-publishing":new Set(["s3api:head-object","s3api:put-object","s3api:get-object","s3api:list-objects-v2"])};
+function assertProductionOperation(kind,service,operation,input){
+  if(!permittedProductionOperations[kind]?.has(`${service}:${operation}`))fail("production_operation_out_of_scope");
+  if(service==="iam"&&["list-policy-versions","list-entities-for-policy"].includes(operation)&&!/^arn:aws:iam::765932874577:policy\/ThnProductionHubNative[23]$/.test(input.PolicyArn||""))fail("production_operation_out_of_scope");
+  if(service==="iam"&&["simulate-principal-policy","simulate-custom-policy"].includes(operation)){
+   const resource=input.ResourceArns?.[0],actions=input.ActionNames;
+   const trust=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&same([...actions||[]].sort(),["iam:getrole","iam:updateassumerolepolicy"])&&/^arn:aws:iam::765932874577:role\/zoolanding-deployer-(?:image-upload|thn-auth-runtime|api-proxy)-production-github-deploy$/.test(resource||"");
+   const policy=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&same([...actions||[]].sort(),["iam:createpolicyversion","iam:deletepolicyversion","iam:getpolicy","iam:getpolicyversion","iam:listentitiesforpolicy","iam:listpolicyversions"])&&/^arn:aws:iam::765932874577:policy\/ThnProductionHubNative[23]$/.test(resource||"");
+   const attachment=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&same([...actions||[]].sort(),["iam:attachrolepolicy","iam:detachrolepolicy"])&&resource===`arn:aws:iam::${ACCOUNT}:role/zoolanding-deployer-content-hub-production-cfn-exec`;
+   const eventActions=["events:DeleteRule","events:DescribeRule","events:ListTagsForResource","events:ListTargetsByRule","events:PutRule","events:PutTargets","events:RemoveTargets","events:TagResource","events:UntagResource"].sort();
+   const eventResource=/^arn:aws:events:us-east-1:765932874577:rule\/zoolanding-content-hub-pr-ThnContentHubV2(?:PrivateAss|Invalidati|PreparedOr)-[A-Za-z0-9]{12}$/.test(resource||"");
+   const event=eventResource&&same([...actions||[]].sort(),eventActions)&&(operation==="simulate-custom-policy"&&input.PolicyInputList?.length===1&&typeof input.PolicyInputList[0]==="string"||operation==="simulate-principal-policy"&&input.PolicySourceArn===`arn:aws:iam::${ACCOUNT}:role/zoolanding-deployer-content-hub-production-cfn-exec`);
+   if(input.ResourceArns?.length!==1||!(trust||policy||attachment||event))fail("production_operation_out_of_scope");
+  }
+  if(service==="cloudformation"&&operation==="describe-type"&&(input.Type!=="RESOURCE"||!["AWS::IAM::Role","AWS::IAM::ManagedPolicy"].includes(input.TypeName)))fail("production_operation_out_of_scope");
+  if(service==="cloudformation"&&operation!=="describe-type"&&!( [STACK,"ZoolandingProduction-Zoolandingpage-production-ThnDeploymentIdentities","zoolanding-auth-admin-prod","zoolanding-thn-auth-runtime-production","zoolanding-content-hub-prod"].some(s=>input.StackName===s||String(input.StackName||"").startsWith(`arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${s}/`))))fail("production_operation_out_of_scope");
+  if(service==="s3api"&&!(input.Bucket===ASSET_BUCKET||kind==="lookup"&&["zoolandingpage-production-frontend-artifacts-765932874577","zoolandingpage-public-files","zlp-thn-production-releases-765932874577-us-east-1"].includes(input.Bucket)))fail("production_operation_out_of_scope");
+}
 function productionClients(env,run){
  const identity=awsCall("sts","get-caller-identity",{},env);
  if(identity.Account!==ACCOUNT||!new RegExp(`^arn:aws:sts::${ACCOUNT}:assumed-role/zoolandingpage-infra-production-github-oidc-deploy/[A-Za-z0-9+=,.@_-]+$`).test(identity.Arn||""))fail("production_caller_identity_invalid");
@@ -119,15 +137,7 @@ function productionClients(env,run){
   const current=awsCall("sts","get-caller-identity",{},sessions[kind]);
   if(current.Account!==ACCOUNT||!current.Arn.startsWith(`arn:aws:sts::${ACCOUNT}:assumed-role/${roles[kind].split("/").at(-1)}/`))fail("production_role_identity_invalid");
  }
- const permitted={lookup:new Set(["cloudformation:describe-stacks","cloudformation:get-template","cloudformation:list-stack-resources","cloudformation:describe-type","iam:simulate-principal-policy","iam:get-role","iam:list-role-policies","iam:list-attached-role-policies","iam:get-role-policy","iam:get-policy","iam:get-policy-version","route53:get-hosted-zone","route53:list-resource-record-sets","cloudfront:get-distribution-config","cloudfront:get-distribution","acm:list-certificates","acm:describe-certificate","s3api:head-bucket","s3api:get-public-access-block","s3api:get-bucket-ownership-controls","s3api:get-bucket-versioning","s3api:get-bucket-encryption","s3api:get-bucket-policy","s3api:get-bucket-acl","kms:describe-key","kms:get-key-policy","lambda:get-function-configuration","lambda:get-function","lambda:get-policy","s3api:head-object","s3api:get-object","acm:describe-certificate"]),deploy:new Set(["cloudformation:create-change-set","cloudformation:describe-change-set","cloudformation:get-template","cloudformation:delete-change-set","cloudformation:execute-change-set","cloudformation:update-termination-protection","cloudformation:describe-stacks","cloudformation:list-stack-resources"]),"file-publishing":new Set(["s3api:head-object","s3api:put-object","s3api:get-object","s3api:list-objects-v2"])};
- return (kind,service,operation,input,file)=>{
-  if(!permitted[kind]?.has(`${service}:${operation}`))fail("production_operation_out_of_scope");
-  if(service==="iam"&&operation==="simulate-principal-policy"&&(input.PolicySourceArn!==roles["cfn-exec"]||!Array.isArray(input.ActionNames)||input.ActionNames.length!==2||!same([...input.ActionNames].sort(),["iam:getrole","iam:updateassumerolepolicy"])||input.ResourceArns?.length!==1||!/^arn:aws:iam::765932874577:role\/zoolanding-deployer-(?:image-upload|thn-auth-runtime|api-proxy)-production-github-deploy$/.test(input.ResourceArns[0])))fail("production_operation_out_of_scope");
-  if(service==="cloudformation"&&operation==="describe-type"&&(input.Type!=="RESOURCE"||input.TypeName!=="AWS::IAM::Role"))fail("production_operation_out_of_scope");
-  if(service==="cloudformation"&&operation!=="describe-type"&&!( [STACK,"ZoolandingProduction-Zoolandingpage-production-ThnDeploymentIdentities","zoolanding-auth-admin-prod","zoolanding-thn-auth-runtime-production","zoolanding-content-hub-prod"].some(s=>input.StackName===s||String(input.StackName||"").startsWith(`arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${s}/`))))fail("production_operation_out_of_scope");
-  if(service==="s3api"&&!(input.Bucket===ASSET_BUCKET||kind==="lookup"&&["zoolandingpage-production-frontend-artifacts-765932874577","zoolandingpage-public-files","zlp-thn-production-releases-765932874577-us-east-1"].includes(input.Bucket)))fail("production_operation_out_of_scope");
-  return awsCall(service,operation,input,sessions[kind],file);
- };
+ return (kind,service,operation,input,file)=>{assertProductionOperation(kind,service,operation,input);return awsCall(service,operation,input,sessions[kind],file);};
 }
 function normalizeParameters(parameters){
  if(!Array.isArray(parameters)||parameters.some(p=>!object(p)||typeof p.ParameterKey!=="string"||typeof p.ParameterValue!=="string")||new Set(parameters.map(p=>p.ParameterKey)).size!==parameters.length)fail("production_parameter_snapshot_invalid");
@@ -295,3 +305,4 @@ module.exports.waitPreview=waitPreview;
 module.exports.roles=roles;
 module.exports.ASSET_BUCKET=ASSET_BUCKET;
 module.exports.rolePolicySnapshot=rolePolicySnapshot;
+module.exports.assertProductionOperation=assertProductionOperation;
