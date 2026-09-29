@@ -61,9 +61,15 @@ Four manual production workflows have separate approval records:
 
 - `THN Production Deployment Identities Native Review` owns a separate stack with
   retained deployment roles/policies and a private versioned deployment package
-  bucket. Native changes are add-only; existing role IDs, trusts, boundaries and
+  bucket. The `bootstrap` scope is add-only; existing role IDs, trusts, boundaries and
   unrelated policy hashes are preserved. New role permissions stay explicitly
   unproved until effective checks after the approved bootstrap.
+  Its separate `trust-patch` scope requires exactly three non-replacing IAM Role
+  modifications removing only the unsupported GitHub `ref` condition. It keeps
+  the owner pool `BLOCKED`, all permissions and role IDs, and the existing bucket.
+  It checks effective execution permissions and seals both the previous template
+  and baseline in versioned S3 before review. Applying the patch requires approval
+  of that new native inventory and digest; a bootstrap review cannot authorize it.
 - `THN Production Certificate Native Review` creates and retains an UPDATE change
   set containing exactly one retained certificate for the approved admin host.
 - `THN Production Protection Native Review` reviews enabling termination
@@ -80,6 +86,14 @@ approved digest; it never repackages or recreates that preview. Review records
 expire after 24 hours. Cleanup validates ownership and full native inventory before
 removing only the retained preview. A record from an older main source cannot be
 executed with a newer source.
+
+GitHub OIDC trust requires exact AWS-supported `aud` and environment `sub` claims.
+AWS does not map the custom `ref` claim into IAM. Backend release guards therefore
+read the live `production` Environment before credentials and during final
+authority checks: custom deployment branch policies must allow exactly one
+`main` branch rule, with no tags, wildcards or additional branches. These reads
+use the workflows' existing Actions read permission. They do not alter protection
+rules. The guard includes the remote protection evidence in the source fingerprint.
 
 The digest seals the complete native inventory hash, Original/Processed template
 hashes, parameters, deployed identities, permissions snapshot and versioned S3
