@@ -54,6 +54,15 @@ test("candidate appends only one policy and rejects baseline drift", () => {
   assert.throws(() => api.composeHubImportReadPatch(candidate, manifest), /hub_import_read/);
 });
 
+test("post inventory uses the preserved BLOCKED parameter even when Auth has a pool", () => {
+  const { candidate } = pair();
+  const baseline = {
+    parameters: [{ ParameterKey: "ThnProductionOwnerPoolArn", ParameterValue: "BLOCKED" }],
+    ownerPool: { arn: "arn:aws:cognito-idp:us-east-1:765932874577:userpool/us-east-1_Example" },
+  };
+  assert.equal(api.expectedActiveResourceCount("hub-import-read-patch", candidate, baseline), 32);
+});
+
 test("native review accepts exactly one non-replacing IAM policy Add", () => {
   const { before, candidate } = pair();
   assert.equal(api.reviewHubImportReadInventory(before, candidate, preview()).length, 1);
