@@ -34036,6 +34036,39 @@
         "Type": "AWS::IAM::ManagedPolicy",
         "UpdateReplacePolicy": "Retain"
       },
+      "HubImportPreflightReadPolicy": {
+        "DeletionPolicy": "Retain",
+        "Properties": {
+          "PolicyDocument": {
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "dynamodb:GetResourcePolicy"
+                ],
+                "Resource": "arn:aws:dynamodb:us-east-1:765932874577:table/zoolanding-content-hub-prod-ServiceBindingRegistryV2"
+              },
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "s3:GetBucketVersioning",
+                  "s3:GetEncryptionConfiguration",
+                  "s3:GetBucketPublicAccessBlock",
+                  "s3:ListBucket"
+                ],
+                "Resource": "arn:aws:s3:::zlp-thn-ch-production-private-765932874577-us-east-1"
+              }
+            ],
+            "Version": "2012-10-17"
+          },
+          "PolicyName": "ThnProductionHubImportPreflightRead",
+          "Roles": [
+            "zoolanding-content-hub-production-deploy"
+          ]
+        },
+        "Type": "AWS::IAM::Policy",
+        "UpdateReplacePolicy": "Retain"
+      },
       "HubGithubReleasePolicy": {
         "DeletionPolicy": "Retain",
         "Properties": {
