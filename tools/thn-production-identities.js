@@ -187,7 +187,7 @@ function reviewTrustInventory(before,candidate,native){
  }return native.Changes;
 }
 const activeIds=(candidate,pool="BLOCKED")=>Object.entries(candidate.Resources).filter(([,r])=>!r.Condition||r.Condition===POOL_CONDITION&&pool!=="BLOCKED").map(([id])=>id);
-const expectedActiveResourceCount=(scope,candidate,baseline)=>activeIds(candidate,scope==="hub-rule-policy-patch"?baseline.parameters[0].ParameterValue:baseline.ownerPool?.arn||"BLOCKED").length;
+const expectedActiveResourceCount=(scope,candidate,baseline)=>activeIds(candidate,["hub-rule-policy-patch","hub-import-read-patch"].includes(scope)?baseline.parameters[0].ParameterValue:baseline.ownerPool?.arn||"BLOCKED").length;
 function reviewInventory(before,candidate,native,existing,pool="BLOCKED"){
  if(native.Status!=="CREATE_COMPLETE"||native.ExecutionStatus!=="AVAILABLE"||native.NextToken||native.IncludeNestedStacks||!Array.isArray(native.Changes))fail("production_identities_inventory_invalid");
  const present=existing?new Set(existing.map(r=>r.LogicalResourceId)):new Set(Object.keys(before?.Resources||{})),added=activeIds(candidate,pool).filter(id=>!present.has(id));if(!added.length||native.Changes.length!==added.length)fail("production_identities_inventory_invalid");const seen=new Set();for(const c of native.Changes){const r=c.ResourceChange;if(c.Type!=="Resource"||r?.Action!=="Add"||!added.includes(r.LogicalResourceId)||seen.has(r.LogicalResourceId)||candidate.Resources[r.LogicalResourceId].Type!==r.ResourceType||![undefined,"False"].includes(r.Replacement))fail("production_identities_inventory_invalid");seen.add(r.LogicalResourceId);}return native.Changes;
