@@ -100,7 +100,7 @@ test("Hub policy review accepts only two direct non-replacing PolicyDocument cha
 
 test("protected workflow exposes the narrow scope and retains its separate purpose", () => {
   const workflow = fs.readFileSync(path.resolve(__dirname, "../.github/workflows/thn-production-identities.yml"), "utf8");
-  assert.match(workflow, /options:\s*\[bootstrap, trust-patch, hub-rule-policy-patch\]/);
+  assert.match(workflow, /options:\s*\[bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch\]/);
   assert.match(workflow, /deployment-identities-hub-rule-policy-patch/);
   assert.match(workflow, /test\/thn-production-identities-hub-rule-patch\.test\.js/);
 });
@@ -245,8 +245,8 @@ test("production CLI guard admits only the Hub patch read probes", () => {
 test("Hub policy postcheck counts only resources active under the preserved stack parameter", () => {
   const { candidate } = pair();
   const baseline = { parameters: [{ ParameterKey: "ThnProductionOwnerPoolArn", ParameterValue: "BLOCKED" }], ownerPool: { arn: "arn:aws:cognito-idp:us-east-1:765932874577:userpool/us-east-1_TEST" } };
-  assert.equal(api.expectedActiveResourceCount("hub-rule-policy-patch", candidate, baseline), 31);
-  assert.equal(api.expectedActiveResourceCount("bootstrap", candidate, baseline), 35);
+  assert.equal(api.expectedActiveResourceCount("hub-rule-policy-patch", candidate, baseline), 32);
+  assert.equal(api.expectedActiveResourceCount("bootstrap", candidate, baseline), 36);
 });
 
 module.exports = { pair, inventory };
