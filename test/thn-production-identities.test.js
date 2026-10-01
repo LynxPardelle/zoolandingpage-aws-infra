@@ -4,6 +4,19 @@ function fixture(){
  const Resources={};let i=0;for(const name of api.NEW_ROLES){const github=name.endsWith("github-deploy"),repo=name.includes("image-upload")?"zoolanding-image-upload":"zoolanding-api-proxy";Resources["Role"+(i++)]={Type:"AWS::IAM::Role",DeletionPolicy:"Retain",UpdateReplacePolicy:"Retain",Properties:{RoleName:name,AssumeRolePolicyDocument:{Version:"2012-10-17",Statement:[{Effect:"Allow",Action:github?"sts:AssumeRoleWithWebIdentity":"sts:AssumeRole",Principal:github?{Federated:"arn:aws:iam::765932874577:oidc-provider/token.actions.githubusercontent.com"}:{Service:"cloudformation.amazonaws.com"},...(github?{Condition:{StringEquals:{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com","token.actions.githubusercontent.com:sub":`repo:LynxPardelle/${repo}:environment:production`}}}:{})}]}}};}
  return {schemaVersion:1,environment:"production",account:"765932874577",region:"us-east-1",template:{Resources},externalRolePolicyBaselines:{},providerSchemaHashes:{},proofMatrix:[],sourceCandidateHashes:{}};
 }
+test("retained API runtime role has exact Lambda trust, Registry key and log scope",()=>{
+ const manifest=require("../tools/production/thn-deployment-identities.json");
+ assert.equal(api.validateManifest(manifest),manifest);
+ const role=manifest.template.Resources.ApiRuntimeRole;
+ for(const mutation of [
+  r=>{r.Properties.AssumeRolePolicyDocument.Statement[0].Principal.Service="cloudformation.amazonaws.com";},
+  r=>{delete r.Properties.Policies[0].PolicyDocument.Statement[0].Condition.Null;},
+  r=>{r.Properties.Policies[0].PolicyDocument.Statement[1].Resource=["*"];},
+ ]){
+  const changed=structuredClone(manifest);mutation(changed.template.Resources.ApiRuntimeRole);
+  assert.throws(()=>api.validateManifest(changed),/production_identities_.*invalid/);
+ }
+});
 test("bootstrap keeps deployment identities in a separate add-only stack and rejects broadening or replacement",()=>{
  const f=fixture();assert.equal(api.validateManifest(f),f);const candidate=api.compose(null,f),Changes=Object.entries(candidate.Resources).map(([id,r])=>({Type:"Resource",ResourceChange:{Action:"Add",LogicalResourceId:id,ResourceType:r.Type,Replacement:"False"}})),native={Status:"CREATE_COMPLETE",ExecutionStatus:"AVAILABLE",Changes};assert.equal(api.reviewInventory(null,candidate,native),Changes);
  assert.throws(()=>api.reviewInventory(null,candidate,{...native,Changes:[{...Changes[0],ResourceChange:{...Changes[0].ResourceChange,Action:"Modify"}},...Changes.slice(1)]}),/inventory_invalid/);

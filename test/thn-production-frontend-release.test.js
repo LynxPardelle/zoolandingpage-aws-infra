@@ -1,6 +1,28 @@
 "use strict";
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),os=require("node:os"),path=require("node:path");
 const api=require("../tools/thn-production-frontend-release"),cert=require("../tools/thn-production-certificate-release");
+test("private frontdoor baseline rejects a disabled Auth origin digest before a change set",()=>{
+ const origins=require("../tools/thn-production-origins"),f=require("./fixtures/thn-production-selection").productionFixture();
+ const priorRead=cert.readProductionBaseline,priorOrigins=origins.captureProductionOrigins;
+ const authName="zoolanding-auth-admin-prod-ThnAuthAdminV2OriginAuthorizerFunction";
+ const resources=[{LogicalResourceId:"ThnAdminProductionCertificate",PhysicalResourceId:f.input.certificateArn},
+  {LogicalResourceId:"PublicSsr",ResourceType:"AWS::Lambda::Function",PhysicalResourceId:"zoolandingpage-production-frontend-ssr"}];
+ const calls=[];
+ try{
+  cert.readProductionBaseline=()=>({terminationProtection:true,resources,dns:[]});
+  origins.captureProductionOrigins=()=>f.input.ownerSnapshot;
+  const call=(kind,service,operation,input)=>{
+   calls.push(service+":"+operation);
+   if(service==="acm")return {Certificate:{DomainName:"admin.thehairnarrative.com",Status:"ISSUED",SubjectAlternativeNames:["admin.thehairnarrative.com"]}};
+   if(service==="cloudformation")return {StackResourceSummaries:[{LogicalResourceId:"ThnAuthAdminV2OriginAuthorizerFunction",ResourceType:"AWS::Lambda::Function",PhysicalResourceId:authName}]};
+   if(service==="lambda"&&input.FunctionName==="zoolandingpage-production-frontend-ssr")return {FunctionName:input.FunctionName,State:"Active",LastUpdateStatus:"Successful",Environment:{Variables:{ZLP_RELEASE_ID:f.input.publicReleaseId}}};
+   if(service==="lambda"&&input.FunctionName===authName)return {FunctionArn:"arn:aws:lambda:us-east-1:765932874577:function:"+authName,CodeSha256:"sealed",RevisionId:"r1",Environment:{Variables:{THN_DEPLOYMENT_ENVIRONMENT:"production",THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT:"0".repeat(64)}}};
+   throw Error("unexpected_call:"+service+":"+operation);
+  };
+  assert.throws(()=>api.selectedBaseline(call,f.input),/production_origin_secret_owner_mismatch/);
+  assert.equal(calls.includes("cloudformation:create-change-set"),false);
+ }finally{cert.readProductionBaseline=priorRead;origins.captureProductionOrigins=priorOrigins;}
+});
 test("versioned production package reader rejects invalid coordinates and absent VersionId without fabricating public versions",()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"thn-reader-test-")),key="frontend/angular-ssr/production/releases/release/browser/main-12345678.js";
  const call=(kind,service,operation,input,file)=>{if(operation==="head-object")return {ETag:"etag"};fs.writeFileSync(file,"image");return {ETag:"etag"};};
