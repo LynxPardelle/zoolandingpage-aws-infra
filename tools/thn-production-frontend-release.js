@@ -82,7 +82,7 @@ function selectedBaseline(call,input){
  const authorizer=authResources.StackResourceSummaries?.filter(r=>r.LogicalResourceId==="ThnAuthAdminV2OriginAuthorizerFunction"&&r.ResourceType==="AWS::Lambda::Function");
  if(authorizer?.length!==1)fail("production_origin_secret_owner_mismatch");
  const auth=call("lookup","lambda","get-function-configuration",{FunctionName:authorizer[0].PhysicalResourceId}),authEnv=auth.Environment?.Variables;
- if(authEnv?.THN_DEPLOYMENT_ENVIRONMENT!=="production"||!/^[a-f0-9]{64}$/.test(authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT||""))fail("production_origin_secret_owner_mismatch");
+ if(authEnv?.THN_DEPLOYMENT_ENVIRONMENT!=="production"||!/^[a-f0-9]{64}$/.test(authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT||"")||authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT==="0".repeat(64))fail("production_origin_secret_owner_mismatch");
  const authorizerEvidence={functionArn:auth.FunctionArn,codeSha256:auth.CodeSha256,revisionId:auth.RevisionId,currentOriginSha256:authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT,previousOriginSha256:authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_PREVIOUS||null};
  const publicFunction=Object.values(lambdas).find(f=>f.FunctionName==="zoolandingpage-production-frontend-ssr");
  if(publicFunction?.Environment?.Variables?.ZLP_RELEASE_ID!==input.publicReleaseId)fail("production_public_baseline_release_changed");

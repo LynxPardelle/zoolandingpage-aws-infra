@@ -6,7 +6,7 @@ on:
       identity_scope:
         required: true
         type: choice
-        options: [bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch]
+        options: [bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch, api-runtime-role-patch]
         default: bootstrap
       execution:
         required: true
@@ -62,7 +62,7 @@ jobs:
           test "$GITHUB_REPOSITORY" = LynxPardelle/zoolandingpage-aws-infra
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          case "$IDENTITY_SCOPE" in bootstrap|trust-patch|hub-rule-policy-patch|hub-import-read-patch) ;; *) exit 1 ;; esac
+          case "$IDENTITY_SCOPE" in bootstrap|trust-patch|hub-rule-policy-patch|hub-import-read-patch|api-runtime-role-patch) ;; *) exit 1 ;; esac
           [[ "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
@@ -79,7 +79,7 @@ jobs:
             *) exit 1 ;;
           esac
           npm ci
-          node --test test/thn-production-identities.test.js test/thn-production-identities-trust.test.js test/thn-production-identities-hub-rule-patch.test.js test/thn-production-retained-review.test.js
+          node --test test/thn-production-identities.test.js test/thn-production-identities-trust.test.js test/thn-production-identities-hub-rule-patch.test.js test/thn-production-identities-api-runtime-patch.test.js test/thn-production-retained-review.test.js
           node -e 'process.stdout.write("fingerprint="+require("./tools/thn-production-identities").sourcePackageHash()+"\n")' >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: inputs.execution != 'review'
@@ -96,7 +96,7 @@ jobs:
           EXPECTED_SOURCE_PACKAGE_SHA256: ${{ steps.source.outputs.fingerprint }}
           IDENTITY_SCOPE: ${{ inputs.identity_scope }}
         run: |
-          node -e 'const r=require("./retained-review/identities-review.json"),scope=process.env.IDENTITY_SCOPE,purpose=scope==="hub-import-read-patch"?"deployment-identities-hub-import-read-patch":scope==="hub-rule-policy-patch"?"deployment-identities-hub-rule-policy-patch":scope==="trust-patch"?"deployment-identities-trust-patch":"deployment-identities";require("./tools/thn-production-retained-review").validateReview(r);if(r.digest!==process.env.EXPECTED_REVIEW_DIGEST||r.sourceSha!==process.env.EXPECTED_SOURCE_SHA||r.sourcePackageSha256!==process.env.EXPECTED_SOURCE_PACKAGE_SHA256||r.purpose!==purpose)throw Error("retained_review_invalid")'
+          node -e 'const r=require("./retained-review/identities-review.json"),scope=process.env.IDENTITY_SCOPE,purpose=scope==="bootstrap"?"deployment-identities":"deployment-identities-"+scope;require("./tools/thn-production-retained-review").validateReview(r);if(r.digest!==process.env.EXPECTED_REVIEW_DIGEST||r.sourceSha!==process.env.EXPECTED_SOURCE_SHA||r.sourcePackageSha256!==process.env.EXPECTED_SOURCE_PACKAGE_SHA256||r.purpose!==purpose)throw Error("retained_review_invalid")'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: inputs.execution != 'review'
         with:
