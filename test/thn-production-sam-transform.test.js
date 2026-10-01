@@ -39,7 +39,7 @@ test("the existing bootstrap reviewer accepts only adding the SAM policy while r
   const changes = [{Type: "Resource", ResourceChange: {
     Action: "Add", LogicalResourceId: "ThnProductionSamTransformPolicy", ResourceType: "AWS::IAM::Policy", Replacement: "False"
   }}];
-  const native = {Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE", Changes: changes};
+  const native = {Status: "CREATE_COMPLETE", ExecutionStatus: "AVAILABLE", Parameters: [{ParameterKey: "ThnProductionOwnerPoolArn", ParameterValue: "BLOCKED"}], Changes: changes};
   assert.equal(api.reviewInventory(previous, candidate, native), changes);
   for (const action of ["Modify", "Remove"]) {
     assert.throws(() => api.reviewInventory(previous, candidate, {...native, Changes: [{...changes[0], ResourceChange: {...changes[0].ResourceChange, Action: action}}]}), /inventory_invalid/);
