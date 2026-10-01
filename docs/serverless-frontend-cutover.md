@@ -35,7 +35,7 @@ The first `test.zoolandingpage.com.mx` alias deploy attempt on 2026-07-09 CT fai
 
 The first production alias attach attempt on 2026-07-09 CT failed on `FrontendDistributionZoolandingpageMx` with the same CloudFront CNAME conflict. The conflict was resolved on 2026-07-10 CT by deleting the old CloudFront distribution tenant for `zoolandingpage.com.mx` after confirming Route53 still points the domain directly to EC2.
 
-On 2026-07-10 CT, `alecfest-voliii.zoolandingpage.com.mx`, `despacholegalastralex.zoolandingpage.com.mx`, `pamelabetancourt.zoolandingpage.com.mx`, and `pokeapi-demo.zoolandingpage.com.mx` were retired by request, removed from the production CloudFront alias model, and deleted from Route53. Do not add them back without a new draft/runtime ownership decision and browser QA.
+On 2026-07-10 CT, `alecfest-voliii.zoolandingpage.com.mx`, `despacholegalastralex.zoolandingpage.com.mx`, and `pokeapi-demo.zoolandingpage.com.mx` were retired by request, removed from the production CloudFront alias model, and deleted from Route53. Do not add them back without a new draft/runtime ownership decision and browser QA.
 
 The rollback from the failed production attempt left `/aws/lambda/zoolandingpage-production-frontend-ssr` as an existing log group. Production no longer manages that log group through CloudFormation; Lambda can write to the existing group without deleting audit logs.
 
@@ -58,8 +58,7 @@ Same-origin app backend routes must be explicit CloudFront behaviors. EC2/Dokplo
 These aliases were not mapped into CloudFront because the required Route53/certificate evidence was missing, incomplete, or intentionally retired:
 
 - `erosbarajas.com`: an issued us-east-1 ACM certificate now exists and the domain is modeled as a generated-domain pre-cutover front door, but its traffic DNS record still points to EC2 until audit/cutover approval.
-- Retired `*.zoolandingpage.com.mx` aliases: `crearpaginaweb`, `erosbarajas`, `quierounsitioweb`, `robertorodriguezrodriguez`, `sitiosweb`, `alecfest-voliii`, `despacholegalastralex`, `pamelabetancourt`, and `pokeapi-demo`.
+- Retired `*.zoolandingpage.com.mx` aliases: `crearpaginaweb`, `erosbarajas`, `quierounsitioweb`, `robertorodriguezrodriguez`, `sitiosweb`, `alecfest-voliii`, `despacholegalastralex`, and `pokeapi-demo`.
 - `test.despacholegalastralex.zoolandingpage.com.mx`: not covered by `*.zoolandingpage.com.mx` and no exact us-east-1 ACM certificate found.
 - `alecfest-voliii.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
-- `pamelabetancourt.com`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
 - `robertorodriguezrodriguez.com.mx`: draft registry lists it, but Route53/ACM ownership was not verified in this account.
