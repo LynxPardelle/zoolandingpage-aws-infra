@@ -188,12 +188,29 @@ function reviewTrustInventory(before,candidate,native){
 }
 const activeIds=(candidate,pool="BLOCKED")=>Object.entries(candidate.Resources).filter(([,r])=>!r.Condition||r.Condition===POOL_CONDITION&&pool!=="BLOCKED").map(([id])=>id);
 const expectedActiveResourceCount=(scope,candidate,baseline)=>activeIds(candidate,["hub-rule-policy-patch","hub-import-read-patch"].includes(scope)?baseline.parameters[0].ParameterValue:baseline.ownerPool?.arn||"BLOCKED").length;
+function bootstrapParameters(baseline,candidate){
+ if(!candidate.Parameters)return [];
+ const pool=baseline.ownerPool?.arn;
+ if(pool!=="BLOCKED"&&!/^arn:aws:cognito-idp:us-east-1:765932874577:userpool\/us-east-1_[A-Za-z0-9]+$/.test(pool||""))fail("production_identities_pool_identity_invalid");
+ if(baseline.stackId&&baseline.templates&&(!same(baseline.parameters,[{ParameterKey:POOL_PARAMETER,ParameterValue:"BLOCKED"}])||pool==="BLOCKED"))fail("production_identities_bootstrap_baseline_invalid");
+ return [{ParameterKey:POOL_PARAMETER,ParameterValue:pool}];
+}
+function verifyBootstrapPostParameters(stack,baseline,candidate){
+ if(!same(stack.Parameters||[],bootstrapParameters(baseline,candidate)))fail("production_identities_post_parameters_mismatch");
+ return true;
+}
 function reviewInventory(before,candidate,native,existing,pool="BLOCKED"){
- if(native.Status!=="CREATE_COMPLETE"||native.ExecutionStatus!=="AVAILABLE"||native.NextToken||native.IncludeNestedStacks||!Array.isArray(native.Changes))fail("production_identities_inventory_invalid");
- const present=existing?new Set(existing.map(r=>r.LogicalResourceId)):new Set(Object.keys(before?.Resources||{})),added=activeIds(candidate,pool).filter(id=>!present.has(id));if(!added.length||native.Changes.length!==added.length)fail("production_identities_inventory_invalid");const seen=new Set();for(const c of native.Changes){const r=c.ResourceChange;if(c.Type!=="Resource"||r?.Action!=="Add"||!added.includes(r.LogicalResourceId)||seen.has(r.LogicalResourceId)||candidate.Resources[r.LogicalResourceId].Type!==r.ResourceType||![undefined,"False"].includes(r.Replacement))fail("production_identities_inventory_invalid");seen.add(r.LogicalResourceId);}return native.Changes;
+ const expectedParameters=candidate.Parameters?[{ParameterKey:POOL_PARAMETER,ParameterValue:pool}]:[];
+ if(native.Status!=="CREATE_COMPLETE"||native.ExecutionStatus!=="AVAILABLE"||native.NextToken||native.IncludeNestedStacks||!same(native.Parameters||[],expectedParameters)||!Array.isArray(native.Changes))fail("production_identities_inventory_invalid");
+ const present=existing?new Set(existing.map(r=>r.LogicalResourceId)):new Set(Object.keys(before?.Resources||{})),added=activeIds(candidate,pool).filter(id=>!present.has(id));if(!added.length||native.Changes.length!==added.length)fail("production_identities_inventory_invalid");
+ if(before&&existing&&candidate.Parameters&&pool!=="BLOCKED"){
+  const prior=activeIds(candidate,"BLOCKED"),conditional=Object.entries(candidate.Resources).filter(([,r])=>r.Condition===POOL_CONDITION).map(([id])=>id);
+  if(conditional.length!==4||!same([...present].sort(),prior.sort())||!same([...added].sort(),conditional.sort()))fail("production_identities_inventory_invalid");
+ }
+ const seen=new Set();for(const c of native.Changes){const r=c.ResourceChange;if(c.Type!=="Resource"||r?.Action!=="Add"||!added.includes(r.LogicalResourceId)||seen.has(r.LogicalResourceId)||candidate.Resources[r.LogicalResourceId].Type!==r.ResourceType||![undefined,"False"].includes(r.Replacement))fail("production_identities_inventory_invalid");seen.add(r.LogicalResourceId);}return native.Changes;
 }
 function sourcePackageHash(){return sha(canonical(Object.fromEntries(["tools/thn-production-identities.js","tools/production/thn-deployment-identities.json","tools/production/thn-config-production-deltas.json","tools/thn-production-certificate-release.js","tools/thn-production-retained-review.js",".github/workflows/thn-production-identities.yml","package.json","package-lock.json"].map(f=>[f,sha(fs.readFileSync(path.resolve(__dirname,"..",f)))]))));}
-module.exports={STACK,PACKAGE_BUCKET,NEW_ROLES,EXISTING_ROLES,TRUST_ROLES,HUB_POLICY_IDS,HUB_RULE_LOGICAL_IDS,HUB_RULE_ACTIONS,validateManifest,validatePolicy,validateHubImportReadPolicy,compose,composeTrustPatch,composeHubRulePolicyPatch,composeHubImportReadPatch,reviewInventory,reviewTrustInventory,reviewHubRulePolicyInventory,reviewHubImportReadInventory,hubRulePolicyProof,hubImportReadPermissionProof,expectedActiveResourceCount,sourcePackageHash};
+module.exports={STACK,PACKAGE_BUCKET,NEW_ROLES,EXISTING_ROLES,TRUST_ROLES,HUB_POLICY_IDS,HUB_RULE_LOGICAL_IDS,HUB_RULE_ACTIONS,validateManifest,validatePolicy,validateHubImportReadPolicy,compose,composeTrustPatch,composeHubRulePolicyPatch,composeHubImportReadPatch,bootstrapParameters,verifyBootstrapPostParameters,reviewInventory,reviewTrustInventory,reviewHubRulePolicyInventory,reviewHubImportReadInventory,hubRulePolicyProof,hubImportReadPermissionProof,expectedActiveResourceCount,sourcePackageHash};
 function captureExternalRoles(call,manifest,ownedResources=[],ownerPool="BLOCKED"){
  const snapshots={};
  for(const roleName of Object.keys(manifest.externalRolePolicyBaselines)){
@@ -338,11 +355,12 @@ async function runIdentities(options){
  const capture=(...args)=>{const b=rawCapture(...args);if(scope==="trust-patch"){trustBaseline(b);b.trustPermissionProof=trustPermissionProof(call);}if(scope==="hub-rule-policy-patch"){const c=composeHubRulePolicyPatch(b.templates?.Original,manifest);b.hubRulePolicyProof=hubRulePolicyProof(call,b,c);}if(scope==="hub-import-read-patch"){const c=composeHubImportReadPatch(b.templates?.Original,manifest);b.hubImportReadProof=hubImportReadPermissionProof(call,b,c);}return b;};
  try{
   const baseline=capture(call,manifest,record?.stackId),candidate=scope==="trust-patch"?composeTrustPatch(baseline.templates.Original,manifest):scope==="hub-rule-policy-patch"?composeHubRulePolicyPatch(baseline.templates.Original,manifest):scope==="hub-import-read-patch"?composeHubImportReadPatch(baseline.templates.Original,manifest):compose(baseline.templates?.Original,manifest),bytes=Buffer.from(canonical(candidate)+"\n"),pause=options.pause||((ms)=>new Promise(r=>setTimeout(r,ms)));
+  if(scope==="bootstrap")bootstrapParameters(baseline,candidate);
   const recoveryBytes=scope==="trust-patch"||scope==="hub-rule-policy-patch"||scope==="hub-import-read-patch"?[Buffer.from(canonical(baseline.templates.Original)+"\n"),Buffer.from(canonical(baseline)+"\n")]:[];
   if(execution==="review"){
    const coordinate=sealTemplate(call,dir,bytes,"candidate"),key=coordinate.key,recoveryCoordinates=recoveryBytes.map((b,i)=>sealTemplate(call,dir,b,"recovery"+i));
    if(!same(capture(call,manifest),baseline))fail("production_identities_baseline_changed");options.verifySource?.();
-   const parameters=["hub-rule-policy-patch","hub-import-read-patch"].includes(scope)?structuredClone(baseline.parameters):candidate.Parameters?[{ParameterKey:POOL_PARAMETER,ParameterValue:baseline.ownerPool.arn}]:[];
+   const parameters=["hub-rule-policy-patch","hub-import-read-patch"].includes(scope)?structuredClone(baseline.parameters):scope==="bootstrap"?bootstrapParameters(baseline,candidate):candidate.Parameters?[{ParameterKey:POOL_PARAMETER,ParameterValue:baseline.ownerPool.arn}]:[];
    const response=call("deploy","cloudformation","create-change-set",{StackName:baseline.stackId||STACK,ChangeSetName:`thn-production-${purpose}-${runId}`,ChangeSetType:baseline.templates?"UPDATE":"CREATE",TemplateURL:`https://${ASSET_BUCKET}.s3.${REGION}.amazonaws.com/${key}?versionId=${encodeURIComponent(coordinate.versionId)}`,Parameters:parameters,Capabilities:["CAPABILITY_NAMED_IAM"],RoleARN:roles["cfn-exec"],Description:`THN production deployment identities source ${sourceSha}; retained preview expires after24hours`});
    const native=await cert.waitPreview(call,response.StackId||baseline.stackId||STACK,response.Id,pause),owned=capture(call,manifest,native.StackId);
    if(!same({...owned,stackId:baseline.stackId},baseline))fail("production_identities_baseline_changed");
@@ -355,10 +373,11 @@ async function runIdentities(options){
   const native=call("deploy","cloudformation","describe-change-set",{StackName:record.stackId,ChangeSetName:record.changeSetArn,IncludePropertyValues:true}),fields=nativeFields(call,baseline,candidate,manifest,fingerprint,sourceSha,native,coordinate,scope);
   retained.verifyRetainedExecution(record,options.approvedDigest,fields,native);
   if(!same(capture(call,manifest,record.stackId),baseline))fail("production_identities_baseline_changed");options.verifySource?.();
-  const last=call("deploy","cloudformation","describe-change-set",{StackName:record.stackId,ChangeSetName:record.changeSetArn,IncludePropertyValues:true});retained.verifyRetainedExecution(record,options.approvedDigest,fields,last);
+  const last=call("deploy","cloudformation","describe-change-set",{StackName:record.stackId,ChangeSetName:record.changeSetArn,IncludePropertyValues:true});if(scope==="bootstrap"&&!same(last.Parameters||[],bootstrapParameters(baseline,candidate)))fail("production_identities_inventory_invalid");retained.verifyRetainedExecution(record,options.approvedDigest,fields,last);
   call("deploy","cloudformation","execute-change-set",{StackName:record.stackId,ChangeSetName:record.changeSetArn,ClientRequestToken:`thn-identities-${record.digest}`});
   let stack;for(let i=0;i<120;i++){stack=call("deploy","cloudformation","describe-stacks",{StackName:record.stackId}).Stacks?.[0];if(["CREATE_COMPLETE","UPDATE_COMPLETE"].includes(stack?.StackStatus))break;if(!["CREATE_IN_PROGRESS","UPDATE_IN_PROGRESS","UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"].includes(stack?.StackStatus))fail("production_identities_execution_failed");await pause(5000);}
   if(!["CREATE_COMPLETE","UPDATE_COMPLETE"].includes(stack?.StackStatus))fail("production_identities_execution_timeout");
+  if(scope==="bootstrap")verifyBootstrapPostParameters(stack,baseline,candidate);
   for(const stage of ["Original","Processed"]){const raw=call("lookup","cloudformation","get-template",{StackName:record.stackId,TemplateStage:stage}).TemplateBody;if(!same(typeof raw==="string"?JSON.parse(raw):raw,candidate))fail("production_identities_post_template_mismatch");}
   // Existing trusts and every unrelated inline/managed policy must remain intact.
   for(const name of Object.keys(baseline.externalRoles)){const old=baseline.externalRoles[name],fresh=cert.rolePolicySnapshot((s,o,i)=>call("lookup",s,o,i),`arn:aws:iam::${ACCOUNT}:role/${name}`);if(fresh.roleId!==old.roleId||sha(canonical(fresh.trust))!==old.trustSha256||fresh.boundary!==null)fail("production_identities_post_external_changed");for(const p of old.policies){const k=p.type==="inline"?"inline:"+p.name:p.name;if(fresh.policies[k]!==p.sha256)fail("production_identities_post_external_changed");}}

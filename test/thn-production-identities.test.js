@@ -12,6 +12,28 @@ test("bootstrap keeps deployment identities in a separate add-only stack and rej
 test("a GitHub deployment role cannot acquire private data-plane permissions from inline or attached policies",()=>{
  const f=fixture(),role=Object.values(f.template.Resources).find(r=>r.Properties.RoleName.endsWith("github-deploy"));role.Properties.Policies=[{PolicyName:"UnapprovedDataAccess",PolicyDocument:{Version:"2012-10-17",Statement:[{Effect:"Allow",Action:"dynamodb:GetItem",Resource:"arn:aws:dynamodb:us-east-1:765932874577:table/private"}]}}];assert.throws(()=>api.validateManifest(f),/deployment_data_plane_forbidden/);
 });
+test("existing bootstrap binds its four conditional policies to the exact Auth pool parameter",()=>{
+ const manifest=require("../tools/production/thn-deployment-identities.json"),candidate=api.compose(null,manifest);
+ const pool="arn:aws:cognito-idp:us-east-1:765932874577:userpool/us-east-1_c1QxYjOiI";
+ const baseline={stackId:"existing-stack",templates:{Original:candidate,Processed:candidate},parameters:[{ParameterKey:"ThnProductionOwnerPoolArn",ParameterValue:"BLOCKED"}],ownerPool:{arn:pool}};
+ const parameters=[{ParameterKey:"ThnProductionOwnerPoolArn",ParameterValue:pool}];
+ const existing=Object.entries(candidate.Resources).filter(([,resource])=>!resource.Condition).map(([LogicalResourceId,resource])=>({LogicalResourceId,ResourceType:resource.Type}));
+ const Changes=Object.entries(candidate.Resources).filter(([,resource])=>resource.Condition).map(([LogicalResourceId,resource])=>({Type:"Resource",ResourceChange:{Action:"Add",LogicalResourceId,ResourceType:resource.Type,Replacement:"False"}}));
+ const native={Status:"CREATE_COMPLETE",ExecutionStatus:"AVAILABLE",Parameters:parameters,Changes};
+ assert.deepEqual(api.bootstrapParameters(baseline,candidate),parameters);
+ assert.equal(api.reviewInventory(candidate,candidate,native,existing,pool),Changes);
+ assert.throws(()=>api.reviewInventory(candidate,candidate,native,existing.slice(1),pool),/inventory_invalid/);
+ assert.equal(api.verifyBootstrapPostParameters({Parameters:parameters},baseline,candidate),true);
+ const wrong={ParameterKey:"ThnProductionOwnerPoolArn",ParameterValue:"arn:aws:cognito-idp:us-east-1:765932874577:userpool/us-east-1_WRONG"};
+ for(const observed of [[wrong],[{ParameterKey:"ThnProductionOwnerPoolArn",ParameterValue:"BLOCKED"}],[],[...parameters,wrong],[...parameters,{ParameterKey:"Unexpected",ParameterValue:"x"}]]){
+  assert.throws(()=>api.reviewInventory(candidate,candidate,{...native,Parameters:observed},existing,pool),/inventory_invalid/);
+  assert.throws(()=>api.verifyBootstrapPostParameters({Parameters:observed},baseline,candidate),/post_parameters_mismatch/);
+ }
+ for(const observed of [[],parameters,[{ParameterKey:"ThnProductionOwnerPoolArn",ParameterValue:"BLOCKED"},{ParameterKey:"Unexpected",ParameterValue:"x"}]]){
+  assert.throws(()=>api.bootstrapParameters({...baseline,parameters:observed},candidate),/bootstrap_baseline_invalid/);
+ }
+ assert.throws(()=>api.bootstrapParameters({...baseline,ownerPool:{arn:"arn:aws:cognito-idp:us-east-1:765932874577:userpool/us-east-1_WRONG?"}},candidate),/pool_identity_invalid/);
+});
 module.exports.fixture=fixture;
 test("CREATE bootstrap retains its exact reviewed native ARN and refuses a stale grant inventory before execute",async()=>{
  const fs=require("node:fs"),os=require("node:os"),path=require("node:path"),dir=fs.mkdtempSync(path.join(os.tmpdir(),"thn-identities-test-")),manifest=fixture();
