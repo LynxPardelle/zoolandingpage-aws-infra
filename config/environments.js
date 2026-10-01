@@ -180,7 +180,6 @@ const retiredZoolandingpageComMxAliases = [
   "sitiosweb.zoolandingpage.com.mx",
   "alecfest-voliii.zoolandingpage.com.mx",
   "despacholegalastralex.zoolandingpage.com.mx",
-  "pamelabetancourt.zoolandingpage.com.mx",
   "pokeapi-demo.zoolandingpage.com.mx",
 ];
 
@@ -213,10 +212,6 @@ const unresolvedEc2Aliases = [
   },
   {
     domainName: "alecfest-voliii.com",
-    reason: "Draft registry lists the domain, but Route53/ACM ownership was not verified in this account.",
-  },
-  {
-    domainName: "pamelabetancourt.com",
     reason: "Draft registry lists the domain, but Route53/ACM ownership was not verified in this account.",
   },
   {
