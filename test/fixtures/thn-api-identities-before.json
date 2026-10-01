@@ -1,0 +1,328 @@
+{
+  "ApiCfnNativePolicy0": {
+    "DeletionPolicy": "Retain",
+    "Properties": {
+      "ManagedPolicyName": "ThnProductionApiNative0",
+      "PolicyDocument": {
+        "Statement": [
+          {
+            "Action": [
+              "iam:PassRole"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "iam:PassedToService": "lambda.amazonaws.com"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:iam::765932874577:role/zoolanding-thn-auth-runtime-production-ThnAuthRuntimeV2FunctionRole-*"
+            ]
+          },
+          {
+            "Action": [
+              "lambda:AddPermission",
+              "lambda:CreateAlias",
+              "lambda:CreateFunction",
+              "lambda:DeleteAlias",
+              "lambda:DeleteFunction",
+              "lambda:DeleteFunctionConcurrency",
+              "lambda:DeleteProvisionedConcurrencyConfig",
+              "lambda:GetAlias",
+              "lambda:GetFunction",
+              "lambda:GetFunctionCodeSigningConfig",
+              "lambda:GetFunctionConfiguration",
+              "lambda:GetFunctionRecursionConfig",
+              "lambda:GetFunctionScalingConfig",
+              "lambda:GetPolicy",
+              "lambda:GetProvisionedConcurrencyConfig",
+              "lambda:GetRuntimeManagementConfig",
+              "lambda:ListVersionsByFunction",
+              "lambda:PublishVersion",
+              "lambda:PutFunctionConcurrency",
+              "lambda:PutFunctionRecursionConfig",
+              "lambda:PutFunctionScalingConfig",
+              "lambda:PutProvisionedConcurrencyConfig",
+              "lambda:PutRuntimeManagementConfig",
+              "lambda:RemovePermission",
+              "lambda:TagResource",
+              "lambda:UntagResource",
+              "lambda:UpdateAlias",
+              "lambda:UpdateFunctionCode",
+              "lambda:UpdateFunctionConfiguration"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:RequestedRegion": "us-east-1"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-thn-auth-runtime-production-ThnAuthRuntimeV2Function-*",
+              "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-thn-auth-runtime-production-ThnAuthRuntimeV2Function-*:*"
+            ]
+          },
+          {
+            "Action": [
+              "s3:GetObject",
+              "s3:GetObjectVersion"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:RequestedRegion": "us-east-1"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:s3:::zlp-thn-production-releases-765932874577-us-east-1/thn/production/api/*"
+            ]
+          },
+          {
+            "Action": [
+              "apigateway:DELETE",
+              "apigateway:GET",
+              "apigateway:PATCH",
+              "apigateway:POST",
+              "apigateway:PUT",
+              "apigateway:UpdateRestApiPolicy"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:RequestedRegion": "us-east-1"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:apigateway:us-east-1::/restapis",
+              "arn:aws:apigateway:us-east-1::/restapis/*"
+            ]
+          },
+          {
+            "Action": [
+              "iam:AttachRolePolicy",
+              "iam:CreateRole",
+              "iam:DeleteRole",
+              "iam:DeleteRolePolicy",
+              "iam:DetachRolePolicy",
+              "iam:GetRole",
+              "iam:GetRolePolicy",
+              "iam:ListAttachedRolePolicies",
+              "iam:ListRolePolicies",
+              "iam:PutRolePolicy",
+              "iam:TagRole",
+              "iam:UntagRole",
+              "iam:UpdateAssumeRolePolicy",
+              "iam:UpdateRole",
+              "iam:UpdateRoleDescription"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:RequestedRegion": "us-east-1"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:iam::765932874577:role/zoolanding-thn-auth-runtime-production-ThnAuthRuntimeV2FunctionRole-*"
+            ]
+          },
+          {
+            "Action": [
+              "logs:AssociateKmsKey",
+              "logs:CreateLogDelivery",
+              "logs:CreateLogGroup",
+              "logs:DeleteDataProtectionPolicy",
+              "logs:DeleteIndexPolicy",
+              "logs:DeleteLogGroup",
+              "logs:DeleteResourcePolicy",
+              "logs:DeleteRetentionPolicy",
+              "logs:DisassociateKmsKey",
+              "logs:GetDataProtectionPolicy",
+              "logs:ListTagsForResource",
+              "logs:PutBearerTokenAuthentication",
+              "logs:PutDataProtectionPolicy",
+              "logs:PutIndexPolicy",
+              "logs:PutLogGroupDeletionProtection",
+              "logs:PutResourcePolicy",
+              "logs:PutRetentionPolicy",
+              "logs:TagResource",
+              "logs:UntagResource"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:RequestedRegion": "us-east-1"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:logs:us-east-1:765932874577:log-group:/aws/lambda/zoolanding-thn-auth-runtime-production-ThnAuthRuntimeV2Function-*:*"
+            ]
+          },
+          {
+            "Action": [
+              "logs:DescribeIndexPolicies",
+              "logs:DescribeLogGroups",
+              "logs:DescribeResourcePolicies"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "aws:RequestedRegion": "us-east-1"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "*"
+            ]
+          }
+        ],
+        "Version": "2012-10-17"
+      }
+    },
+    "Type": "AWS::IAM::ManagedPolicy",
+    "UpdateReplacePolicy": "Retain"
+  },
+  "ApiGithubReleasePolicy": {
+    "DeletionPolicy": "Retain",
+    "Properties": {
+      "PolicyDocument": {
+        "Statement": [
+          {
+            "Action": [
+              "cloudformation:CreateChangeSet",
+              "cloudformation:DeleteChangeSet",
+              "cloudformation:DescribeChangeSet",
+              "cloudformation:DescribeStacks",
+              "cloudformation:ExecuteChangeSet",
+              "cloudformation:GetTemplate",
+              "cloudformation:ListStackResources",
+              "cloudformation:UpdateTerminationProtection"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:cloudformation:us-east-1:765932874577:changeSet/thn-production-api-*/*",
+              "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-thn-auth-runtime-production/*"
+            ]
+          },
+          {
+            "Action": [
+              "cloudformation:DescribeType"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "*"
+            ]
+          },
+          {
+            "Action": [
+              "cloudformation:DescribeStacks",
+              "cloudformation:GetTemplate",
+              "cloudformation:ListStackResources"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-auth-admin-prod/*",
+              "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-content-hub-prod/*",
+              "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-image-upload/*"
+            ]
+          },
+          {
+            "Action": [
+              "iam:GetRole",
+              "iam:GetRolePolicy",
+              "iam:ListAttachedRolePolicies",
+              "iam:ListRolePolicies"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:iam::765932874577:role/zoolanding-deployer-thn-auth-runtime-production-cfn-exec",
+              "arn:aws:iam::765932874577:role/zoolanding-deployer-thn-auth-runtime-production-github-deploy"
+            ]
+          },
+          {
+            "Action": [
+              "iam:GetContextKeysForPrincipalPolicy",
+              "iam:GetPolicy",
+              "iam:GetPolicyVersion",
+              "iam:SimulatePrincipalPolicy"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "*"
+            ]
+          },
+          {
+            "Action": [
+              "iam:PassRole"
+            ],
+            "Condition": {
+              "StringEquals": {
+                "iam:PassedToService": "cloudformation.amazonaws.com"
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:iam::765932874577:role/zoolanding-deployer-thn-auth-runtime-production-cfn-exec"
+            ]
+          },
+          {
+            "Action": [
+              "s3:GetBucketPublicAccessBlock",
+              "s3:GetBucketVersioning"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:s3:::zlp-thn-production-releases-765932874577-us-east-1"
+            ]
+          },
+          {
+            "Action": [
+              "s3:AbortMultipartUpload",
+              "s3:GetObject",
+              "s3:GetObjectVersion",
+              "s3:ListMultipartUploadParts",
+              "s3:PutObject"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:s3:::zlp-thn-production-releases-765932874577-us-east-1/thn/production/api/*"
+            ]
+          },
+          {
+            "Action": [
+              "lambda:GetFunction",
+              "lambda:GetFunctionConfiguration"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-thn-auth-runtime-production-ThnAuthRuntimeV2Function-*"
+            ]
+          },
+          {
+            "Action": [
+              "dynamodb:GetItem"
+            ],
+            "Condition": {
+              "ForAllValues:StringEquals": {
+                "dynamodb:LeadingKeys": [
+                  "SERVICE_BINDING#production#thn-journal-production-v2"
+                ]
+              }
+            },
+            "Effect": "Allow",
+            "Resource": [
+              "arn:aws:dynamodb:us-east-1:765932874577:table/zoolanding-content-hub-prod-ServiceBindingRegistryV2"
+            ]
+          }
+        ],
+        "Version": "2012-10-17"
+      },
+      "PolicyName": "ThnRetainedProductionReleaseV1",
+      "Roles": [
+        {
+          "Ref": "ApiGithubDeployRole"
+        }
+      ]
+    },
+    "Type": "AWS::IAM::Policy",
+    "UpdateReplacePolicy": "Retain"
+  }
+}
