@@ -3,6 +3,7 @@ const fs=require("node:fs"),path=require("node:path"),os=require("node:os");
 const cert=require("./thn-production-certificate-release"),retained=require("./thn-production-retained-review"),{canonical,sha,ACCOUNT,REGION,roles,ASSET_BUCKET}=cert;
 const STACK="ZoolandingProduction-Zoolandingpage-production-ThnDeploymentIdentities",fail=c=>{throw Error(c);},same=(a,b)=>canonical(a)===canonical(b);
 const NEW_ROLES=new Set(["zoolanding-deployer-thn-auth-runtime-production-github-deploy","zoolanding-deployer-image-upload-production-github-deploy","zoolanding-deployer-api-proxy-production-github-deploy",...['auth-admin','thn-auth-runtime','content-hub','image-upload','api-proxy'].map(s=>`zoolanding-deployer-${s}-production-cfn-exec`)]);
+const API_RUNTIME_ROLE="zlp-thn-auth-runtime-prod-role";
 const EXISTING_ROLES=new Set(["zoolanding-auth-admin-production-deploy","zoolanding-content-hub-production-deploy","zoolanding-config-authoring-production-deploy","zoolanding-config-runtime-read-production-github-deploy","zoolanding-config-runtime-read-production-cfn-exec"]);
 const PACKAGE_BUCKET=`zlp-thn-production-releases-${ACCOUNT}-${REGION}`;
 const POOL_PARAMETER="ThnProductionOwnerPoolArn",POOL_CONDITION="HasVerifiedProductionOwnerPool";
@@ -23,11 +24,13 @@ const HUB_IMPORT_READ_ID="HubImportPreflightReadPolicy";
 const HUB_IMPORT_DEPLOY_ROLE="zoolanding-content-hub-production-deploy";
 const HUB_IMPORT_REGISTRY=`arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/zoolanding-content-hub-prod-ServiceBindingRegistryV2`;
 const HUB_IMPORT_BUCKET=`arn:aws:s3:::zlp-thn-ch-production-private-${ACCOUNT}-${REGION}`;
+const API_PATCH_OLD_HASHES={ApiCfnNativePolicy0:"add875db6189ff5cc9cf5b9f61f3eca590df8ef376805384e9b94fb19a97dca2",ApiGithubReleasePolicy:"aa1a1d1dd31baaba87f606b931ad14e147c7295d7d98a0d322b28db9684af860"};
 const HUB_POLICY_ARN=id=>`arn:aws:iam::${ACCOUNT}:policy/${id==="HubCfnNativePolicy2"?"ThnProductionHubNative2":"ThnProductionHubNative3"}`;
 const HUB_RULE_ARN=name=>`arn:aws:events:${REGION}:${ACCOUNT}:rule/${name}`;
 const hubRuleNames=logical=>({old:`zoolanding-content-hub-prod-${logical}-*`,current:`zoolanding-content-hub-pr-${logical.slice(0,25)}-*`});
 function githubStatement(role){return {Effect:"Allow",Action:"sts:AssumeRoleWithWebIdentity",Principal:{Federated:`arn:aws:iam::${ACCOUNT}:oidc-provider/token.actions.githubusercontent.com`},Condition:{StringEquals:{"token.actions.githubusercontent.com:aud":"sts.amazonaws.com","token.actions.githubusercontent.com:sub":`repo:LynxPardelle/${TRUST_ROLES.get(role)}:environment:production`}}};}
 function packageResources(){return {ThnProductionReleaseBucket:{Type:"AWS::S3::Bucket",DeletionPolicy:"Retain",UpdateReplacePolicy:"Retain",Properties:{BucketName:PACKAGE_BUCKET,VersioningConfiguration:{Status:"Enabled"},BucketEncryption:{ServerSideEncryptionConfiguration:[{ServerSideEncryptionByDefault:{SSEAlgorithm:"AES256"}}]},PublicAccessBlockConfiguration:{BlockPublicAcls:true,BlockPublicPolicy:true,IgnorePublicAcls:true,RestrictPublicBuckets:true},OwnershipControls:{Rules:[{ObjectOwnership:"BucketOwnerEnforced"}]}}},ThnProductionReleaseBucketPolicy:{Type:"AWS::S3::BucketPolicy",DeletionPolicy:"Retain",UpdateReplacePolicy:"Retain",Properties:{Bucket:{Ref:"ThnProductionReleaseBucket"},PolicyDocument:{Version:"2012-10-17",Statement:[{Effect:"Deny",Principal:"*",Action:"s3:*",Resource:[`arn:aws:s3:::${PACKAGE_BUCKET}`,`arn:aws:s3:::${PACKAGE_BUCKET}/*`],Condition:{Bool:{"aws:SecureTransport":"false"}}}]}}}};}
+function apiRuntimeRoleResource(){return {Type:"AWS::IAM::Role",DeletionPolicy:"Retain",UpdateReplacePolicy:"Retain",Properties:{RoleName:API_RUNTIME_ROLE,MaxSessionDuration:3600,AssumeRolePolicyDocument:{Version:"2012-10-17",Statement:[{Effect:"Allow",Action:"sts:AssumeRole",Principal:{Service:"lambda.amazonaws.com"}}]},Policies:[{PolicyName:"ThnExactProductionRegistryRuntimeRead",PolicyDocument:{Version:"2012-10-17",Statement:[{Effect:"Allow",Action:["dynamodb:GetItem"],Resource:[HUB_IMPORT_REGISTRY],Condition:{"ForAllValues:StringEquals":{"dynamodb:LeadingKeys":["SERVICE_BINDING#production#thn-journal-production-v2"]},Null:{"dynamodb:LeadingKeys":"false"}}},{Effect:"Allow",Action:["logs:CreateLogStream","logs:PutLogEvents"],Resource:[`arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/lambda/zlp-thn-auth-runtime-production:*`]}]}}]}};}
 function validateManifest(manifest){
  if(!manifest||manifest.schemaVersion!==1||manifest.environment!=="production"||manifest.account!==ACCOUNT||manifest.region!==REGION||!manifest.template?.Resources||manifest.template.Transform||!manifest.providerSchemaHashes||!manifest.proofMatrix||!manifest.externalRolePolicyBaselines||!manifest.sourceCandidateHashes)fail("production_identities_manifest_invalid");
  if(manifest.template.Parameters){const entries=Object.entries(manifest.template.Parameters),p=manifest.template.Parameters[POOL_PARAMETER];if(entries.length!==1||p?.Type!=="String"||p.Default!=="BLOCKED"||p.NoEcho||typeof p.AllowedPattern!=="string"||!p.AllowedPattern.includes("BLOCKED")||!p.AllowedPattern.includes("765932874577")||!p.AllowedPattern.includes("us-east-1"))fail("production_identities_pool_parameter_invalid");if(!same(manifest.template.Conditions,{[POOL_CONDITION]:{"Fn::Not":[{"Fn::Equals":[{Ref:POOL_PARAMETER},"BLOCKED"]}]}}))fail("production_identities_pool_parameter_invalid");}
@@ -36,13 +39,14 @@ function validateManifest(manifest){
   const p=resource.Properties;
   if(resource.DeletionPolicy!=="Retain"||resource.UpdateReplacePolicy!=="Retain"||!p)fail("production_identities_manifest_invalid");
   if(resource.Type==="AWS::IAM::Role"){
-   if(!NEW_ROLES.has(p.RoleName)||roleNames.has(p.RoleName)||p.PermissionsBoundary||(p.ManagedPolicyArns||[]).some(arn=>typeof arn!=="object"||!arn.Ref||manifest.template.Resources[arn.Ref]?.Type!=="AWS::IAM::ManagedPolicy"))fail("production_identities_manifest_invalid");
+   if((!NEW_ROLES.has(p.RoleName)&&!(logicalId==="ApiRuntimeRole"&&p.RoleName===API_RUNTIME_ROLE))||roleNames.has(p.RoleName)||p.PermissionsBoundary||(p.ManagedPolicyArns||[]).some(arn=>typeof arn!=="object"||!arn.Ref||manifest.template.Resources[arn.Ref]?.Type!=="AWS::IAM::ManagedPolicy"))fail("production_identities_manifest_invalid");
+   if(logicalId==="ApiRuntimeRole"&&!same(resource,apiRuntimeRoleResource()))fail("production_identities_runtime_role_invalid");
    roleNames.add(p.RoleName);const trust=p.AssumeRolePolicyDocument;
    if(trust?.Version!=="2012-10-17"||trust.Statement?.length!==1||trust.Statement[0].Effect!=="Allow")fail("production_identities_manifest_invalid");
    const t=trust.Statement[0];
    if(p.RoleName.endsWith("github-deploy")){
     if(!TRUST_ROLES.has(p.RoleName)||!same(trust,{Version:"2012-10-17",Statement:[githubStatement(p.RoleName)]}))fail("production_identities_manifest_invalid");
-   }else if(t.Action!=="sts:AssumeRole"||t.Principal?.Service!=="cloudformation.amazonaws.com"||t.Condition)fail("production_identities_manifest_invalid");
+   }else if(t.Action!=="sts:AssumeRole"||t.Principal?.Service!==(p.RoleName===API_RUNTIME_ROLE?"lambda.amazonaws.com":"cloudformation.amazonaws.com")||t.Condition)fail("production_identities_manifest_invalid");
    let inlineBytes=0;for(const policy of p.Policies||[]){validatePolicy(policy.PolicyDocument);inlineBytes+=Buffer.byteLength(canonical(policy.PolicyDocument));if(p.RoleName.endsWith("github-deploy"))validateDeploymentPolicy(policy.PolicyDocument);}if(inlineBytes>10240)fail("production_identities_policy_size_invalid");
   }else if(["AWS::IAM::Policy","AWS::IAM::ManagedPolicy"].includes(resource.Type)){
    const name=resource.Type==="AWS::IAM::ManagedPolicy"?p.ManagedPolicyName:p.PolicyName;
@@ -55,7 +59,7 @@ function validateManifest(manifest){
    if(attached.some(role=>{const name=typeof role==="string"?role:manifest.template.Resources[role.Ref]?.Properties?.RoleName;return name?.endsWith("github-deploy")||EXISTING_ROLES.has(name)&&!name.endsWith("cfn-exec");}))validateDeploymentPolicy(p.PolicyDocument,{allowRegistryPolicyRead:logicalId===HUB_IMPORT_READ_ID});
   }else fail("production_identities_manifest_invalid");
  }
- if(roleNames.size!==NEW_ROLES.size)fail("production_identities_manifest_invalid");
+ if(roleNames.size!==NEW_ROLES.size+(manifest.template.Resources.ApiRuntimeRole?1:0)||manifest.template.Resources.ApiCfnNativePolicy0&&!manifest.template.Resources.ApiRuntimeRole)fail("production_identities_manifest_invalid");
  for(const role of Object.values(manifest.template.Resources).filter(r=>r.Type==="AWS::IAM::Role"&&r.Properties.RoleName.endsWith("github-deploy")))for(const arn of role.Properties.ManagedPolicyArns||[])validateDeploymentPolicy(manifest.template.Resources[arn.Ref].Properties.PolicyDocument);
  if(manifest.template.Resources[HUB_IMPORT_READ_ID])validateHubImportReadPolicy(manifest);
  return manifest;
@@ -69,6 +73,50 @@ function compose(before,manifest){validateManifest(manifest);if(before?.Transfor
 function hubImportReadPolicy(){return {Type:"AWS::IAM::Policy",DeletionPolicy:"Retain",UpdateReplacePolicy:"Retain",Properties:{PolicyName:"ThnProductionHubImportPreflightRead",Roles:[HUB_IMPORT_DEPLOY_ROLE],PolicyDocument:{Version:"2012-10-17",Statement:[{Effect:"Allow",Action:["dynamodb:GetResourcePolicy"],Resource:HUB_IMPORT_REGISTRY},{Effect:"Allow",Action:["s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetBucketPublicAccessBlock","s3:ListBucket"],Resource:HUB_IMPORT_BUCKET}]}}};}
 function validateHubImportReadPolicy(manifest){const resource=manifest?.template?.Resources?.[HUB_IMPORT_READ_ID];if(!same(resource,hubImportReadPolicy()))fail("production_identities_hub_import_read_policy_invalid");return resource;}
 function composeHubImportReadPatch(before,manifest){validateManifest(manifest);validateHubImportReadPolicy(manifest);if(!before?.Resources||before.Resources[HUB_IMPORT_READ_ID])fail("production_identities_hub_import_read_baseline_invalid");const candidate=structuredClone(before);candidate.Resources[HUB_IMPORT_READ_ID]=structuredClone(hubImportReadPolicy());try{if(!same(candidate,compose(candidate,manifest)))fail("production_identities_hub_import_read_baseline_invalid");}catch{fail("production_identities_hub_import_read_baseline_invalid");}return candidate;}
+function composeApiRuntimeRolePatch(before,manifest){
+ validateManifest(manifest);
+ if(!before?.Resources||before.Resources.ApiRuntimeRole||!same(before.Parameters,manifest.template.Parameters)||!same(before.Conditions,manifest.template.Conditions)||Object.entries(API_PATCH_OLD_HASHES).some(([id,hash])=>sha(canonical(before.Resources[id]))!==hash))fail("production_identities_api_runtime_baseline_invalid");
+ const candidate=structuredClone(before);
+ for(const id of [...Object.keys(API_PATCH_OLD_HASHES),"ApiRuntimeRole"])candidate.Resources[id]=structuredClone(manifest.template.Resources[id]);
+ try{if(!same(candidate,compose(candidate,manifest)))fail("production_identities_api_runtime_baseline_invalid");}catch{fail("production_identities_api_runtime_baseline_invalid");}
+ return candidate;
+}
+function reviewApiRuntimeRoleInventory(before,candidate,native,manifest,pool,existing){
+ const expected=composeApiRuntimeRolePatch(before,manifest),ids=Object.keys(API_PATCH_OLD_HASHES);
+ if(!same(candidate,expected)||native?.Status!=="CREATE_COMPLETE"||native.ExecutionStatus!=="AVAILABLE"||native.NextToken||native.IncludeNestedStacks||!same(native.Parameters,[{ParameterKey:POOL_PARAMETER,ParameterValue:pool}])||native.Changes?.length!==3||!Array.isArray(existing))fail("production_identities_api_runtime_inventory_invalid");
+ const physical=new Map(existing.map(row=>[row.LogicalResourceId,row])),seen=new Set();
+ for(const item of native.Changes){
+  const change=item?.ResourceChange,id=change?.LogicalResourceId;
+  if(item.Type!=="Resource"||seen.has(id)||![...ids,"ApiRuntimeRole"].includes(id)||change.ResourceType!==candidate.Resources[id].Type)fail("production_identities_api_runtime_inventory_invalid");
+  seen.add(id);
+  if(id==="ApiRuntimeRole"){
+   if(change.Action!=="Add"||![undefined,"False"].includes(change.Replacement)||change.PhysicalResourceId||(change.Scope&&(!Array.isArray(change.Scope)||change.Scope.length))||(change.Details&&(!Array.isArray(change.Details)||change.Details.length)))fail("production_identities_api_runtime_inventory_invalid");
+  }else{
+   const old=physical.get(id);
+   if(change.Action!=="Modify"||change.Replacement!=="False"||!old?.PhysicalResourceId||old.ResourceType!==change.ResourceType||change.PhysicalResourceId!==old.PhysicalResourceId||!same(change.Scope,["Properties"])||!Array.isArray(change.Details)||!change.Details.length||change.Details.some(detail=>detail.Target?.Attribute!=="Properties"||detail.Target.Name!=="PolicyDocument"||detail.Target.RequiresRecreation!=="Never"||detail.ChangeSource!=="DirectModification"||![undefined,"Static"].includes(detail.Evaluation)))fail("production_identities_api_runtime_inventory_invalid");
+  }
+ }
+ if(seen.size!==3)fail("production_identities_api_runtime_inventory_invalid");
+ return native.Changes;
+}
+function apiRuntimeRolePermissionProof(call,candidate){
+ if(!same(candidate?.Resources?.ApiRuntimeRole,apiRuntimeRoleResource())||candidate.Resources.ApiCfnNativePolicy0?.Type!=="AWS::IAM::ManagedPolicy"||candidate.Resources.ApiGithubReleasePolicy?.Type!=="AWS::IAM::Policy")fail("production_identities_api_runtime_permissions_invalid");
+ const matrix=[
+  {resource:`arn:aws:iam::${ACCOUNT}:role/${API_RUNTIME_ROLE}`,actions:["iam:CreateRole","iam:PutRolePolicy","iam:AttachRolePolicy","iam:GetRolePolicy","iam:TagRole","iam:UntagRole","iam:GetRole","iam:ListAttachedRolePolicies","iam:ListRolePolicies"]},
+  {resource:`arn:aws:iam::${ACCOUNT}:policy/ThnProductionApiNative0`,actions:["iam:GetPolicy","iam:ListPolicyVersions","iam:CreatePolicyVersion","iam:DeletePolicyVersion","iam:ListEntitiesForPolicy","iam:GetPolicyVersion"]},
+  {resource:`arn:aws:iam::${ACCOUNT}:role/zoolanding-deployer-thn-auth-runtime-production-github-deploy`,actions:["iam:PutRolePolicy","iam:DeleteRolePolicy","iam:GetRolePolicy"]},
+ ];
+ for(const {resource,actions} of matrix){
+  const response=call("lookup","iam","simulate-principal-policy",{PolicySourceArn:roles["cfn-exec"],ActionNames:actions,ResourceArns:[resource]});
+  if(response.IsTruncated||response.Marker||response.EvaluationResults?.length!==actions.length)fail("production_identities_api_runtime_permissions_invalid");
+  const seen=new Set();
+  for(const row of response.EvaluationResults){
+   if(!actions.includes(row.EvalActionName)||seen.has(row.EvalActionName)||row.EvalResourceName!==resource||row.EvalDecision!=="allowed"||row.MissingContextValues?.length||row.ResourceSpecificResults?.some(x=>x.EvalResourceName!==resource||x.EvalResourceDecision!=="allowed"||x.MissingContextValues?.length))fail("production_identities_api_runtime_permissions_invalid");
+   seen.add(row.EvalActionName);
+  }
+ }
+ return {requests:matrix.map(({resource,actions})=>({resource,actions,decision:"allowed"}))};
+}
 function reviewHubImportReadInventory(before,candidate,native){if(!before?.Resources||!candidate?.Resources||before.Resources[HUB_IMPORT_READ_ID]||!same(candidate.Resources[HUB_IMPORT_READ_ID],hubImportReadPolicy())||native?.Status!=="CREATE_COMPLETE"||native.ExecutionStatus!=="AVAILABLE"||native.NextToken||native.IncludeNestedStacks||!same(native.Parameters,[{ParameterKey:POOL_PARAMETER,ParameterValue:"BLOCKED"}])||native.Changes?.length!==1)fail("production_identities_hub_import_read_inventory_invalid");const unchanged=structuredClone(candidate);delete unchanged.Resources[HUB_IMPORT_READ_ID];if(!same(unchanged,before))fail("production_identities_hub_import_read_inventory_invalid");const c=native.Changes[0],r=c.ResourceChange;if(c.Type!=="Resource"||r?.Action!=="Add"||r.LogicalResourceId!==HUB_IMPORT_READ_ID||r.ResourceType!=="AWS::IAM::Policy"||![undefined,"False"].includes(r.Replacement)||r.PhysicalResourceId||r.Scope?.length)fail("production_identities_hub_import_read_inventory_invalid");return native.Changes;}
 function exactSimulation(response,actions,resource){
  const results=response?.EvaluationResults;
@@ -187,7 +235,7 @@ function reviewTrustInventory(before,candidate,native){
  }return native.Changes;
 }
 const activeIds=(candidate,pool="BLOCKED")=>Object.entries(candidate.Resources).filter(([,r])=>!r.Condition||r.Condition===POOL_CONDITION&&pool!=="BLOCKED").map(([id])=>id);
-const expectedActiveResourceCount=(scope,candidate,baseline)=>activeIds(candidate,["hub-rule-policy-patch","hub-import-read-patch"].includes(scope)?baseline.parameters[0].ParameterValue:baseline.ownerPool?.arn||"BLOCKED").length;
+const expectedActiveResourceCount=(scope,candidate,baseline)=>activeIds(candidate,["hub-rule-policy-patch","hub-import-read-patch","api-runtime-role-patch"].includes(scope)?baseline.parameters[0].ParameterValue:baseline.ownerPool?.arn||"BLOCKED").length;
 function bootstrapParameters(baseline,candidate){
  if(!candidate.Parameters)return [];
  const pool=baseline.ownerPool?.arn;
@@ -210,7 +258,7 @@ function reviewInventory(before,candidate,native,existing,pool="BLOCKED"){
  const seen=new Set();for(const c of native.Changes){const r=c.ResourceChange;if(c.Type!=="Resource"||r?.Action!=="Add"||!added.includes(r.LogicalResourceId)||seen.has(r.LogicalResourceId)||candidate.Resources[r.LogicalResourceId].Type!==r.ResourceType||![undefined,"False"].includes(r.Replacement))fail("production_identities_inventory_invalid");seen.add(r.LogicalResourceId);}return native.Changes;
 }
 function sourcePackageHash(){return sha(canonical(Object.fromEntries(["tools/thn-production-identities.js","tools/production/thn-deployment-identities.json","tools/production/thn-config-production-deltas.json","tools/thn-production-certificate-release.js","tools/thn-production-retained-review.js",".github/workflows/thn-production-identities.yml","package.json","package-lock.json"].map(f=>[f,sha(fs.readFileSync(path.resolve(__dirname,"..",f)))]))));}
-module.exports={STACK,PACKAGE_BUCKET,NEW_ROLES,EXISTING_ROLES,TRUST_ROLES,HUB_POLICY_IDS,HUB_RULE_LOGICAL_IDS,HUB_RULE_ACTIONS,validateManifest,validatePolicy,validateHubImportReadPolicy,compose,composeTrustPatch,composeHubRulePolicyPatch,composeHubImportReadPatch,bootstrapParameters,verifyBootstrapPostParameters,reviewInventory,reviewTrustInventory,reviewHubRulePolicyInventory,reviewHubImportReadInventory,hubRulePolicyProof,hubImportReadPermissionProof,expectedActiveResourceCount,sourcePackageHash};
+module.exports={STACK,PACKAGE_BUCKET,NEW_ROLES,EXISTING_ROLES,TRUST_ROLES,HUB_POLICY_IDS,HUB_RULE_LOGICAL_IDS,HUB_RULE_ACTIONS,validateManifest,validatePolicy,validateHubImportReadPolicy,compose,composeTrustPatch,composeHubRulePolicyPatch,composeHubImportReadPatch,composeApiRuntimeRolePatch,reviewApiRuntimeRoleInventory,apiRuntimeRolePermissionProof,bootstrapParameters,verifyBootstrapPostParameters,reviewInventory,reviewTrustInventory,reviewHubRulePolicyInventory,reviewHubImportReadInventory,hubRulePolicyProof,hubImportReadPermissionProof,expectedActiveResourceCount,sourcePackageHash};
 function captureExternalRoles(call,manifest,ownedResources=[],ownerPool="BLOCKED"){
  const snapshots={};
  for(const roleName of Object.keys(manifest.externalRolePolicyBaselines)){
@@ -249,7 +297,7 @@ function captureBaseline(call,manifest,ownedStackId){
  const nativeResources=stack?call("lookup","cloudformation","list-stack-resources",{StackName:stack.StackId}):{StackResourceSummaries:[]};if(nativeResources.NextToken)fail("production_identities_baseline_incomplete");
  const packageBucket=capturePackageBucket(call,nativeResources.StackResourceSummaries);
  const externalRoles=captureExternalRoles(call,manifest,nativeResources.StackResourceSummaries,ownerPool.arn);
- for(const name of NEW_ROLES){try{newRoles[name]=cert.rolePolicySnapshot((service,op,args)=>call("lookup",service,op,args),`arn:aws:iam::${ACCOUNT}:role/${name}`);}catch(error){if(error.causeCode!=="NoSuchEntity")throw error;newRoles[name]=null;}}
+ for(const name of [...NEW_ROLES,...(manifest.template.Resources.ApiRuntimeRole?[API_RUNTIME_ROLE]:[])]){try{newRoles[name]=cert.rolePolicySnapshot((service,op,args)=>call("lookup",service,op,args),`arn:aws:iam::${ACCOUNT}:role/${name}`);}catch(error){if(error.causeCode!=="NoSuchEntity")throw error;newRoles[name]=null;}}
  if(!stack){if(Object.values(newRoles).some(Boolean))fail("production_identities_unowned_role_exists");return {stackId:null,templates:null,resources:[],newRoles,externalRoles,ownerPool,packageBucket};}
  if(stack.StackName!==STACK||!new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[A-Za-z0-9-]+$`).test(stack.StackId||"")||stack.RoleARN!==roles["cfn-exec"]||!["REVIEW_IN_PROGRESS","CREATE_COMPLETE","UPDATE_COMPLETE"].includes(stack.StackStatus))fail("production_identities_stack_invalid");
  const resources=nativeResources;
@@ -318,6 +366,21 @@ function verifyHubImportReadPost(call,before,after,candidate){
  }
  return true;
 }
+function verifyApiRuntimeRolePost(before,after,candidate){
+ const expected=structuredClone(before),runtime=candidate.Resources.ApiRuntimeRole;
+ delete expected.apiRuntimeRolePermissionProof;
+ const role=after.newRoles?.[API_RUNTIME_ROLE],inline=`inline:${runtime?.Properties?.Policies?.[0]?.PolicyName}`;
+ if(before.newRoles?.[API_RUNTIME_ROLE]!==null||!role?.roleId||role.boundary!==null||!same(role.trust,runtime.Properties.AssumeRolePolicyDocument)||!same(role.policies,{[inline]:sha(canonical(runtime.Properties.Policies[0].PolicyDocument))}))fail("production_identities_api_runtime_post_mismatch");
+ expected.templates={Original:candidate,Processed:candidate};
+ expected.resources=[...before.resources,{LogicalResourceId:"ApiRuntimeRole",PhysicalResourceId:API_RUNTIME_ROLE,ResourceType:"AWS::IAM::Role"}].sort((a,b)=>a.LogicalResourceId.localeCompare(b.LogicalResourceId));
+ expected.newRoles[API_RUNTIME_ROLE]=role;
+ const caller="zoolanding-deployer-thn-auth-runtime-production-github-deploy",cfn="zoolanding-deployer-thn-auth-runtime-production-cfn-exec",managed=`arn:aws:iam::${ACCOUNT}:policy/ThnProductionApiNative0`;
+ if(!expected.newRoles[caller]?.policies?.["inline:ThnRetainedProductionReleaseV1"]||!expected.newRoles[cfn]?.policies?.[managed])fail("production_identities_api_runtime_post_mismatch");
+ expected.newRoles[caller].policies["inline:ThnRetainedProductionReleaseV1"]=sha(canonical(candidate.Resources.ApiGithubReleasePolicy.Properties.PolicyDocument));
+ expected.newRoles[cfn].policies[managed]=sha(canonical(candidate.Resources.ApiCfnNativePolicy0.Properties.PolicyDocument));
+ if(!same(expected,after))fail("production_identities_api_runtime_post_mismatch");
+ return true;
+}
 function nativeFields(call,baseline,candidate,manifest,fingerprint,sourceSha,native,coordinate,scope="bootstrap"){
  if(baseline.stackId&&native.StackId!==baseline.stackId)fail("production_identities_native_mismatch");
  const templates={};for(const stage of ["Original","Processed"]){const raw=call("deploy","cloudformation","get-template",{StackName:native.StackId,ChangeSetName:native.ChangeSetId,TemplateStage:stage}).TemplateBody;templates[stage]=typeof raw==="string"?JSON.parse(raw):raw;if(!same(templates[stage],candidate))fail("production_identities_native_mismatch");}
@@ -326,6 +389,7 @@ function nativeFields(call,baseline,candidate,manifest,fingerprint,sourceSha,nat
   if(!same(native.Parameters,[{ParameterKey:POOL_PARAMETER,ParameterValue:"BLOCKED"}]))fail("production_identities_trust_parameters_invalid");
  }else if(scope==="hub-rule-policy-patch")reviewHubRulePolicyInventory(baseline.templates.Original,candidate,native);
  else if(scope==="hub-import-read-patch")reviewHubImportReadInventory(baseline.templates.Original,candidate,native);
+ else if(scope==="api-runtime-role-patch")reviewApiRuntimeRoleInventory(baseline.templates.Original,candidate,native,manifest,baseline.parameters[0].ParameterValue,baseline.resources);
  else reviewInventory(baseline.templates?.Original,candidate,native,baseline.resources,baseline.ownerPool?.arn||"BLOCKED");
  return {sourceSha,sourcePackageSha256:fingerprint,baselineSha256:sha(canonical(baseline)),identitySha256:sha(canonical(baseline.resources)),permissionSha256:sha(canonical({external:baseline.externalRoles,newRoles:baseline.newRoles,proofMatrix:manifest.proofMatrix,providerSchemaHashes:manifest.providerSchemaHashes})),originalTemplateSha256:sha(canonical(templates.Original)),processedTemplateSha256:sha(canonical(templates.Processed)),parametersSha256:sha(canonical(native.Parameters||[])),nativeInventorySha256:retained.hash(native.Changes),changes:retained.inventorySummary(native.Changes),packageManifest:[coordinate]};
 }
@@ -343,7 +407,7 @@ function readSealed(call,coordinate,dir,bytes){
 }
 async function runIdentities(options){
  const {call,manifest,sourceSha,fingerprint,execution,runId}=options,scope=options.scope||"bootstrap",purpose=scope==="bootstrap"?"deployment-identities":`deployment-identities-${scope}`;validateManifest(manifest);
- if(!["bootstrap","trust-patch","hub-rule-policy-patch","hub-import-read-patch"].includes(scope)||!["review","execute","cleanup"].includes(execution)||!/^[a-f0-9]{40}$/.test(sourceSha)||!/^[a-f0-9]{64}$/.test(fingerprint)||!/^\d+-\d+$/.test(runId))fail("production_identities_operation_invalid");
+ if(!["bootstrap","trust-patch","hub-rule-policy-patch","hub-import-read-patch","api-runtime-role-patch"].includes(scope)||!["review","execute","cleanup"].includes(execution)||!/^[a-f0-9]{40}$/.test(sourceSha)||!/^[a-f0-9]{64}$/.test(fingerprint)||!/^\d+-\d+$/.test(runId))fail("production_identities_operation_invalid");
  const record=execution==="review"?undefined:retained.validateReview(options.record);
  if(record&&(record.purpose!==purpose||record.sourceSha!==sourceSha||record.sourcePackageSha256!==fingerprint||record.digest!==options.approvedDigest))fail("production_identities_review_invalid");
  if(execution==="cleanup"){
@@ -352,15 +416,15 @@ async function runIdentities(options){
   call("deploy","cloudformation","delete-change-set",{StackName:record.stackId,ChangeSetName:record.changeSetArn});return {cleanup:true,changeSetArn:record.changeSetArn};
  }
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"thn-production-identities-")),rawCapture=options.captureBaseline||captureBaseline;
- const capture=(...args)=>{const b=rawCapture(...args);if(scope==="trust-patch"){trustBaseline(b);b.trustPermissionProof=trustPermissionProof(call);}if(scope==="hub-rule-policy-patch"){const c=composeHubRulePolicyPatch(b.templates?.Original,manifest);b.hubRulePolicyProof=hubRulePolicyProof(call,b,c);}if(scope==="hub-import-read-patch"){const c=composeHubImportReadPatch(b.templates?.Original,manifest);b.hubImportReadProof=hubImportReadPermissionProof(call,b,c);}return b;};
+ const capture=(...args)=>{const b=rawCapture(...args);if(scope==="trust-patch"){trustBaseline(b);b.trustPermissionProof=trustPermissionProof(call);}if(scope==="hub-rule-policy-patch"){const c=composeHubRulePolicyPatch(b.templates?.Original,manifest);b.hubRulePolicyProof=hubRulePolicyProof(call,b,c);}if(scope==="hub-import-read-patch"){const c=composeHubImportReadPatch(b.templates?.Original,manifest);b.hubImportReadProof=hubImportReadPermissionProof(call,b,c);}if(scope==="api-runtime-role-patch"){if(!b.stackId||!b.templates||b.terminationProtection!==false||b.newRoles?.[API_RUNTIME_ROLE])fail("production_identities_api_runtime_baseline_invalid");b.apiRuntimeRolePermissionProof=apiRuntimeRolePermissionProof(call,composeApiRuntimeRolePatch(b.templates.Original,manifest));}return b;};
  try{
-  const baseline=capture(call,manifest,record?.stackId),candidate=scope==="trust-patch"?composeTrustPatch(baseline.templates.Original,manifest):scope==="hub-rule-policy-patch"?composeHubRulePolicyPatch(baseline.templates.Original,manifest):scope==="hub-import-read-patch"?composeHubImportReadPatch(baseline.templates.Original,manifest):compose(baseline.templates?.Original,manifest),bytes=Buffer.from(canonical(candidate)+"\n"),pause=options.pause||((ms)=>new Promise(r=>setTimeout(r,ms)));
+  const baseline=capture(call,manifest,record?.stackId),candidate=scope==="trust-patch"?composeTrustPatch(baseline.templates.Original,manifest):scope==="hub-rule-policy-patch"?composeHubRulePolicyPatch(baseline.templates.Original,manifest):scope==="hub-import-read-patch"?composeHubImportReadPatch(baseline.templates.Original,manifest):scope==="api-runtime-role-patch"?composeApiRuntimeRolePatch(baseline.templates.Original,manifest):compose(baseline.templates?.Original,manifest),bytes=Buffer.from(canonical(candidate)+"\n"),pause=options.pause||((ms)=>new Promise(r=>setTimeout(r,ms)));
   if(scope==="bootstrap")bootstrapParameters(baseline,candidate);
-  const recoveryBytes=scope==="trust-patch"||scope==="hub-rule-policy-patch"||scope==="hub-import-read-patch"?[Buffer.from(canonical(baseline.templates.Original)+"\n"),Buffer.from(canonical(baseline)+"\n")]:[];
+  const recoveryBytes=["trust-patch","hub-rule-policy-patch","hub-import-read-patch","api-runtime-role-patch"].includes(scope)?[Buffer.from(canonical(baseline.templates.Original)+"\n"),Buffer.from(canonical(baseline)+"\n")]:[];
   if(execution==="review"){
    const coordinate=sealTemplate(call,dir,bytes,"candidate"),key=coordinate.key,recoveryCoordinates=recoveryBytes.map((b,i)=>sealTemplate(call,dir,b,"recovery"+i));
    if(!same(capture(call,manifest),baseline))fail("production_identities_baseline_changed");options.verifySource?.();
-   const parameters=["hub-rule-policy-patch","hub-import-read-patch"].includes(scope)?structuredClone(baseline.parameters):scope==="bootstrap"?bootstrapParameters(baseline,candidate):candidate.Parameters?[{ParameterKey:POOL_PARAMETER,ParameterValue:baseline.ownerPool.arn}]:[];
+   const parameters=["hub-rule-policy-patch","hub-import-read-patch","api-runtime-role-patch"].includes(scope)?structuredClone(baseline.parameters):scope==="bootstrap"?bootstrapParameters(baseline,candidate):candidate.Parameters?[{ParameterKey:POOL_PARAMETER,ParameterValue:baseline.ownerPool.arn}]:[];
    const response=call("deploy","cloudformation","create-change-set",{StackName:baseline.stackId||STACK,ChangeSetName:`thn-production-${purpose}-${runId}`,ChangeSetType:baseline.templates?"UPDATE":"CREATE",TemplateURL:`https://${ASSET_BUCKET}.s3.${REGION}.amazonaws.com/${key}?versionId=${encodeURIComponent(coordinate.versionId)}`,Parameters:parameters,Capabilities:["CAPABILITY_NAMED_IAM"],RoleARN:roles["cfn-exec"],Description:`THN production deployment identities source ${sourceSha}; retained preview expires after24hours`});
    const native=await cert.waitPreview(call,response.StackId||baseline.stackId||STACK,response.Id,pause),owned=capture(call,manifest,native.StackId);
    if(!same({...owned,stackId:baseline.stackId},baseline))fail("production_identities_baseline_changed");
@@ -387,6 +451,7 @@ async function runIdentities(options){
   if(scope==="trust-patch")verifyTrustPost(baseline,capture(call,manifest,record.stackId),candidate);
   if(scope==="hub-rule-policy-patch"){const after=rawCapture(call,manifest,record.stackId);verifyHubRulePolicyPost(baseline,after,candidate);hubRulePolicyProof(call,after,candidate,{post:true});}
   if(scope==="hub-import-read-patch")verifyHubImportReadPost(call,baseline,rawCapture(call,manifest,record.stackId),candidate);
+  if(scope==="api-runtime-role-patch")verifyApiRuntimeRolePost(baseline,rawCapture(call,manifest,record.stackId),candidate);
   return {complete:true,digest:record.digest,stackId:record.stackId,effectivePermissionProof:"required-before-service-activation"};
  }finally{if(path.dirname(dir)!==os.tmpdir())fail("production_cli_cleanup_invalid");fs.rmSync(dir,{recursive:true});}
 }
@@ -394,6 +459,7 @@ module.exports.captureBaseline=captureBaseline;module.exports.runIdentities=runI
 module.exports.trustPermissionProof=trustPermissionProof;module.exports.trustBaseline=trustBaseline;module.exports.verifyTrustPost=verifyTrustPost;
 module.exports.verifyHubRulePolicyPost=verifyHubRulePolicyPost;
 module.exports.verifyHubImportReadPost=verifyHubImportReadPost;
+module.exports.verifyApiRuntimeRolePost=verifyApiRuntimeRolePost;
 if(require.main===module){(async()=>{
  const e=process.env;if(e.GITHUB_REPOSITORY!=="LynxPardelle/zoolandingpage-aws-infra"||e.GITHUB_REF!=="refs/heads/main"||e.GITHUB_EVENT_NAME!=="workflow_dispatch"||e.GITHUB_SHA!==e.EXPECTED_SOURCE_SHA)fail("production_source_authority_invalid");
  const fingerprint=sourcePackageHash();if(fingerprint!==e.EXPECTED_SOURCE_PACKAGE_SHA256)fail("production_source_package_changed");
