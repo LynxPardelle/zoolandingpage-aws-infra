@@ -24,6 +24,7 @@ test("API runtime role permission preflight uses exact resources and fails close
  const observed=[],candidate=api.composeApiRuntimeRolePatch(baseline(),manifest);
  const call=(kind,service,operation,input)=>{
   assert.deepEqual([kind,service,operation],["lookup","iam","simulate-principal-policy"]);
+  cert.assertProductionOperation(kind,service,operation,input);
   observed.push(input);return allowIam(input);
  };
  const proof=api.apiRuntimeRolePermissionProof(call,candidate);
@@ -33,6 +34,14 @@ test("API runtime role permission preflight uses exact resources and fails close
   "arn:aws:iam::765932874577:policy/ThnProductionApiNative0",
   "arn:aws:iam::765932874577:role/zoolanding-deployer-thn-auth-runtime-production-github-deploy",
  ]));
+ for(const input of observed){
+  const wrongAction={...input,ActionNames:[...input.ActionNames,"iam:DeleteRole"]};
+  const wrongRole={...input,PolicySourceArn:"arn:aws:iam::765932874577:role/other"};
+  const wrongResource={...input,ResourceArns:[input.ResourceArns[0]+"-other"]};
+  for(const changed of [wrongAction,wrongRole,wrongResource]){
+   assert.throws(()=>cert.assertProductionOperation("lookup","iam","simulate-principal-policy",changed),/production_operation_out_of_scope/);
+  }
+ }
  const denied=(kind,service,operation,input)=>{
   const result=allowIam(input);result.EvaluationResults[0].EvalDecision="implicitDeny";return result;
  };
@@ -66,6 +75,7 @@ test("API identity review creates only a retained three-resource preview",async(
  const state={stackId,templates:{Original:old,Processed:old},resources:existing,parameters:[{ParameterKey:"ThnProductionOwnerPoolArn",ParameterValue:POOL}],terminationProtection:false,ownerPool:{arn:POOL},externalRoles:{},newRoles:{},packageBucket:{exists:true}};
  let candidate,preview,uploads=0,denyIam=true;const objects=new Map();
  const call=(kind,service,operation,input,file)=>{
+  cert.assertProductionOperation(kind,service,operation,input);
   const key=service+":"+operation;
   if(key==="s3api:list-objects-v2")return {Contents:[]};
   if(key==="iam:simulate-principal-policy"){
