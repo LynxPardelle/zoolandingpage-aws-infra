@@ -30782,6 +30782,22 @@
                 "Resource": [
                   "*"
                 ]
+              },
+              {
+                "Action": [
+                  "apigateway:GET",
+                  "apigateway:PUT",
+                  "apigateway:DELETE"
+                ],
+                "Condition": {
+                  "StringEquals": {
+                    "aws:RequestedRegion": "us-east-1"
+                  }
+                },
+                "Effect": "Allow",
+                "Resource": [
+                  "arn:aws:apigateway:us-east-1::/tags/arn%3Aaws%3Aapigateway%3Aus-east-1%3A%3A%2Frestapis%2F*"
+                ]
               }
             ],
             "Version": "2012-10-17"
