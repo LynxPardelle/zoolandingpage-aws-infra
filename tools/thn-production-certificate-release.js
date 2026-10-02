@@ -110,6 +110,10 @@ function assertCdkTrust(policy,service=false){
 }
 const permittedProductionOperations={lookup:new Set(["cloudformation:describe-stacks","cloudformation:get-template","cloudformation:list-stack-resources","cloudformation:describe-type","iam:simulate-principal-policy","iam:simulate-custom-policy","iam:get-role","iam:list-role-policies","iam:list-attached-role-policies","iam:get-role-policy","iam:get-policy","iam:get-policy-version","iam:list-policy-versions","iam:list-entities-for-policy","route53:get-hosted-zone","route53:list-resource-record-sets","cloudfront:get-distribution-config","cloudfront:get-distribution","acm:list-certificates","acm:describe-certificate","s3api:head-bucket","s3api:get-public-access-block","s3api:get-bucket-ownership-controls","s3api:get-bucket-versioning","s3api:get-bucket-encryption","s3api:get-bucket-policy","s3api:get-bucket-acl","kms:describe-key","kms:get-key-policy","lambda:get-function-configuration","lambda:get-function","lambda:get-policy","s3api:head-object","s3api:get-object","acm:describe-certificate"]),deploy:new Set(["cloudformation:create-change-set","cloudformation:describe-change-set","cloudformation:get-template","cloudformation:delete-change-set","cloudformation:execute-change-set","cloudformation:update-termination-protection","cloudformation:describe-stacks","cloudformation:list-stack-resources"]),"file-publishing":new Set(["s3api:head-object","s3api:put-object","s3api:get-object","s3api:list-objects-v2"])};
 const ownerFunctionArn=`arn:aws:lambda:${REGION}:${ACCOUNT}:function:zoolanding-auth-admin-prod-ThnProductionOwnerOperatorV2`;
+const API_TAG_RESOURCE=`arn:aws:apigateway:${REGION}::/tags/arn%3Aaws%3Aapigateway%3A${REGION}%3A%3A%2Frestapis%2F*`;
+const API_TAG_ACTIONS=["apigateway:get","apigateway:put","apigateway:delete"];
+const API_CFN_ROLE=`arn:aws:iam::${ACCOUNT}:role/zoolanding-deployer-thn-auth-runtime-production-cfn-exec`;
+const API_TAG_STATEMENT={Action:["apigateway:GET","apigateway:PUT","apigateway:DELETE"],Condition:{StringEquals:{"aws:RequestedRegion":REGION}},Effect:"Allow",Resource:[API_TAG_RESOURCE]};
 const ownerReadMatrix=Object.freeze([
  {resource:`arn:aws:iam::${ACCOUNT}:user/Hector-admin`,actions:["iam:ListMFADevices"]},
  {resource:`arn:aws:cognito-idp:${REGION}:${ACCOUNT}:userpool/us-east-1_c1QxYjOiI`,actions:["cognito-idp:ListUsersInGroup"]},
@@ -123,7 +127,8 @@ const ownerStackPattern=new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}
 function ownerReadResources(stackId){if(!ownerStackPattern.test(stackId||""))fail("production_owner_stack_id_invalid");return ownerReadMatrix.map(row=>row.actions[0]==="cloudformation:ListChangeSets"?{...row,resource:stackId}:row);}
 function assertProductionOperation(kind,service,operation,input){
   if(!permittedProductionOperations[kind]?.has(`${service}:${operation}`))fail("production_operation_out_of_scope");
-  if(service==="iam"&&["list-policy-versions","list-entities-for-policy"].includes(operation)&&!/^arn:aws:iam::765932874577:policy\/ThnProductionHubNative[23]$/.test(input.PolicyArn||""))fail("production_operation_out_of_scope");
+  if(service==="iam"&&["list-policy-versions","list-entities-for-policy"].includes(operation)&&
+      !/^arn:aws:iam::765932874577:policy\/(?:ThnProductionHubNative[23]|ThnProductionApiNative0)$/.test(input.PolicyArn||""))fail("production_operation_out_of_scope");
   if(service==="iam"&&["simulate-principal-policy","simulate-custom-policy"].includes(operation)){
    const resource=input.ResourceArns?.[0],actions=input.ActionNames;
    const trust=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&same([...actions||[]].sort(),["iam:getrole","iam:updateassumerolepolicy"])&&/^arn:aws:iam::765932874577:role\/zoolanding-deployer-(?:image-upload|thn-auth-runtime|api-proxy)-production-github-deploy$/.test(resource||"");
@@ -137,13 +142,20 @@ function assertProductionOperation(kind,service,operation,input){
     resource===`arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/zoolanding-content-hub-prod-ServiceBindingRegistryV2`&&same([...actions||[]].sort(),["dynamodb:GetResourcePolicy"])||
     resource===`arn:aws:s3:::zlp-thn-ch-production-private-${ACCOUNT}-${REGION}`&&same([...actions||[]].sort(),["s3:GetBucketVersioning","s3:GetEncryptionConfiguration","s3:GetBucketPublicAccessBlock","s3:ListBucket"].sort()));
    const apiRole=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&resource===`arn:aws:iam::${ACCOUNT}:role/zlp-thn-auth-runtime-prod-role`&&same([...actions||[]].sort(),["iam:CreateRole","iam:PutRolePolicy","iam:AttachRolePolicy","iam:GetRolePolicy","iam:TagRole","iam:UntagRole","iam:GetRole","iam:ListAttachedRolePolicies","iam:ListRolePolicies"].sort());
-   const apiPolicy=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&resource===`arn:aws:iam::${ACCOUNT}:policy/ThnProductionApiNative0`&&same([...actions||[]].sort(),["iam:GetPolicy","iam:ListPolicyVersions","iam:CreatePolicyVersion","iam:DeletePolicyVersion","iam:ListEntitiesForPolicy","iam:GetPolicyVersion"].sort());
+   const apiPolicy=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&resource===`arn:aws:iam::${ACCOUNT}:policy/ThnProductionApiNative0`&&same((actions||[]).map(a=>a.toLowerCase()).sort(),["iam:getpolicy","iam:listpolicyversions","iam:createpolicyversion","iam:deletepolicyversion","iam:listentitiesforpolicy","iam:getpolicyversion"].sort());
    const apiGithub=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&resource===`arn:aws:iam::${ACCOUNT}:role/zoolanding-deployer-thn-auth-runtime-production-github-deploy`&&same([...actions||[]].sort(),["iam:PutRolePolicy","iam:DeleteRolePolicy","iam:GetRolePolicy"].sort());
+   let proposedTagPolicy;try{proposedTagPolicy=JSON.parse(input.PolicyInputList?.[0]);}catch{}
+   const apiTag=resource===API_TAG_RESOURCE&&same([...actions||[]].sort(),[...API_TAG_ACTIONS].sort())&&same(input.ContextEntries,[{ContextKeyName:"aws:RequestedRegion",ContextKeyValues:[REGION],ContextKeyType:"string"}])&&(
+    operation==="simulate-custom-policy"&&!input.PolicySourceArn&&input.PolicyInputList?.length===1&&same(proposedTagPolicy,{Version:"2012-10-17",Statement:[API_TAG_STATEMENT]})||
+    operation==="simulate-principal-policy"&&input.PolicySourceArn===API_CFN_ROLE&&(
+     !input.PolicyInputList||input.PolicyInputList.length===1&&same(proposedTagPolicy,{Version:"2012-10-17",Statement:[API_TAG_STATEMENT]})));
+   const apiTagRole=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&resource===API_CFN_ROLE&&
+    same([...actions||[]].sort(),["iam:attachrolepolicy","iam:detachrolepolicy"].sort());
    const ownerRead=ownerReadMatrix.some(row=>(resource===row.resource||row.actions[0]==="cloudformation:ListChangeSets"&&ownerStackPattern.test(resource||""))&&same([...actions||[]].sort(),[...row.actions].sort()))&&(
     operation==="simulate-custom-policy"&&input.PolicyInputList?.length===1&&typeof input.PolicyInputList[0]==="string"&&!input.PolicySourceArn||
     operation==="simulate-principal-policy"&&input.PolicySourceArn===`arn:aws:iam::${ACCOUNT}:role/zoolanding-auth-admin-production-deploy`&&!input.PolicyInputList);
    const ownerPatchCfn=operation==="simulate-principal-policy"&&input.PolicySourceArn===roles["cfn-exec"]&&resource===`arn:aws:iam::${ACCOUNT}:role/zoolanding-auth-admin-production-deploy`&&same([...actions||[]].sort(),["iam:GetRolePolicy","iam:PutRolePolicy","iam:DeleteRolePolicy"].sort());
-   if(input.ResourceArns?.length!==1||!(trust||policy||attachment||importPolicyCreate||event||importRead||apiRole||apiPolicy||apiGithub||ownerRead||ownerPatchCfn))fail("production_operation_out_of_scope");
+   if(input.ResourceArns?.length!==1||!(trust||policy||attachment||importPolicyCreate||event||importRead||apiRole||apiPolicy||apiGithub||apiTag||apiTagRole||ownerRead||ownerPatchCfn))fail("production_operation_out_of_scope");
   }
   if(service==="cloudformation"&&operation==="describe-type"&&(input.Type!=="RESOURCE"||!["AWS::IAM::Role","AWS::IAM::ManagedPolicy","AWS::IAM::Policy"].includes(input.TypeName)))fail("production_operation_out_of_scope");
   if(service==="cloudformation"&&operation!=="describe-type"&&!( [STACK,"ZoolandingProduction-Zoolandingpage-production-ThnDeploymentIdentities","zoolanding-auth-admin-prod","zoolanding-thn-auth-runtime-production","zoolanding-content-hub-prod"].some(s=>input.StackName===s||String(input.StackName||"").startsWith(`arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${s}/`))))fail("production_operation_out_of_scope");
@@ -331,3 +343,7 @@ module.exports.rolePolicySnapshot=rolePolicySnapshot;
 module.exports.assertProductionOperation=assertProductionOperation;
 module.exports.ownerReadMatrix=ownerReadMatrix;
 module.exports.ownerReadResources=ownerReadResources;
+module.exports.API_TAG_RESOURCE=API_TAG_RESOURCE;
+module.exports.API_TAG_ACTIONS=API_TAG_ACTIONS;
+module.exports.API_CFN_ROLE=API_CFN_ROLE;
+module.exports.API_TAG_STATEMENT=API_TAG_STATEMENT;

@@ -81,7 +81,7 @@ test("native review accepts exactly one non-replacing IAM policy Add", () => {
 
 test("manual workflow and retained review recognize only the explicit import-read scope", () => {
   const workflow = fs.readFileSync(".github/workflows/thn-production-identities.yml", "utf8");
-  assert.match(workflow, /options:\s*\[bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch, api-runtime-role-patch, auth-owner-read-patch\]/);
+  assert.match(workflow, /options:\s*\[bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch, api-runtime-role-patch, api-tag-path-patch, auth-owner-read-patch\]/);
   assert.match(workflow, /purpose=scope==="bootstrap"\?"deployment-identities":"deployment-identities-"\+scope/);
   const review = fs.readFileSync("tools/thn-production-retained-review.js", "utf8");
   assert.match(review, /deployment-identities-hub-import-read-patch/);
