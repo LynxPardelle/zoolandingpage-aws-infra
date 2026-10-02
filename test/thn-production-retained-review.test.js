@@ -7,6 +7,16 @@ test("retained review seals full native inventory, exact ARN and versioned packa
  const record=sealed();assert.match(record.digest,/^[a-f0-9]{64}$/);assert.deepEqual(api().validateReview(record),record);
  for(const change of [x=>x.changeSetArn=x.changeSetArn.replace("certificate-1","certificate-2"),x=>x.packageManifest[0].key+="other",x=>x.packageManifest[0].versionId="abc124",x=>x.changes[0].ResourceChange.Details=[{Target:{Name:"other"}}],x=>x.permissionSha256="4".repeat(64),x=>x.sourcePackageSha256="5".repeat(64)]){const bad=structuredClone(record);change(bad);assert.throws(()=>api().validateReview(bad),/retained_review_invalid/);}
 });
+test("API tag path review seals the deployment identities stack and exact purpose",()=>{
+ const body=data();body.purpose="deployment-identities-api-tag-path-patch";
+ body.stackId=body.stackId.replace("Frontend","ThnDeploymentIdentities");
+ body.changeSetArn=body.changeSetArn.replace("certificate-1","deployment-identities-api-tag-path-patch-37057162818-1");
+ body.changes=[{Type:"Resource",ResourceChange:{Action:"Modify",LogicalResourceId:"ApiCfnNativePolicy0",ResourceType:"AWS::IAM::ManagedPolicy",Replacement:"False",Scope:["Properties"]}}];
+ const record=api().sealReview({...body,changes:api().inventorySummary(body.changes),nativeInventorySha256:api().hash(body.changes)});
+ assert.deepEqual(api().validateReview(record),record);
+ const wrongStack=structuredClone(record);wrongStack.stackId=wrongStack.stackId.replace("ThnDeploymentIdentities","Frontend");
+ assert.throws(()=>api().validateReview(wrongStack),/retained_review_invalid/);
+});
 test("execution gate fails closed on source, baseline, permissions, native preview state and expiry before execute",()=>{
  const r=sealed(),fresh={sourceSha:r.sourceSha,sourcePackageSha256:r.sourcePackageSha256,baselineSha256:r.baselineSha256,identitySha256:r.identitySha256,permissionSha256:r.permissionSha256,originalTemplateSha256:r.originalTemplateSha256,processedTemplateSha256:r.processedTemplateSha256,parametersSha256:r.parametersSha256,changes:r.changes,nativeInventorySha256:r.nativeInventorySha256,packageManifest:r.packageManifest};
  const native={Status:"CREATE_COMPLETE",ExecutionStatus:"AVAILABLE",StackId:r.stackId,ChangeSetId:r.changeSetArn,CreationTime:r.createdAt,Changes:data().changes};
