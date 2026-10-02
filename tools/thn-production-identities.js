@@ -377,6 +377,7 @@ function verifyApiRuntimeRolePost(before,after,candidate){
  const caller="zoolanding-deployer-thn-auth-runtime-production-github-deploy",cfn="zoolanding-deployer-thn-auth-runtime-production-cfn-exec",managed=`arn:aws:iam::${ACCOUNT}:policy/ThnProductionApiNative0`;
  if(!expected.newRoles[caller]?.policies?.["inline:ThnRetainedProductionReleaseV1"]||!expected.newRoles[cfn]?.policies?.[managed])fail("production_identities_api_runtime_post_mismatch");
  expected.newRoles[caller].policies["inline:ThnRetainedProductionReleaseV1"]=sha(canonical(candidate.Resources.ApiGithubReleasePolicy.Properties.PolicyDocument));
+ expected.newRoles[caller].policySizes["inline:ThnRetainedProductionReleaseV1"]=Buffer.byteLength(canonical(candidate.Resources.ApiGithubReleasePolicy.Properties.PolicyDocument));
  expected.newRoles[cfn].policies[managed]=sha(canonical(candidate.Resources.ApiCfnNativePolicy0.Properties.PolicyDocument));
  if(!same(expected,after))fail("production_identities_api_runtime_post_mismatch");
  return true;
