@@ -32470,6 +32470,57 @@
                 "Resource": [
                   "arn:aws:dynamodb:us-east-1:765932874577:table/zoolanding-content-hub-prod-ServiceBindingRegistryV2"
                 ]
+              },
+              {
+                "Action": [
+                  "iam:ListMFADevices"
+                ],
+                "Effect": "Allow",
+                "Resource": [
+                  "arn:aws:iam::765932874577:user/Hector-admin"
+                ]
+              },
+              {
+                "Action": [
+                  "cognito-idp:ListUsersInGroup"
+                ],
+                "Effect": "Allow",
+                "Resource": [
+                  "arn:aws:cognito-idp:us-east-1:765932874577:userpool/us-east-1_c1QxYjOiI"
+                ]
+              },
+              {
+                "Action": [
+                  "iam:GetRole",
+                  "iam:GetRolePolicy",
+                  "iam:ListAttachedRolePolicies",
+                  "iam:ListRolePolicies"
+                ],
+                "Effect": "Allow",
+                "Resource": [
+                  "arn:aws:iam::765932874577:role/zoolanding-thn-owner-production-operator",
+                  "arn:aws:iam::765932874577:role/zoolanding-auth-admin-prod-ThnProductionOwnerOperatorV2Role"
+                ]
+              },
+              {
+                "Action": [
+                  "lambda:GetAlias",
+                  "lambda:GetFunctionUrlConfig"
+                ],
+                "Effect": "Allow",
+                "Resource": [
+                  "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-auth-admin-prod-ThnProductionOwnerOperatorV2",
+                  "arn:aws:lambda:us-east-1:765932874577:function:zoolanding-auth-admin-prod-ThnProductionOwnerOperatorV2:production"
+                ]
+              },
+              {
+                "Action": [
+                  "cloudformation:ListChangeSets"
+                ],
+                "Effect": "Allow",
+                "Resource": [
+                  "arn:aws:cloudformation:us-east-1:765932874577:stack/zoolanding-auth-admin-prod/*"
+                ]
               }
             ],
             "Version": "2012-10-17"
