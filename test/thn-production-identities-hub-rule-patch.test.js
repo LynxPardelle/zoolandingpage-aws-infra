@@ -100,7 +100,7 @@ test("Hub policy review accepts only two direct non-replacing PolicyDocument cha
 
 test("protected workflow exposes the narrow scope and retains its separate purpose", () => {
   const workflow = fs.readFileSync(path.resolve(__dirname, "../.github/workflows/thn-production-identities.yml"), "utf8");
-  assert.match(workflow, /options:\s*\[bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch, api-runtime-role-patch\]/);
+  assert.match(workflow, /options:\s*\[bootstrap, trust-patch, hub-rule-policy-patch, hub-import-read-patch, api-runtime-role-patch, auth-owner-read-patch\]/);
   assert.match(workflow, /purpose=scope==="bootstrap"\?"deployment-identities":"deployment-identities-"\+scope/);
   assert.match(workflow, /test\/thn-production-identities-hub-rule-patch\.test\.js/);
 });
