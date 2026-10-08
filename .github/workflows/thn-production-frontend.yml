@@ -171,7 +171,7 @@ jobs:
           THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
         run: |
           node -e 'const fs=require("node:fs"),c=require("./tools/thn-production-certificate-release"),r=JSON.parse(fs.readFileSync("transport/release-input.json")),t=JSON.parse(fs.readFileSync("transport/desired-template.json"));require("./tools/thn-production-frontend-release").validateInput(r);if(c.sha(c.canonical(r))!==process.env.EXPECTED_INPUT_SHA256||c.sha(c.canonical(t))!==process.env.EXPECTED_DESIRED_SHA256||r.purpose==="private-frontdoor"&&!/^[A-Za-z0-9_-]{43}$/.test(process.env.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET||""))throw Error("transport_or_secret_invalid")'
-      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::765932874577:role/zoolandingpage-infra-production-github-oidc-deploy
           aws-region: us-east-1
