@@ -1,0 +1,204 @@
+name: Zooberiah Production Front Door
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Generated-domain audit or TLS alias attachment; neither phase changes DNS
+        required: true
+        type: choice
+        options: [generated, aliases]
+        default: generated
+      action:
+        description: Add/advance the exact front door, or remove the selected phase
+        required: true
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+      execution:
+        description: Create a review, execute its exact retained change set, or delete it
+        required: true
+        type: choice
+        options: [review, execute, cleanup]
+        default: review
+      expected_source_sha:
+        required: true
+        type: string
+      release_id:
+        description: Exact currently deployed production frontend release
+        required: true
+        type: string
+      reviewed_run_id:
+        required: false
+        type: string
+      expected_review_digest:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zoolandingpage-production-frontend-reviewed-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_package_sha256: ${{ steps.source.outputs.fingerprint }}
+      desired_sha256: ${{ steps.source.outputs.desired_sha256 }}
+      generated_sha256: ${{ steps.source.outputs.generated_sha256 }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Validate exact current MAIN and manual authority without AWS
+        id: source
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXECUTION: ${{ inputs.execution }}
+          REVIEWED_RUN_ID: ${{ inputs.reviewed_run_id }}
+          EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+          PHASE: ${{ inputs.phase }}
+          ACTION: ${{ inputs.action }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = LynxPardelle/zoolandingpage-aws-infra
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$EXPECTED_SOURCE_SHA"
+          case "$EXECUTION" in
+            review) test -z "$REVIEWED_RUN_ID"; test -z "$EXPECTED_REVIEW_DIGEST" ;;
+            execute|cleanup)
+              [[ "$REVIEWED_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]]
+              [[ "$EXPECTED_REVIEW_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$REVIEWED_RUN_ID" > run.json
+              node -e 'const r=require("./run.json");if(r.head_branch!=="main"||r.head_sha!==process.env.EXPECTED_SOURCE_SHA||r.event!=="workflow_dispatch"||r.status!=="completed"||r.conclusion!=="success"||r.path!==".github/workflows/zooberiah-production-frontdoor.yml")throw Error("review_run_authority_invalid")'
+              ;;
+            *) exit 1 ;;
+          esac
+          npm ci
+          node --test test/zooberiah-production-frontdoor.test.js test/zooberiah-production-workflow.test.js test/frontend.test.js
+          mkdir -p transport
+          result="$(node tools/zooberiah-production-frontdoor.js prepare "$RELEASE_ID" "$PHASE" transport)"
+          desired_sha="$(RESULT="$result" node -e 'process.stdout.write(JSON.parse(process.env.RESULT).desiredTemplateSha256)')"
+          generated_sha="$(RESULT="$result" node -e 'process.stdout.write(JSON.parse(process.env.RESULT).generatedTemplateSha256)')"
+          [[ "$desired_sha" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$generated_sha" =~ ^[a-f0-9]{64}$ ]]
+          printf 'desired_sha256=%s\n' "$desired_sha" >> "$GITHUB_OUTPUT"
+          printf 'generated_sha256=%s\n' "$generated_sha" >> "$GITHUB_OUTPUT"
+          node -e 'process.stdout.write("fingerprint="+require("./tools/zooberiah-production-frontdoor").sourcePackageHash()+"\n")' >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: inputs.execution != 'review'
+        with:
+          name: zooberiah-production-frontdoor-review-${{ inputs.expected_source_sha }}-${{ inputs.phase }}-${{ inputs.action }}
+          path: retained-review
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reviewed_run_id }}
+      - name: Validate reviewed record before credentials
+        if: inputs.execution != 'review'
+        env:
+          ACTION: ${{ inputs.action }}
+          EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXPECTED_SOURCE_PACKAGE_SHA256: ${{ steps.source.outputs.fingerprint }}
+        run: |
+          node -e 'const r=require("./retained-review/zooberiah-review.json"),v=require("./tools/thn-production-retained-review");v.validateReview(r);const p=process.env.ACTION==="deploy"?"zooberiah-frontdoor":"zooberiah-frontdoor-rollback";if(r.purpose!==p||r.digest!==process.env.EXPECTED_REVIEW_DIGEST||r.sourceSha!==process.env.EXPECTED_SOURCE_SHA||r.sourcePackageSha256!==process.env.EXPECTED_SOURCE_PACKAGE_SHA256)throw Error("zooberiah_review_invalid")'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.execution != 'review'
+        with:
+          name: zooberiah-production-frontdoor-execute-input-${{ github.run_id }}
+          path: retained-review/zooberiah-review.json
+          if-no-files-found: error
+          retention-days: 2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zooberiah-production-frontdoor-transport-${{ github.run_id }}
+          path: transport/*.json
+          if-no-files-found: error
+          retention-days: 2
+
+  operation:
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      ACTION: ${{ inputs.action }}
+      EXECUTION: ${{ inputs.execution }}
+      EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+      EXPECTED_SOURCE_PACKAGE_SHA256: ${{ needs.validate.outputs.source_package_sha256 }}
+      EXPECTED_DESIRED_SHA256: ${{ needs.validate.outputs.desired_sha256 }}
+      EXPECTED_GENERATED_SHA256: ${{ needs.validate.outputs.generated_sha256 }}
+      EXPECTED_REVIEW_DIGEST: ${{ inputs.expected_review_digest }}
+      PHASE: ${{ inputs.phase }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      REVIEW_FILE: retained-review/zooberiah-review.json
+      REVIEW_OUTPUT_FILE: zooberiah-review.json
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Repeat sealed source before credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_SOURCE_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$EXPECTED_SOURCE_SHA"
+          node -e 'if(require("./tools/zooberiah-production-frontdoor").sourcePackageHash()!==process.env.EXPECTED_SOURCE_PACKAGE_SHA256)throw Error("source_package_changed")'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: inputs.execution != 'review'
+        with:
+          name: zooberiah-production-frontdoor-execute-input-${{ github.run_id }}
+          path: retained-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zooberiah-production-frontdoor-transport-${{ github.run_id }}
+          path: transport
+      - name: Verify transported desired template before credentials
+        run: |
+          node -e 'const fs=require("node:fs"),c=require("./tools/thn-production-certificate-release"),d=JSON.parse(fs.readFileSync("transport/desired-template.json")),g=JSON.parse(fs.readFileSync("transport/generated-template.json"));if(c.sha(c.canonical(d))!==process.env.EXPECTED_DESIRED_SHA256||c.sha(c.canonical(g))!==process.env.EXPECTED_GENERATED_SHA256)throw Error("transport_changed")'
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: arn:aws:iam::765932874577:role/zoolandingpage-infra-production-github-oidc-deploy
+          aws-region: us-east-1
+          allowed-account-ids: "765932874577"
+          role-session-name: zooberiah-frontdoor-${{ github.run_id }}
+      - name: Run exact retained native operation
+        run: node tools/zooberiah-production-frontdoor.js operate "$RELEASE_ID" "$PHASE" transport/desired-template.json transport/generated-template.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.execution == 'review'
+        with:
+          name: zooberiah-production-frontdoor-review-${{ inputs.expected_source_sha }}-${{ inputs.phase }}-${{ inputs.action }}
+          path: zooberiah-review.json
+          if-no-files-found: error
+          retention-days: 2
