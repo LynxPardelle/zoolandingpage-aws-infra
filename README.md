@@ -35,6 +35,8 @@ This repo follows the Lynx Portfolio split: the Angular app publishes immutable 
 See [docs/serverless-frontend-cutover.md](docs/serverless-frontend-cutover.md).
 Cost notes are in [docs/cost-estimate.md](docs/cost-estimate.md).
 Service identity scope, outputs, and independent deployment targets are in [docs/service-repository-bootstrap.md](docs/service-repository-bootstrap.md).
+The staged Zooberiah production distribution, alias gate, DNS cutover, and
+rollback sequence are in [docs/zooberiah-production-frontdoor.md](docs/zooberiah-production-frontdoor.md).
 
 ## The Hair Narrative public production host
 

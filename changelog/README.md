@@ -1,5 +1,7 @@
 # Changelog
 
+- [2026-10-07 — Zooberiah production front door preparation](2026-10-07-zooberiah-production-frontdoor.md)
+
 - [2026-09-27 — Private TEST rotation after Query Fence](2026-09-27-thn-current-query-private-artifact.md)
 
 - [2026-09-27 — THN query fence historical baseline correction](2026-09-27-thn-query-fence-historical-baseline.md)
