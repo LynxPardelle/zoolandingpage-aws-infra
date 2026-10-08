@@ -37,3 +37,12 @@ been created. The Zooberiah operation now opts out of only that stale
 precondition. It continues to snapshot the certificate and every other live
 resource, seal the complete baseline, validate deployment roles and asset
 storage, and reject an existing `admin.thehairnarrative.com` DNS record.
+
+## Credentialed source recheck correction
+
+The first generated-phase review with the retained-certificate baseline reached
+the final source-tip recheck but could not authenticate the nested `gh api`
+call. The operation job now passes its existing read-only GitHub token to the
+release tool for that recheck. The source SHA, package fingerprint, production
+environment, AWS role, retained-review split, resource allowlist, and DNS-off
+boundary are unchanged.
