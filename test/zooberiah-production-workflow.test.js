@@ -8,7 +8,7 @@ const test = require("node:test");
 test("Zooberiah production workflow is manual, source-bound, reviewed, and exact", () => {
   const workflowPath = path.resolve(__dirname, "../.github/workflows/zooberiah-production-frontdoor.yml");
   assert.equal(fs.existsSync(workflowPath), true);
-  const workflow = fs.readFileSync(workflowPath, "utf8");
+  const workflow = fs.readFileSync(workflowPath, "utf8").replace(/\r\n/g, "\n");
   assert.match(workflow, /^on:\n  workflow_dispatch:/m);
   assert.doesNotMatch(workflow, /\n  push:/);
   assert.match(workflow, /options: \[generated, aliases\]/);
@@ -36,4 +36,8 @@ test("Zooberiah production workflow is manual, source-bound, reviewed, and exact
   assert.match(workflow, /expected_review_digest/);
   assert.match(workflow, /reviewed_run_id/);
   assert.match(workflow, /zooberiah-production-frontdoor-review-/);
+  const operationJob = workflow.split("\n  operation:\n")[1];
+  assert.ok(operationJob, "operation job must exist");
+  const operationEnvironment = operationJob.split("\n    steps:\n")[0];
+  assert.match(operationEnvironment, /\n      GH_TOKEN: \$\{\{ github\.token \}\}/);
 });
