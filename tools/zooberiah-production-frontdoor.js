@@ -75,6 +75,13 @@ function normalizeParameters(parameters) {
     .sort((left, right) => left.ParameterKey.localeCompare(right.ParameterKey));
 }
 
+function readZooberiahProductionBaseline(call) {
+  return certificate.readProductionBaseline(call, {
+    certificateAbsent: false,
+    adminMustAbsent: true,
+  });
+}
+
 function assertReleaseBinding(template, releaseId) {
   const [, sharedSsr] = sharedSsrEntry(template);
   const code = sharedSsr.Properties?.Code;
@@ -605,7 +612,7 @@ async function runZooberiahOperation(options) {
   }
 
   validateDesiredTemplate(desired, releaseId, phase);
-  const captureBaseline = options.captureBaseline || certificate.readProductionBaseline;
+  const captureBaseline = options.captureBaseline || readZooberiahProductionBaseline;
   const pause = options.pause || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const baseline = captureBaseline(call);
   const candidate = projectZooberiahFrontDoor(
@@ -747,6 +754,7 @@ module.exports = {
   normalizeParameters,
   prepareZooberiahFrontDoor,
   projectZooberiahFrontDoor,
+  readZooberiahProductionBaseline,
   reviewZooberiahChanges,
   runZooberiahOperation,
   sourcePackageHash,

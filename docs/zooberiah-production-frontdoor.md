@@ -17,6 +17,14 @@ Before any projection, the workflow proves that this release ID matches both
 the live shared SSR environment and its immutable server object in the exact
 production artifact bucket.
 
+The baseline capture accepts the separately retained
+`ThnAdminProductionCertificate` already owned by the shared production stack.
+It still snapshots that resource with the rest of the stack, includes it in
+the sealed baseline digest, and requires the `admin.thehairnarrative.com` DNS
+name itself to remain absent. The certificate creation workflow keeps its
+stricter certificate-absent precondition; this exception applies only to the
+Zooberiah front-door operation.
+
 The workflow supports two phases and neither one changes Route53:
 
 - `generated`: creates the distribution without aliases or an ACM viewer
