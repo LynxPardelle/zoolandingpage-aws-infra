@@ -27,3 +27,13 @@ A/AAAA aliases are created.
 Validation covers the generated projection, alias projection, DNS exclusion,
 certificate and record preflight, source binding, retained review drift, exact
 execution boundary, and rollback projection.
+
+## Retained certificate baseline correction
+
+The first generated-phase review stopped before change-set creation because
+the shared baseline reader applied the certificate creation workflow's
+certificate-absent precondition after that retained certificate had already
+been created. The Zooberiah operation now opts out of only that stale
+precondition. It continues to snapshot the certificate and every other live
+resource, seal the complete baseline, validate deployment roles and asset
+storage, and reject an existing `admin.thehairnarrative.com` DNS record.
