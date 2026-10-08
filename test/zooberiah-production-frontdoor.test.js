@@ -9,6 +9,161 @@ const test = require("node:test");
 const toolPath = path.resolve(__dirname, "../tools/zooberiah-production-frontdoor.js");
 const api = fs.existsSync(toolPath) ? require(toolPath) : {};
 
+test("Zooberiah baseline accepts the retained THN certificate and still rejects admin DNS", () => {
+  assert.equal(typeof api.readZooberiahProductionBaseline, "function");
+  const account = "765932874577";
+  const stackName = "ZoolandingProduction-Zoolandingpage-production-Frontend";
+  const stackId = `arn:aws:cloudformation:us-east-1:${account}:stack/${stackName}/11111111-1111-1111-1111-111111111111`;
+  const retainedCertificate = {
+    Type: "AWS::CertificateManager::Certificate",
+    DeletionPolicy: "Retain",
+    UpdateReplacePolicy: "Retain",
+    Properties: {
+      DomainName: "admin.thehairnarrative.com",
+      ValidationMethod: "DNS",
+      CertificateExport: "DISABLED",
+      DomainValidationOptions: [{
+        DomainName: "admin.thehairnarrative.com",
+        HostedZoneId: "Z08032292DKYZ4QGCIZDR",
+      }],
+    },
+  };
+  const liveTemplate = {
+    AWSTemplateFormatVersion: "2010-09-09",
+    Resources: {
+      ExistingPublic: {
+        Type: "AWS::CloudFront::Distribution",
+        Properties: { DistributionConfig: { Aliases: ["thehairnarrative.com"] } },
+      },
+      ThnAdminProductionCertificate: retainedCertificate,
+    },
+  };
+  let adminDnsPresent = false;
+  const call = (kind, service, operation, input) => {
+    const key = `${service}:${operation}`;
+    if (key === "cloudformation:describe-stacks") {
+      return {
+        Stacks: [{
+          StackName: stackName,
+          StackId: stackId,
+          StackStatus: "UPDATE_COMPLETE",
+          RoleARN: `arn:aws:iam::${account}:role/cdk-hnb659fds-cfn-exec-role-${account}-us-east-1`,
+          EnableTerminationProtection: true,
+          Parameters: [],
+        }],
+      };
+    }
+    if (key === "cloudformation:get-template") return { TemplateBody: liveTemplate };
+    if (key === "cloudformation:list-stack-resources") {
+      return {
+        StackResourceSummaries: [
+          {
+            LogicalResourceId: "ExistingPublic",
+            PhysicalResourceId: "EC4GODNMXFG7N",
+            ResourceType: "AWS::CloudFront::Distribution",
+          },
+          {
+            LogicalResourceId: "ThnAdminProductionCertificate",
+            PhysicalResourceId: `arn:aws:acm:us-east-1:${account}:certificate/11111111-1111-1111-1111-111111111111`,
+            ResourceType: "AWS::CertificateManager::Certificate",
+          },
+        ],
+      };
+    }
+    if (key === "route53:get-hosted-zone") {
+      return {
+        HostedZone: {
+          Id: "/hostedzone/Z08032292DKYZ4QGCIZDR",
+          Name: "thehairnarrative.com.",
+          Config: { PrivateZone: false },
+        },
+      };
+    }
+    if (key === "route53:list-resource-record-sets") {
+      return {
+        IsTruncated: false,
+        ResourceRecordSets: [
+          {
+            Name: "_validation.admin.thehairnarrative.com.",
+            Type: "CNAME",
+            TTL: 300,
+            ResourceRecords: [{ Value: "_validation.acm-validations.aws." }],
+          },
+          ...(adminDnsPresent ? [{
+            Name: "admin.thehairnarrative.com.",
+            Type: "A",
+            TTL: 300,
+            ResourceRecords: [{ Value: "192.0.2.10" }],
+          }] : []),
+        ],
+      };
+    }
+    if (key === "cloudfront:get-distribution-config") {
+      return { ETag: "same", DistributionConfig: { Aliases: { Items: ["thehairnarrative.com"] } } };
+    }
+    if (key === "iam:get-role") {
+      const serviceRole = input.RoleName.includes("cfn-exec");
+      return {
+        Role: {
+          Arn: `arn:aws:iam::${account}:role/${input.RoleName}`,
+          RoleId: `role-${input.RoleName}`,
+          AssumeRolePolicyDocument: {
+            Version: "2012-10-17",
+            Statement: [{
+              Effect: "Allow",
+              Action: "sts:AssumeRole",
+              Principal: serviceRole
+                ? { Service: "cloudformation.amazonaws.com" }
+                : { AWS: `arn:aws:iam::${account}:root` },
+              ...(serviceRole ? {} : { Condition: { Null: { "sts:ExternalId": "true" } } }),
+            }],
+          },
+        },
+      };
+    }
+    if (key === "iam:list-role-policies") return { IsTruncated: false, PolicyNames: [] };
+    if (key === "iam:list-attached-role-policies") return { IsTruncated: false, AttachedPolicies: [] };
+    if (key === "s3api:get-bucket-versioning") return { Status: "Enabled" };
+    if (key === "s3api:get-bucket-encryption") {
+      return {
+        ServerSideEncryptionConfiguration: {
+          Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: "aws:kms" } }],
+        },
+      };
+    }
+    if (key === "s3api:get-bucket-policy") return { Policy: "{}" };
+    if (key === "s3api:get-bucket-acl") {
+      return {
+        Owner: { ID: "owner" },
+        Grants: [{ Permission: "FULL_CONTROL", Grantee: { ID: "owner" } }],
+      };
+    }
+    if (key === "kms:describe-key") {
+      return {
+        KeyMetadata: {
+          Arn: `arn:aws:kms:us-east-1:${account}:key/11111111-1111-1111-1111-111111111111`,
+          KeyManager: "AWS",
+          KeyState: "Enabled",
+          Enabled: true,
+        },
+      };
+    }
+    if (key === "kms:get-key-policy") return { Policy: "{}" };
+    throw new Error(`unexpected_call:${kind}:${key}`);
+  };
+
+  const baseline = api.readZooberiahProductionBaseline(call);
+  assert.deepEqual(
+    baseline.templates.Original.Resources.ThnAdminProductionCertificate,
+    retainedCertificate
+  );
+  adminDnsPresent = true;
+  assert.throws(
+    () => api.readZooberiahProductionBaseline(call),
+    /production_admin_dns_conflict/
+  );
+});
+
 test("Zooberiah compiler and projection expose a closed staged front door", () => {
   assert.equal(typeof api.prepareZooberiahFrontDoor, "function");
   assert.equal(typeof api.projectZooberiahFrontDoor, "function");
