@@ -21,6 +21,7 @@ const {
   buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
   buildThnPublicProductionFrontDoor,
+  buildZooberiahProductionFrontDoor,
   environments,
   retiredZoolandingpageComMxAliases,
 } = require("../config/environments");
@@ -1226,6 +1227,55 @@ test("production front doors activate Astra Legal aliases and Route53 cutover", 
       domainNames: ["grupoastralegal.com", "www.grupoastralegal.com"],
     },
   ]);
+});
+
+test("production front doors stage Zooberiah Systems without public aliases or DNS", () => {
+  const production = environments.find((environment) => environment.name === "production");
+  assert.ok(production);
+  const zooberiah = production.frontendHosting.frontDoors.find(
+    (frontDoor) => frontDoor.id === "zooberiahsystems"
+  );
+  assert.ok(zooberiah);
+  assert.equal(zooberiah.domainName, "zooberiahsystems.com");
+  assert.deepEqual(zooberiah.alternateDomainNames, ["www.zooberiahsystems.com"]);
+  assert.equal(zooberiah.customDomainNamesEnabled, false);
+  assert.equal(zooberiah.route53RecordsEnabled, false);
+  assert.equal(zooberiah.auditHostHint, "zooberiahsystems.com");
+  assert.equal(zooberiah.redirectAlternateDomainNamesToPrimary, true);
+  assert.match(
+    zooberiah.certificateArn,
+    /certificate\/a23103a6-8dfb-443e-bbcb-b3d924038fd5$/
+  );
+  assert.deepEqual(zooberiah.aliasRecordGroups, [
+    {
+      hostedZoneName: "zooberiahsystems.com",
+      hostedZoneId: "Z00733952JM7567FL6HXC",
+      domainNames: ["zooberiahsystems.com", "www.zooberiahsystems.com"],
+    },
+  ]);
+});
+
+test("Zooberiah alias phase attaches TLS names but cannot mutate Route53", () => {
+  assert.equal(typeof buildZooberiahProductionFrontDoor, "function");
+  const aliases = buildZooberiahProductionFrontDoor({
+    FRONTEND_PRODUCTION_ZOOBERIAH_PHASE: "aliases",
+  });
+  assert.equal(aliases.customDomainNamesEnabled, true);
+  assert.equal(aliases.route53RecordsEnabled, false);
+  assert.equal(aliases.auditHostHint, undefined);
+  assert.deepEqual(aliases.alternateDomainNames, ["www.zooberiahsystems.com"]);
+  assert.throws(
+    () => buildZooberiahProductionFrontDoor({
+      FRONTEND_PRODUCTION_ZOOBERIAH_PHASE: "dns",
+    }),
+    /Zooberiah production phase/
+  );
+  assert.throws(
+    () => buildZooberiahProductionFrontDoor({
+      FRONTEND_PRODUCTION_ZOOBERIAH_ROUTE53_RECORDS_ENABLED: "true",
+    }),
+    /does not manage Route53/
+  );
 });
 
 test("THN public production front door requires an exact certificate and explicit DNS activation", () => {

@@ -16,6 +16,8 @@ const certificates = {
     "arn:aws:acm:us-east-1:765932874577:certificate/4b190eff-7dde-435f-933b-da411d30ab50",
   grupoAstraLegal:
     "arn:aws:acm:us-east-1:765932874577:certificate/882ab0a9-c900-482d-ac9b-2f3baca96f40",
+  zooberiahSystems:
+    "arn:aws:acm:us-east-1:765932874577:certificate/a23103a6-8dfb-443e-bbcb-b3d924038fd5",
 };
 
 const hostedZones = {
@@ -54,6 +56,10 @@ const hostedZones = {
   grupoAstraLegalCom: {
     hostedZoneName: "grupoastralegal.com",
     hostedZoneId: "Z05844193OR5CAJJCR2ZJ",
+  },
+  zooberiahSystemsCom: {
+    hostedZoneName: "zooberiahsystems.com",
+    hostedZoneId: "Z00733952JM7567FL6HXC",
   },
   theHairNarrativeCom: {
     hostedZoneName: "thehairnarrative.com",
@@ -164,6 +170,33 @@ function buildThnPublicProductionFrontDoor(source = process.env) {
       ...hostedZones.theHairNarrativeCom,
       domainNames: [thnPublicProductionHost],
     }],
+  };
+}
+
+function buildZooberiahProductionFrontDoor(source = process.env) {
+  if (parseBooleanFlag(source.FRONTEND_PRODUCTION_ZOOBERIAH_ROUTE53_RECORDS_ENABLED)) {
+    throw new Error("Zooberiah production front door does not manage Route53 during generated or alias phases.");
+  }
+  const phase = String(source.FRONTEND_PRODUCTION_ZOOBERIAH_PHASE || "generated").trim();
+  if (!["generated", "aliases"].includes(phase)) {
+    throw new Error("Zooberiah production phase must be generated or aliases.");
+  }
+  const aliasesEnabled = phase === "aliases";
+  return {
+    id: "zooberiahsystems",
+    domainName: "zooberiahsystems.com",
+    alternateDomainNames: ["www.zooberiahsystems.com"],
+    customDomainNamesEnabled: aliasesEnabled,
+    route53RecordsEnabled: false,
+    auditHostHint: aliasesEnabled ? undefined : "zooberiahsystems.com",
+    redirectAlternateDomainNamesToPrimary: true,
+    certificateArn: certificates.zooberiahSystems,
+    aliasRecordGroups: [
+      {
+        ...hostedZones.zooberiahSystemsCom,
+        domainNames: ["zooberiahsystems.com", "www.zooberiahsystems.com"],
+      },
+    ],
   };
 }
 
@@ -486,6 +519,7 @@ function requiredOriginPath(value, name) {
 const thnAdminTestFrontDoor = buildThnAdminTestFrontDoor();
 const thnPublicProductionFrontDoor = buildThnPublicProductionFrontDoor();
 const thnAdminProductionFrontDoor = buildThnAdminProductionFrontDoor();
+const zooberiahProductionFrontDoor = buildZooberiahProductionFrontDoor();
 
 const environments = [
   {
@@ -620,6 +654,7 @@ const environments = [
             },
           ],
         },
+        zooberiahProductionFrontDoor,
         ...(thnPublicProductionFrontDoor ? [thnPublicProductionFrontDoor] : []),
         ...(thnAdminProductionFrontDoor ? [thnAdminProductionFrontDoor] : []),
       ],
@@ -637,6 +672,7 @@ module.exports = {
   buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
   buildThnPublicProductionFrontDoor,
+  buildZooberiahProductionFrontDoor,
   environments,
   expectedAccount,
   defaultRegion,
