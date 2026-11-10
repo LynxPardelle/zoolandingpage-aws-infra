@@ -6,8 +6,11 @@ const ARTIFACT_BUCKET="zoolandingpage-production-frontend-artifacts-765932874577
 function validateInput(input){
  const keys=["schemaVersion","purpose","sourceSha","publicReleaseId","selection","ownerSnapshot","certificateArn","appCoordinates"];
  if(!input||!same(Object.keys(input).sort(),keys.sort())||input.schemaVersion!==1||!["private-frontdoor","public-visual"].includes(input.purpose)||!/^[a-f0-9]{40}$/.test(input.sourceSha)||!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(input.publicReleaseId)||input.publicReleaseId.includes(".."))fail("production_frontend_input_invalid");
- admin.validateSelection(input.selection,"production");origins.validateProductionOrigins(input.ownerSnapshot);
- if(!/^arn:aws:acm:us-east-1:765932874577:certificate\/[a-f0-9-]{36}$/.test(input.certificateArn))fail("production_frontend_input_invalid");
+ admin.validateSelection(input.selection,"production");
+ if(input.purpose==="private-frontdoor"){
+  origins.validateProductionOrigins(input.ownerSnapshot);
+  if(!/^arn:aws:acm:us-east-1:765932874577:certificate\/[a-f0-9-]{36}$/.test(input.certificateArn))fail("production_frontend_input_invalid");
+ }else if(input.ownerSnapshot!==null||input.certificateArn!==null)fail("production_frontend_input_invalid");
  const c=input.appCoordinates,m=input.selection.metadata;
  if(!c||!same(Object.keys(c).sort(),["artifactId","sourceSha","runId","runAttempt","deliverySha256","manifestSha256"].sort())||!/^[1-9][0-9]*$/.test(c.artifactId)||c.sourceSha!==m.sourceCommit||c.runId!==m.runId||c.runAttempt!==m.runAttempt||c.deliverySha256!==m.deliverySha256||c.manifestSha256!==m.manifestSha256)fail("production_frontend_input_invalid");
  return input;
@@ -20,13 +23,18 @@ function prepareFrontend(input,destination){
  process.env.FRONTEND_PRODUCTION_THN_PUBLIC_ROUTE53_RECORDS_ENABLED="true";
  process.env.FRONTEND_PRODUCTION_THN_PUBLIC_CERTIFICATE_ARN="arn:aws:acm:us-east-1:765932874577:certificate/fdabc4b5-dc47-479b-abc4-ae601b80b63c";
  process.env.FRONTEND_PRODUCTION_CUSTOM_DOMAIN_NAMES_ENABLED="true";
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_ORIGIN_ENABLED="true";
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_ROUTE53_RECORDS_ENABLED="true";
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_CERTIFICATE_ARN=input.certificateArn;
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_HOSTED_ZONE_ID="Z08032292DKYZ4QGCIZDR";
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_OWNER_SNAPSHOT_JSON=JSON.stringify(input.ownerSnapshot);
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_MANIFEST_BASE64=input.selection.manifestBase64;
- process.env.FRONTEND_PRODUCTION_THN_ADMIN_RELEASE_METADATA_JSON=JSON.stringify(input.selection.metadata);
+ // The public visual release must match the already active ZooBeriah aliases.
+ // Projection still rejects any alias mismatch and clones the live template.
+ if(input.purpose==="public-visual")process.env.FRONTEND_PRODUCTION_ZOOBERIAH_PHASE="aliases";
+ process.env.FRONTEND_PRODUCTION_THN_ADMIN_ORIGIN_ENABLED=input.purpose==="private-frontdoor"?"true":"false";
+ process.env.FRONTEND_PRODUCTION_THN_ADMIN_ROUTE53_RECORDS_ENABLED=input.purpose==="private-frontdoor"?"true":"false";
+ if(input.purpose==="private-frontdoor"){
+  process.env.FRONTEND_PRODUCTION_THN_ADMIN_CERTIFICATE_ARN=input.certificateArn;
+  process.env.FRONTEND_PRODUCTION_THN_ADMIN_HOSTED_ZONE_ID="Z08032292DKYZ4QGCIZDR";
+  process.env.FRONTEND_PRODUCTION_THN_ADMIN_OWNER_SNAPSHOT_JSON=JSON.stringify(input.ownerSnapshot);
+  process.env.FRONTEND_PRODUCTION_THN_ADMIN_MANIFEST_BASE64=input.selection.manifestBase64;
+  process.env.FRONTEND_PRODUCTION_THN_ADMIN_RELEASE_METADATA_JSON=JSON.stringify(input.selection.metadata);
+ }
  const cdk=require("aws-cdk-lib"),{FrontendStack}=require("../lib/stacks/frontend-stack"),{environments}=require("../config/environments");
  const environment=environments.find(e=>e.name==="production");
  const app=new cdk.App({outdir:path.join(destination,"assembly")}),stage=new cdk.Stage(app,"ZoolandingProduction",{env:{account:ACCOUNT,region:REGION}}),stack=new FrontendStack(stage,"Zoolandingpage-production-Frontend",{env:{account:ACCOUNT,region:REGION},environment,stackName:STACK});
@@ -63,6 +71,12 @@ async function publishedProof(call,input,dir){
 function selectedBaseline(call,input){
  const baseline=certificate.readProductionBaseline(call,{certificateAbsent:false,adminMustAbsent:false});
  if(!baseline.terminationProtection)fail("production_frontend_termination_protection_required");
+ const {lambdas,distributions}=readFrontendResources(call,baseline);
+ const publicFunction=Object.values(lambdas).find(f=>f.FunctionName==="zoolandingpage-production-frontend-ssr");
+ if(publicFunction?.Environment?.Variables?.ZLP_RELEASE_ID!==input.publicReleaseId)fail("production_public_baseline_release_changed");
+ // A public code/static rotation never provisions or changes private origins.
+ // Their exact resources are retained in the native baseline and projection.
+ if(input.purpose==="public-visual")return {...baseline,lambdas,distributions};
  const nativeOrigins=origins.captureProductionOrigins((...a)=>call("lookup",...a));if(!same(nativeOrigins,input.ownerSnapshot))fail("production_owner_snapshot_changed");
  const owned=baseline.resources.filter(r=>r.LogicalResourceId==="ThnAdminProductionCertificate");
  if(owned.length!==1||owned[0].PhysicalResourceId!==input.certificateArn)fail("production_certificate_identity_mismatch");
@@ -70,13 +84,6 @@ function selectedBaseline(call,input){
  if(c?.DomainName!=="admin.thehairnarrative.com"||c.Status!=="ISSUED"||!same(c.SubjectAlternativeNames,["admin.thehairnarrative.com"]))fail("production_certificate_identity_mismatch");
  const privateResource=baseline.resources.find(r=>r.LogicalResourceId==="FrontendDistributionThehairnarrativeAdminProductionF99395A3");
  if(input.purpose==="private-frontdoor"&&!privateResource&&baseline.dns.some(r=>r.Name==="admin.thehairnarrative.com."))fail("production_admin_dns_conflict");
- const lambdas={},distributions={};
- for(const r of baseline.resources){
-  if(r.ResourceType==="AWS::Lambda::Function"&&["zoolandingpage-production-frontend-ssr","zoolandingpage-production-frontend-thn-admin-ssr"].includes(r.PhysicalResourceId)){
-   const cfg=call("lookup","lambda","get-function-configuration",{FunctionName:r.PhysicalResourceId});if(cfg.FunctionName!==r.PhysicalResourceId||cfg.State!=="Active"||cfg.LastUpdateStatus!=="Successful")fail("production_lambda_baseline_invalid");lambdas[r.LogicalResourceId]=cfg;
-  }
-  if(r.ResourceType==="AWS::CloudFront::Distribution")distributions[r.LogicalResourceId]=call("lookup","cloudfront","get-distribution-config",{Id:r.PhysicalResourceId});
- }
  const authResources=call("lookup","cloudformation","list-stack-resources",{StackName:input.ownerSnapshot.owners.thnAuthAdmin.stackId});
  if(authResources.NextToken)fail("production_auth_resource_inventory_incomplete");
  const authorizer=authResources.StackResourceSummaries?.filter(r=>r.LogicalResourceId==="ThnAuthAdminV2OriginAuthorizerFunction"&&r.ResourceType==="AWS::Lambda::Function");
@@ -84,9 +91,17 @@ function selectedBaseline(call,input){
  const auth=call("lookup","lambda","get-function-configuration",{FunctionName:authorizer[0].PhysicalResourceId}),authEnv=auth.Environment?.Variables;
  if(authEnv?.THN_DEPLOYMENT_ENVIRONMENT!=="production"||!/^[a-f0-9]{64}$/.test(authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT||"")||authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT==="0".repeat(64))fail("production_origin_secret_owner_mismatch");
  const authorizerEvidence={functionArn:auth.FunctionArn,codeSha256:auth.CodeSha256,revisionId:auth.RevisionId,currentOriginSha256:authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_CURRENT,previousOriginSha256:authEnv.THN_AUTH_V2_ORIGIN_HEADER_SHA256_PREVIOUS||null};
- const publicFunction=Object.values(lambdas).find(f=>f.FunctionName==="zoolandingpage-production-frontend-ssr");
- if(publicFunction?.Environment?.Variables?.ZLP_RELEASE_ID!==input.publicReleaseId)fail("production_public_baseline_release_changed");
  return {...baseline,lambdas,distributions,authorizerEvidence,ownerSnapshotSha256:origins.snapshotDigest(nativeOrigins)};
+}
+function readFrontendResources(call,baseline){
+ const lambdas={},distributions={};
+ for(const r of baseline.resources){
+  if(r.ResourceType==="AWS::Lambda::Function"&&["zoolandingpage-production-frontend-ssr","zoolandingpage-production-frontend-thn-admin-ssr"].includes(r.PhysicalResourceId)){
+   const cfg=call("lookup","lambda","get-function-configuration",{FunctionName:r.PhysicalResourceId});if(cfg.FunctionName!==r.PhysicalResourceId||cfg.State!=="Active"||cfg.LastUpdateStatus!=="Successful")fail("production_lambda_baseline_invalid");lambdas[r.LogicalResourceId]=cfg;
+  }
+  if(r.ResourceType==="AWS::CloudFront::Distribution")distributions[r.LogicalResourceId]=call("lookup","cloudfront","get-distribution-config",{Id:r.PhysicalResourceId});
+ }
+ return {lambdas,distributions};
 }
 module.exports={validateInput,prepareFrontend,sourcePackageHash,getObject,publishedProof,selectedBaseline};
 

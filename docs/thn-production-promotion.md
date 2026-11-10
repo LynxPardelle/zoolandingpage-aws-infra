@@ -78,6 +78,14 @@ Four manual production workflows have separate approval records:
   or the complete public frontend visual package. The latter updates the shared
   SSR package and static release prefixes while preserving distribution identities
   and aliases. It deliberately does not redeploy unrelated stacks.
+  Its public compiler selects ZooBeriah's active alias phase; the projection
+  still requires exact agreement with the live aliases before it can produce
+  a candidate. DNS and certificates are preserved from the captured template.
+  For this public-only operation, `ownerSnapshot` and `certificateArn` are
+  explicitly `null`. Private backend provisioning is not a dependency of a
+  public code/static rotation. The full native baseline still seals all existing
+  resources; private-frontdoor operations retain their separate owner and
+  certificate validation.
 
 Each credential job requires current main, exact source/package hashes and the
 production Environment. It reads current main again immediately before a native
