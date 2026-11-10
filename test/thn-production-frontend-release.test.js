@@ -1,6 +1,20 @@
 "use strict";
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),os=require("node:os"),path=require("node:path");
 const api=require("../tools/thn-production-frontend-release"),cert=require("../tools/thn-production-certificate-release");
+test("hidden Lambda environment diagnostics do not change a sealed native baseline",()=>{
+ const f=require("./fixtures/thn-production-selection").productionFixture(),input={...f.input,purpose:"public-visual",ownerSnapshot:null,certificateArn:null};
+ const prior=cert.readProductionBaseline,fn="zoolandingpage-production-frontend-ssr";
+ const template={Resources:{ArtifactBucket:{Type:"AWS::S3::Bucket",Properties:{BucketName:"zoolandingpage-production-frontend-artifacts-765932874577"}},PublicSsr:{Type:"AWS::Lambda::Function",Properties:{FunctionName:fn,Environment:{Variables:{ZLP_RELEASE_ID:input.publicReleaseId}},Code:{S3Bucket:{Ref:"ArtifactBucket"},S3Key:`frontend/angular-ssr/production/releases/${input.publicReleaseId}/server/ssr-handler.zip`}}}}};
+ let message="KMS diagnostic request one",revision="stable";
+ const call=()=>({FunctionName:fn,State:"Active",LastUpdateStatus:"Successful",CodeSha256:"sealed",RevisionId:revision,Environment:{Error:{ErrorCode:"AccessDeniedException",Message:message}}});
+ try{
+  cert.readProductionBaseline=()=>({terminationProtection:true,templates:{Original:template},resources:[{LogicalResourceId:"PublicSsr",ResourceType:"AWS::Lambda::Function",PhysicalResourceId:fn}]});
+  const before=api.selectedBaseline(call,input);message="KMS diagnostic request two";
+  assert.deepEqual(api.selectedBaseline(call,input),before);
+  revision="actual-drift";assert.notDeepEqual(api.selectedBaseline(call,input),before);
+  assert.equal(before.lambdas.PublicSsr.Environment.Error.ErrorCode,"AccessDeniedException");
+ }finally{cert.readProductionBaseline=prior;}
+});
 test("private frontdoor baseline rejects a disabled Auth origin digest before a change set",()=>{
  const origins=require("../tools/thn-production-origins"),f=require("./fixtures/thn-production-selection").productionFixture();
  const priorRead=cert.readProductionBaseline,priorOrigins=origins.captureProductionOrigins;

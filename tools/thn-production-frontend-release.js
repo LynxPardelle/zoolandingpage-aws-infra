@@ -97,7 +97,12 @@ function readFrontendResources(call,baseline){
  const lambdas={},distributions={};
  for(const r of baseline.resources){
   if(r.ResourceType==="AWS::Lambda::Function"&&["zoolandingpage-production-frontend-ssr","zoolandingpage-production-frontend-thn-admin-ssr"].includes(r.PhysicalResourceId)){
-   const cfg=call("lookup","lambda","get-function-configuration",{FunctionName:r.PhysicalResourceId});if(cfg.FunctionName!==r.PhysicalResourceId||cfg.State!=="Active"||cfg.LastUpdateStatus!=="Successful")fail("production_lambda_baseline_invalid");lambdas[r.LogicalResourceId]=cfg;
+   const cfg=call("lookup","lambda","get-function-configuration",{FunctionName:r.PhysicalResourceId});if(cfg.FunctionName!==r.PhysicalResourceId||cfg.State!=="Active"||cfg.LastUpdateStatus!=="Successful")fail("production_lambda_baseline_invalid");
+   // A denied KMS read includes a fresh request identifier in its diagnostic.
+   // Keep its exact error code; native template binding and live ZIP hashing
+   // independently prove the hidden release without comparing transient text.
+   if(!cfg.Environment?.Variables&&cfg.Environment?.Error?.ErrorCode==="AccessDeniedException")delete cfg.Environment.Error.Message;
+   lambdas[r.LogicalResourceId]=cfg;
   }
   if(r.ResourceType==="AWS::CloudFront::Distribution")distributions[r.LogicalResourceId]=call("lookup","cloudfront","get-distribution-config",{Id:r.PhysicalResourceId});
  }
