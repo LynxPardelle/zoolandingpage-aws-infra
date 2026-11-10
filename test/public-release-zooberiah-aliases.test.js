@@ -53,3 +53,21 @@ test("public release compiler preserves the active Zooberiah aliases in the scop
   assert.deepEqual(projected.Resources[id].Properties.DistributionConfig.Aliases,before.Resources[id].Properties.DistributionConfig.Aliases);
  }finally{fs.rmSync(dir,{recursive:true});}
 });
+test("hidden Lambda variables require the exact native release and code pointer binding",()=>{
+ const f=require("./fixtures/thn-production-selection").productionFixture();
+ f.input.purpose="public-visual";f.input.ownerSnapshot=null;f.input.certificateArn=null;
+ const name="zoolandingpage-production-frontend-ssr",release=f.input.publicReleaseId;
+ const resource={Type:"AWS::Lambda::Function",Properties:{FunctionName:name,Code:{S3Bucket:"zoolandingpage-production-frontend-artifacts-765932874577",S3Key:`frontend/angular-ssr/production/releases/${release}/server/ssr-handler.zip`},Environment:{Variables:{ZLP_RELEASE_ID:release}}}};
+ const b={terminationProtection:true,templates:{Original:{Resources:{Shared:resource}}},resources:[{LogicalResourceId:"Shared",ResourceType:"AWS::Lambda::Function",PhysicalResourceId:name}]};
+ const read=cert.readProductionBaseline;let error="AccessDeniedException",live;
+ const call=()=>({FunctionName:name,State:"Active",LastUpdateStatus:"Successful",Environment:live?{Variables:{ZLP_RELEASE_ID:live}}:{Error:{ErrorCode:error}}});
+ try{
+  cert.readProductionBaseline=()=>structuredClone(b);
+  assert.equal(api.selectedBaseline(call,f.input).lambdas.Shared.FunctionName,name);
+  b.templates.Original.Resources.Shared.Properties.Code.S3Key="different.zip";
+  assert.throws(()=>api.selectedBaseline(call,f.input),/production_public_baseline_release_changed/);
+  b.templates.Original.Resources.Shared.Properties.Code.S3Key=`frontend/angular-ssr/production/releases/${release}/server/ssr-handler.zip`;
+  error="KMSInvalidStateException";assert.throws(()=>api.selectedBaseline(call,f.input),/production_public_baseline_release_changed/);
+  live="unexpected-live-release";assert.throws(()=>api.selectedBaseline(call,f.input),/production_public_baseline_release_changed/);
+ }finally{cert.readProductionBaseline=read;}
+});
