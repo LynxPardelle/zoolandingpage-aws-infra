@@ -73,7 +73,7 @@ function selectedBaseline(call,input){
  if(!baseline.terminationProtection)fail("production_frontend_termination_protection_required");
  const {lambdas,distributions}=readFrontendResources(call,baseline);
  const publicFunction=Object.values(lambdas).find(f=>f.FunctionName==="zoolandingpage-production-frontend-ssr");
- if(publicFunction?.Environment?.Variables?.ZLP_RELEASE_ID!==input.publicReleaseId)fail("production_public_baseline_release_changed");
+ if(!sharedReleaseBinding(baseline,publicFunction,input.publicReleaseId))fail("production_public_baseline_release_changed");
  // A public code/static rotation never provisions or changes private origins.
  // Their exact resources are retained in the native baseline and projection.
  if(input.purpose==="public-visual")return {...baseline,lambdas,distributions};
@@ -102,6 +102,18 @@ function readFrontendResources(call,baseline){
   if(r.ResourceType==="AWS::CloudFront::Distribution")distributions[r.LogicalResourceId]=call("lookup","cloudfront","get-distribution-config",{Id:r.PhysicalResourceId});
  }
  return {lambdas,distributions};
+}
+function sharedReleaseBinding(baseline,fn,releaseId){
+ if(!fn||fn.FunctionName!=="zoolandingpage-production-frontend-ssr")return false;
+ if(fn.Environment?.Variables)return fn.Environment.Variables.ZLP_RELEASE_ID===releaseId;
+ // CDK lookup deliberately denies decrypting Lambda variables. Bind the native
+ // template instead; recoveryProof also verifies its ZIP against live CodeSha256.
+ if(fn.Environment?.Error?.ErrorCode!=="AccessDeniedException")return false;
+ const template=baseline.templates.Original;
+ const entries=Object.values(template.Resources).filter(r=>r.Type==="AWS::Lambda::Function"&&r.Properties?.FunctionName===fn.FunctionName);
+ return entries.length===1&&entries[0].Properties.Environment?.Variables?.ZLP_RELEASE_ID===releaseId
+  &&projection.ownedArtifactBucket(template,entries[0].Properties.Code?.S3Bucket)
+  &&entries[0].Properties.Code.S3Key===`frontend/angular-ssr/production/releases/${releaseId}/server/ssr-handler.zip`;
 }
 module.exports={validateInput,prepareFrontend,sourcePackageHash,getObject,publishedProof,selectedBaseline};
 
@@ -189,7 +201,8 @@ async function runFrontendOperation(options){
   for(const stage of ["Original","Processed"])if(!same(after.templates[stage],candidate))fail("production_frontend_post_template_mismatch");
   if(!same(after.trust,before.trust)||after.ownerSnapshotSha256!==before.ownerSnapshotSha256)fail("production_frontend_post_owner_changed");
   const functionName=input.purpose==="private-frontdoor"?"zoolandingpage-production-frontend-thn-admin-ssr":"zoolandingpage-production-frontend-ssr",fn=Object.values(after.lambdas).find(f=>f.FunctionName===functionName);
-  if(!fn||Buffer.from(fn.CodeSha256,"base64").toString("hex")!==proof.codeSha256||fn.Environment?.Variables?.ZLP_RELEASE_ID!==input.selection.metadata.releaseId)fail("production_frontend_post_code_mismatch");
+  const releaseMatches=input.purpose==="public-visual"?sharedReleaseBinding(after,fn,input.selection.metadata.releaseId):fn?.Environment?.Variables?.ZLP_RELEASE_ID===input.selection.metadata.releaseId;
+  if(!fn||Buffer.from(fn.CodeSha256,"base64").toString("hex")!==proof.codeSha256||!releaseMatches)fail("production_frontend_post_code_mismatch");
   if(input.purpose==="private-frontdoor"&&!same(after.publicConfig,before.publicConfig))fail("production_public_distribution_changed");
   if(input.purpose==="private-frontdoor"){
    const resource=after.resources.find(r=>r.LogicalResourceId==="FrontendDistributionThehairnarrativeAdminProductionF99395A3"),distribution=after.distributions[resource.LogicalResourceId]?.DistributionConfig;
