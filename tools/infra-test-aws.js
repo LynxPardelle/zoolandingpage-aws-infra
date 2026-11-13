@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const { isDeepStrictEqual } = require("node:util");
 
 const STACK = "ZoolandingTest-Zoolandingpage-test-Frontend";
 const REGION = "us-east-1";
@@ -179,8 +180,12 @@ function createRoleClient(releaseRoot, kind, options = {}) {
     if (operation === "s3 cp") {
       const selection = JSON.parse(fs.readFileSync(path.join(artifact.root, "thn-admin-selection.json")));
       const prefix = `s3://zoolandingpage-test-frontend-artifacts-${account}/${selection?.originPrefix}/`;
-      if (args[3] !== "-" || !args[2]?.startsWith(prefix)
-        || !["manifest.json", "delivery.json", "thn-admin-release.json", "thn-route-manifest.json"].includes(args[2].slice(prefix.length))) fail("test_infra_operation_invalid");
+      const ordinaryPrivateRead = args[2]?.startsWith(prefix)
+        && ["manifest.json", "delivery.json", "thn-admin-release.json", "thn-route-manifest.json"].includes(args[2].slice(prefix.length));
+      const publicRelease = env.PUBLIC_SSR_ACTION ? require("./verify-public-test-ssr-inputs").readPublicTestSsrInputs(env) : null;
+      const publicManifestRead = publicRelease && publicRelease.releaseId === artifact.metadata.frontend_release_id
+        && args[2] === `s3://zoolandingpage-test-frontend-artifacts-${account}/frontend/angular-ssr/test/releases/${publicRelease.releaseId}/manifest.json`;
+      if (args[3] !== "-" || (!ordinaryPrivateRead && !publicManifestRead)) fail("test_infra_operation_invalid");
     }
     if (args[0] === "cloudfront" && !["cloudfront get-function", "cloudfront describe-function"].includes(operation)
       && (!/^[A-Z0-9]+$/.test(value("--id")) || (args[1] === "wait" && args[2] !== "distribution-deployed"))) fail("test_infra_operation_invalid");
@@ -216,16 +221,63 @@ function reviewWithOriginProof(description, reviewOptions, review, proveOriginOn
     () => proveOriginOnly() ? "origin-only" : "none", reviewSummary);
 }
 
+function readFrontendTemplate(read, changeSetArn) {
+  const selected = changeSetArn ? ["--change-set-name", changeSetArn] : [];
+  const { TemplateBody: body } = JSON.parse(read(["cloudformation", "get-template", "--stack-name", STACK,
+    ...selected, "--template-stage", "Original", "--output", "json"]));
+  return typeof body === "string" ? JSON.parse(body) : body;
+}
+
+function verifyPublicSsrSelection(artifact, root, options, publicSsr, changeSetArn) {
+  if (!publicSsr || artifact.metadata.frontend_release_id !== publicSsr.releaseId) fail("public_test_ssr_release_invalid");
+  const verifier = require("./verify-public-test-template");
+  const read = createRoleClient(root, "lookup", { ...options, templateChangeSetArn: changeSetArn });
+  const prefix = `frontend/angular-ssr/test/releases/${publicSsr.releaseId}`;
+  const bucket = `zoolandingpage-test-frontend-artifacts-${artifact.metadata.expected_aws_account_id}`;
+  const manifestBytes = read(["s3", "cp", `s3://${bucket}/${prefix}/manifest.json`, "-", "--only-show-errors"]);
+  if (digest(manifestBytes) !== publicSsr.manifestSha256) fail("public_test_ssr_manifest_changed");
+  const manifest = JSON.parse(manifestBytes);
+  if (manifest.schemaVersion !== 1 || manifest.environment !== "test" || manifest.releaseId !== publicSsr.releaseId
+    || !/^[a-f0-9]{40}$/.test(manifest.sourceCommit) || manifest.browserPrefix !== `${prefix}/browser`
+    || manifest.serverBundleKey !== `${prefix}/server/ssr-handler.zip`
+    || !/^[a-f0-9]{64}$/.test(manifest.checksums?.["server/ssr-handler.zip"])) fail("public_test_ssr_manifest_invalid");
+  const live = readFrontendTemplate(read);
+  const candidate = JSON.parse(fs.readFileSync(path.join(artifact.assemblyRoot, artifact.stack.properties.templateFile), "utf8"));
+  const proof = verifier.verifyPublicTestTemplate(live, candidate, publicSsr);
+  if (changeSetArn) {
+    const actual = readFrontendTemplate(read, changeSetArn);
+    const actualProof = verifier.verifyPublicTestTemplate(live, actual, publicSsr);
+    if (actualProof.candidateSha256 !== proof.candidateSha256) fail("public_test_ssr_template_changed");
+  }
+  return { ...proof, sourceSha: artifact.metadata.source_sha, manifestSha256: publicSsr.manifestSha256 };
+}
+
 function main(args, options = {}) {
   const [operation, root, changeSetName, changeSetArn] = args;
   const counts = { "verify-public-release": 2, "describe-change-set": 3, "describe-change-set-summary": 3,
-    "verify-change-set-template": 4, "execute-change-set": 4, "wait-stack": 2, smoke: 2 };
+    "verify-change-set-template": 4, "execute-change-set": 4, "wait-stack": 2, smoke: 2,
+    "verify-public-ssr-baseline": 2, "review-public-ssr": 4, "verify-public-ssr-activated": 2 };
   if (args.length !== counts[operation]) fail("test_infra_operation_invalid");
   const env = options.env || process.env;
   const artifact = loadArtifact(root, env);
   const account = artifact.metadata.expected_aws_account_id;
-  if (operation.includes("change-set") && (!validChangeSetName(changeSetName)
-    || (["verify-change-set-template", "execute-change-set"].includes(operation)
+  const publicSsr = env.PUBLIC_SSR_ACTION
+    ? require("./verify-public-test-ssr-inputs").readPublicTestSsrInputs(env) : null;
+  if (operation === "verify-public-ssr-baseline") {
+    verifyPublicSsrSelection(artifact, root, options, publicSsr);
+    return "verified\n";
+  }
+  if (operation === "verify-public-ssr-activated") {
+    if (publicSsr?.action !== "execute") fail("public_test_ssr_selection_invalid");
+    const read = createRoleClient(root, "lookup", options);
+    const live = readFrontendTemplate(read);
+    const candidate = JSON.parse(fs.readFileSync(path.join(artifact.assemblyRoot, artifact.stack.properties.templateFile), "utf8"));
+    if (!isDeepStrictEqual(live, candidate)) fail("public_test_ssr_post_deploy_template_changed");
+    return "verified\n";
+  }
+  const readsChangeSet = operation.includes("change-set") || operation === "review-public-ssr";
+  if (readsChangeSet && (!validChangeSetName(changeSetName)
+    || (["verify-change-set-template", "execute-change-set", "review-public-ssr"].includes(operation)
       && !validChangeSetArn(changeSetArn, account, changeSetName)))) fail("test_infra_operation_invalid");
   if (operation === "verify-change-set-template") {
     const read = createRoleClient(root, "lookup", { ...options, templateChangeSetArn: changeSetArn });
@@ -249,7 +301,7 @@ function main(args, options = {}) {
     || env.ADMIN_INFRASTRUCTURE_APPROVED !== env.ADMIN_ROUTE_ASSOCIATION_APPROVED)) fail("test_infra_operation_invalid");
   const mode = ["execute-change-set", "wait-stack"].includes(operation) ? "deploy" : "lookup";
   const client = createRoleClient(root, mode, options);
-  if (operation.includes("change-set")) {
+  if (readsChangeSet) {
     const describeArgs = ["cloudformation", "describe-change-set", "--stack-name", STACK,
       "--change-set-name", changeSetArn || changeSetName];
     if (operation !== "describe-change-set-summary") describeArgs.push("--include-property-values");
@@ -285,6 +337,18 @@ function main(args, options = {}) {
     };
     const decision = reviewWithAdminProof(description, reviewOptions, review, proveMode, reviewSummary);
     if (decision !== "execute") fail("test_infra_execution_not_approved");
+    if (publicSsr || operation === "review-public-ssr") {
+      const requiredAction = operation === "review-public-ssr" ? "review" : "execute";
+      if (publicSsr?.action !== requiredAction) fail("public_test_ssr_selection_invalid");
+      require("./verify-public-test-template").verifyPublicTestChangeSet(description);
+      const parameters = description.Parameters;
+      if (!Array.isArray(parameters) || !parameters.some(parameter => parameter.ParameterKey === "ThnAdminAuthAdminOriginVerifySecret")
+        || parameters.some(parameter => parameter.UsePreviousValue !== true)) fail("public_test_ssr_parameters_changed");
+      const proof = verifyPublicSsrSelection(artifact, root, options, publicSsr, changeSetArn);
+      const reviewDigest = digest(JSON.stringify(proof));
+      if (requiredAction === "review") return `${reviewDigest}\n`;
+      if (reviewDigest !== publicSsr.reviewDigest) fail("public_test_ssr_review_digest_changed");
+    }
     client(["cloudformation", "execute-change-set", "--stack-name", STACK, "--change-set-name", changeSetArn]);
     return;
   }
@@ -316,7 +380,11 @@ function main(args, options = {}) {
 
 if (require.main === module) {
   try { const result = main(process.argv.slice(2)); if (result) process.stdout.write(result); }
-  catch { process.stderr.write("test_infra_aws_guard_failed\n"); process.exitCode = 1; }
+  catch (error) {
+    const code = /^public_test_(?:ssr|release)_[a-z_]+$/.test(error?.message) ? error.message : "test_infra_aws_guard_failed";
+    process.stderr.write(`${code}\n`);
+    process.exitCode = 1;
+  }
 }
 module.exports = { loadArtifact, createRoleClient, readPrivateLambdaConfiguration, validChangeSetArn, validChangeSetName,
   reviewWithOriginProof, reviewWithAdminProof, main };

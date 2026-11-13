@@ -1409,7 +1409,7 @@ test("test deploy workflow targets only the frontend stack", () => {
   assert.match(runner, /--require-approval never/);
   assert.match(runner, /--exclusively/);
   assert.doesNotMatch(workflow, /ZoolandingTest\/\*/);
-  assert.match(workflow, /FRONTEND_TEST_RELEASE_ID: \$\{\{ vars\.FRONTEND_RELEASE_ID \}\}/);
+  assert.match(workflow, /FRONTEND_TEST_RELEASE_ID: \$\{\{ inputs\.public_ssr_release_id \|\| vars\.FRONTEND_RELEASE_ID \}\}/);
   assert.match(workflow, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);
   assert.match(workflow, /test -n "\$FRONTEND_TEST_RELEASE_ID"/);
   assert.match(workflow, /infra-test-aws\.js verify-public-release/);

@@ -5,6 +5,26 @@ on:
     branches: [test]
   workflow_dispatch:
     inputs:
+      public_ssr_action:
+        description: Set to review or execute for an update limited to public TEST SSR
+        required: false
+        type: string
+      public_ssr_release_id:
+        description: Immutable APP TEST release to select
+        required: false
+        type: string
+      public_ssr_current_release_id:
+        description: Expected current public TEST SSR release (also the rollback target)
+        required: false
+        type: string
+      public_ssr_review_digest:
+        description: Digest from the successful public TEST SSR review
+        required: false
+        type: string
+      public_ssr_manifest_sha256:
+        description: SHA-256 of the published APP TEST release manifest
+        required: false
+        type: string
       approve_thn_admin_dns_tls_distribution:
         description: Approve only the TEST DNS, TLS, and distribution boundary for admin-test.thehairnarrative.com
         required: true
@@ -31,6 +51,7 @@ jobs:
       contents: read
     outputs:
       promotion_mode: ${{ steps.promotion.outputs.mode }}
+      public_ssr_action: ${{ steps.promotion.outputs.public_ssr_action }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_name: ${{ steps.identity.outputs.name }}
       manifest_digest: ${{ steps.manifest.outputs.digest }}
@@ -39,7 +60,7 @@ jobs:
       EXPECTED_AWS_REGION: us-east-1
       ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
       ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
-      FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+      FRONTEND_TEST_RELEASE_ID: ${{ inputs.public_ssr_release_id || vars.FRONTEND_RELEASE_ID }}
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
       FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ vars.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 }}
       FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ vars.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON }}
@@ -88,6 +109,11 @@ jobs:
         shell: bash
         env:
           INFRA_TEST_PROMOTION_SELECTION_JSON: ${{ vars.INFRA_TEST_PROMOTION_SELECTION_JSON }}
+          PUBLIC_SSR_ACTION: ${{ inputs.public_ssr_action }}
+          PUBLIC_SSR_RELEASE_ID: ${{ inputs.public_ssr_release_id }}
+          PUBLIC_SSR_CURRENT_RELEASE_ID: ${{ inputs.public_ssr_current_release_id }}
+          PUBLIC_SSR_REVIEW_DIGEST: ${{ inputs.public_ssr_review_digest }}
+          PUBLIC_SSR_MANIFEST_SHA256: ${{ inputs.public_ssr_manifest_sha256 }}
         run: |
           set -euo pipefail
           PROMOTED_DEV_SHA="$(git rev-parse refs/remotes/origin/dev)"
@@ -95,11 +121,21 @@ jobs:
           PROMOTED_TEST_BASE_SHA="$(git rev-parse HEAD^1)"
           export PROMOTED_DEV_SHA PROMOTED_DEV_TREE PROMOTED_TEST_BASE_SHA
           mode="$(node tools/classify-test-promotion.js)"
+          public_action=""
+          if [[ -n "${PUBLIC_SSR_ACTION}${PUBLIC_SSR_RELEASE_ID}${PUBLIC_SSR_CURRENT_RELEASE_ID}${PUBLIC_SSR_REVIEW_DIGEST}${PUBLIC_SSR_MANIFEST_SHA256}" ]]; then
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$mode" = thn-source-only
+            test "$ADMIN_INFRASTRUCTURE_APPROVED" = false
+            test "$ADMIN_ROUTE_ASSOCIATION_APPROVED" = false
+            node tools/verify-public-test-ssr-inputs.js
+            public_action="$PUBLIC_SSR_ACTION"
+          fi
           case "$mode" in
             legacy|thn-source-only) ;;
             *) echo "promotion_mode_invalid"; exit 1 ;;
           esac
           printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+          printf 'public_ssr_action=%s\n' "$public_action" >> "$GITHUB_OUTPUT"
 
       - name: Validate separate THN admin approvals
         shell: bash
@@ -133,7 +169,7 @@ jobs:
             --output .release/cdk.out
 
       - name: Assemble immutable TEST infrastructure release
-        if: steps.promotion.outputs.mode == 'legacy'
+        if: steps.promotion.outputs.mode == 'legacy' || steps.promotion.outputs.public_ssr_action != ''
         shell: bash
         env:
           RELEASE_SHA: ${{ github.sha }}
@@ -144,6 +180,8 @@ jobs:
           cp tools/review-test-infra-change-set.js .release/release-tools/
           cp tools/thn-admin-release.js .release/release-tools/
           cp tools/infra-test-aws.js .release/release-tools/
+          cp tools/verify-public-test-template.js .release/release-tools/
+          cp tools/verify-public-test-ssr-inputs.js .release/release-tools/
           cp tools/run-test-infra-change-set.sh .release/release-tools/
           cp tools/smoke-test-infra-stack.sh .release/release-tools/
           node <<'NODE'
@@ -174,7 +212,7 @@ jobs:
           (cd .release && LC_ALL=C find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > release-manifest.sha256
 
       - name: Compute immutable release identity
-        if: steps.promotion.outputs.mode == 'legacy'
+        if: steps.promotion.outputs.mode == 'legacy' || steps.promotion.outputs.public_ssr_action != ''
         id: manifest
         shell: bash
         run: |
@@ -184,7 +222,7 @@ jobs:
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
       - name: Define artifact name
-        if: steps.promotion.outputs.mode == 'legacy'
+        if: steps.promotion.outputs.mode == 'legacy' || steps.promotion.outputs.public_ssr_action != ''
         id: identity
         shell: bash
         env:
@@ -192,7 +230,7 @@ jobs:
         run: printf 'name=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload exact validated CDK assembly
-        if: steps.promotion.outputs.mode == 'legacy'
+        if: steps.promotion.outputs.mode == 'legacy' || steps.promotion.outputs.public_ssr_action != ''
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -207,7 +245,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: validate
-    if: needs.validate.outputs.promotion_mode == 'legacy'
+    if: needs.validate.outputs.promotion_mode == 'legacy' || needs.validate.outputs.public_ssr_action != ''
     environment: test
     permissions:
       contents: read
@@ -221,7 +259,12 @@ jobs:
       EXPECTED_AWS_REGION: us-east-1
       ADMIN_INFRASTRUCTURE_APPROVED: ${{ inputs.approve_thn_admin_dns_tls_distribution && 'true' || 'false' }}
       ADMIN_ROUTE_ASSOCIATION_APPROVED: ${{ inputs.approve_thn_admin_route_association && 'true' || 'false' }}
-      FRONTEND_TEST_RELEASE_ID: ${{ vars.FRONTEND_RELEASE_ID }}
+      FRONTEND_TEST_RELEASE_ID: ${{ inputs.public_ssr_release_id || vars.FRONTEND_RELEASE_ID }}
+      PUBLIC_SSR_ACTION: ${{ inputs.public_ssr_action }}
+      PUBLIC_SSR_RELEASE_ID: ${{ inputs.public_ssr_release_id }}
+      PUBLIC_SSR_CURRENT_RELEASE_ID: ${{ inputs.public_ssr_current_release_id }}
+      PUBLIC_SSR_REVIEW_DIGEST: ${{ inputs.public_ssr_review_digest }}
+      PUBLIC_SSR_MANIFEST_SHA256: ${{ inputs.public_ssr_manifest_sha256 }}
       FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED: ${{ vars.FRONTEND_TEST_THN_ADMIN_ORIGIN_ENABLED || 'false' }}
       FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: ${{ vars.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 }}
       FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON: ${{ vars.FRONTEND_TEST_THN_ADMIN_RELEASE_METADATA_JSON }}
@@ -303,6 +346,9 @@ jobs:
           THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET: ${{ secrets.THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET }}
         run: |
           set -euo pipefail
+          if [[ -n "${PUBLIC_SSR_ACTION}${PUBLIC_SSR_RELEASE_ID}${PUBLIC_SSR_CURRENT_RELEASE_ID}${PUBLIC_SSR_REVIEW_DIGEST}${PUBLIC_SSR_MANIFEST_SHA256}" ]]; then
+            node .transport/.release/release-tools/verify-public-test-ssr-inputs.js
+          fi
           test -n "$AWS_ROLE_ARN" || { echo "aws_role_arn_required"; exit 1; }
           [[ "$AWS_ROLE_ARN" =~ ^arn:aws:iam::765932874577:role/[A-Za-z0-9+=,.@_/-]+$ ]] || {
             echo "aws_role_arn_target_invalid"
@@ -341,6 +387,16 @@ jobs:
           set -euo pipefail
           node .transport/.release/release-tools/infra-test-aws.js verify-public-release .transport/.release
 
+      - name: Verify current protected TEST source for public SSR review or execution
+        if: inputs.public_ssr_action != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/test" --jq .object.sha)" = "$GITHUB_SHA"
+          node .transport/.release/release-tools/infra-test-aws.js verify-public-ssr-baseline .transport/.release
+
       - name: Prepare, review, and execute exact TEST change set
         id: apply
         shell: bash
@@ -354,6 +410,7 @@ jobs:
         run: bash .transport/.release/release-tools/run-test-infra-change-set.sh
 
       - name: Post-deploy TEST stack smoke
+        if: inputs.public_ssr_action != 'review'
         shell: bash
         env:
           STACK_NAME: ZoolandingTest-Zoolandingpage-test-Frontend
@@ -376,4 +433,5 @@ jobs:
             echo "- thn_admin_dns_tls_distribution_approved: $ADMIN_INFRASTRUCTURE_APPROVED"
             echo "- thn_admin_route_association_approved: $ADMIN_ROUTE_ASSOCIATION_APPROVED"
             echo "- change_set_executed: ${{ steps.apply.outputs.executed }}"
+            echo "- public_ssr_review_digest: ${{ steps.apply.outputs.public_ssr_review_digest }}"
           } >> "$GITHUB_STEP_SUMMARY"
