@@ -186,4 +186,29 @@ function verifyPublicTestChangeSet(description) {
   return "execute";
 }
 
-module.exports = { verifyPublicTestTemplate, verifyPublicTestChangeSet };
+function verifyPublicTestParameters(live, candidate) {
+  const invalid = () => fail("public_test_ssr_parameters_changed");
+  const parameterMap = entries => {
+    if (!Array.isArray(entries)) invalid();
+    const result = new Map();
+    for (const entry of entries) {
+      if (typeof entry?.ParameterKey !== "string" || result.has(entry.ParameterKey)
+        || typeof entry.ParameterValue !== "string" || entry.UsePreviousValue === false) invalid();
+      result.set(entry.ParameterKey, entry);
+    }
+    return result;
+  };
+  const before = parameterMap(live);
+  const after = parameterMap(candidate);
+  if (before.size !== after.size || !before.has("ThnAdminAuthAdminOriginVerifySecret")) invalid();
+  for (const [key, existing] of before) {
+    const proposed = after.get(key);
+    if (!proposed || proposed.ParameterValue !== existing.ParameterValue
+      || proposed.ResolvedValue !== existing.ResolvedValue) invalid();
+  }
+  // Native DescribeChangeSet omits UsePreviousValue and masks NoEcho values.
+  // The sealed runner supplies --previous-parameters and no overrides in public
+  // mode. This check supplements that request constraint with AWS readback.
+}
+
+module.exports = { verifyPublicTestTemplate, verifyPublicTestChangeSet, verifyPublicTestParameters };
