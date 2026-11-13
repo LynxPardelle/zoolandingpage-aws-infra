@@ -179,11 +179,13 @@ jobs:
           mkdir -p .release/release-tools
           cp tools/review-test-infra-change-set.js .release/release-tools/
           cp tools/thn-admin-release.js .release/release-tools/
+          cp tools/thn-production-profile.js .release/release-tools/
           cp tools/infra-test-aws.js .release/release-tools/
           cp tools/verify-public-test-template.js .release/release-tools/
           cp tools/verify-public-test-ssr-inputs.js .release/release-tools/
           cp tools/run-test-infra-change-set.sh .release/release-tools/
           cp tools/smoke-test-infra-stack.sh .release/release-tools/
+          node .release/release-tools/thn-admin-release.js compare .release/thn-admin-selection.json
           node <<'NODE'
           const crypto = require('node:crypto');
           const fs = require('node:fs');
