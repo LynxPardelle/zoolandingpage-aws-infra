@@ -139,6 +139,18 @@ deployable artifact nor enters its AWS deployment job, including manual runs.
 Absence preserves the ordinary flow. Do not remove the selector to bypass a
 blocked promotion; subsequent ordinary delivery requires its own exact review.
 
+To rotate only the public TEST SSR when the selected promotion is source-only,
+dispatch `Deploy Test` with `public_ssr_action=review`, the candidate APP TEST
+release ID and manifest SHA-256, and the currently active public release ID. Both THN approval flags
+stay false and the private TEST Environment selection must match the live stack.
+The workflow compares the sealed CDK assembly with the live template, allowing
+only the public SSR, static origin, and release pointers to change, plus the
+reviewed CDK bookkeeping. It records a digest without executing the change set.
+Dispatch `public_ssr_action=execute` with the same release IDs and that digest.
+The workflow repeats the template and native change-set checks before execution.
+The prior immutable public release ID is the rollback target through a new review
+and execute pair, with the two release IDs reversed.
+
 ## THN production promotion source boundary
 
 Full source promotion is separated from AWS activation. The exact six-field
