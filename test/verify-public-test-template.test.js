@@ -188,3 +188,15 @@ test("native reviews independently prove the allowed CDK bookkeeping", () => {
   });
   assert.throws(() => verifyPublicTestChangeSet(candidate), /cdk_metadata_change_forbidden/);
 });
+
+test("native parameter readback can omit reuse flags but cannot change the parameter selection", () => {
+  const { verifyPublicTestParameters } = require("../tools/verify-public-test-template");
+  const parameters = [
+    { ParameterKey: "ThnAdminAuthAdminOriginVerifySecret", ParameterValue: "****" },
+    { ParameterKey: "BootstrapVersion", ParameterValue: "/cdk/bootstrap/version", ResolvedValue: "29" },
+  ];
+  assert.doesNotThrow(() => verifyPublicTestParameters(parameters, structuredClone(parameters).reverse()));
+  assert.throws(() => verifyPublicTestParameters(parameters, [parameters[0]]), /public_test_ssr_parameters_changed/);
+  assert.throws(() => verifyPublicTestParameters(parameters, [parameters[0], { ...parameters[1], ResolvedValue: "30" }]), /public_test_ssr_parameters_changed/);
+  assert.throws(() => verifyPublicTestParameters(parameters, [{ ...parameters[0], UsePreviousValue: false }, parameters[1]]), /public_test_ssr_parameters_changed/);
+});

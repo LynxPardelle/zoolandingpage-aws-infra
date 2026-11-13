@@ -341,9 +341,10 @@ function main(args, options = {}) {
       const requiredAction = operation === "review-public-ssr" ? "review" : "execute";
       if (publicSsr?.action !== requiredAction) fail("public_test_ssr_selection_invalid");
       require("./verify-public-test-template").verifyPublicTestChangeSet(description);
-      const parameters = description.Parameters;
-      if (!Array.isArray(parameters) || !parameters.some(parameter => parameter.ParameterKey === "ThnAdminAuthAdminOriginVerifySecret")
-        || parameters.some(parameter => parameter.UsePreviousValue !== true)) fail("public_test_ssr_parameters_changed");
+      const read = createRoleClient(root, "lookup", options);
+      const { Stacks: stacks } = JSON.parse(read(["cloudformation", "describe-stacks", "--stack-name", STACK, "--output", "json"]));
+      if (stacks?.length !== 1 || stacks[0].StackId !== description.StackId) fail("public_test_ssr_parameters_changed");
+      require("./verify-public-test-template").verifyPublicTestParameters(stacks[0].Parameters, description.Parameters);
       const proof = verifyPublicSsrSelection(artifact, root, options, publicSsr, changeSetArn);
       const reviewDigest = digest(JSON.stringify(proof));
       if (requiredAction === "review") return `${reviewDigest}\n`;
