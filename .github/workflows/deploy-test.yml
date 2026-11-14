@@ -155,6 +155,9 @@ jobs:
 
       - name: Test and synthesize the exact TEST frontend stack
         shell: bash
+        env:
+          AWS_REGION: us-east-1
+          AWS_DEFAULT_REGION: us-east-1
         run: |
           set -euo pipefail
           test -n "$FRONTEND_TEST_RELEASE_ID" || { echo "frontend_release_id_required"; exit 1; }
