@@ -16,3 +16,48 @@ test("private initial projection accepts only scoped new resources and preserved
  const p=api().projectPrivateFrontdoor(b,d,"new");assert.equal(p.Resources.UnexpectedNew,undefined);assert.deepEqual(p.Resources.Untouched,b.Resources.Untouched);
  const wrong=structuredClone(d);wrong.Resources.FrontendThnAdminSsrFunction874373CC.Properties.Environment.Variables.THN_DEPLOYMENT_ENVIRONMENT="test";assert.throws(()=>api().projectPrivateFrontdoor(b,wrong,"new"),/production_private_projection_invalid/);
 });
+
+const lynxId = "FrontendDistributionLynxMusicOffers3ABF6E6E";
+const lynxHosts = require("../config/lynx-music-offer-hosts.json");
+
+function publicReleaseFixture(phase) {
+ const before = old(), desired = structuredClone(before);
+ const nextFn = desired.Resources.FrontendSsrFunctionABCDEF01.Properties;
+ nextFn.Code.S3Key = "frontend/angular-ssr/production/releases/new/server/ssr-handler.zip";
+ nextFn.Environment.Variables.ZLP_RELEASE_ID = "new";
+ desired.Resources.Public.Properties.DistributionConfig.Origins[0].OriginPath = "/frontend/angular-ssr/production/releases/new/browser";
+ const lynxConfig = {
+  Comment: "Zoolandingpage Angular SSR frontend (production/lynx-music-offers)",
+  Origins: [{ Id: "static", DomainName: "assets.zoolandingpage.com.mx", OriginPath: "/frontend/angular-ssr/production/releases/old/browser" }],
+  ...(phase === "aliases" ? {
+   Aliases: lynxHosts,
+   ViewerCertificate: { AcmCertificateArn: "arn:aws:acm:us-east-1:765932874577:certificate/11111111-1111-4111-8111-111111111111" },
+  } : {}),
+ };
+ before.Resources[lynxId] = { Type: "AWS::CloudFront::Distribution", Properties: { DistributionConfig: lynxConfig } };
+ return { before, desired };
+}
+
+test("public SSR rotations preserve the exact live Lynx phases and only rotate their static prefix", () => {
+ for (const phase of ["generated", "aliases"]) {
+  const { before, desired } = publicReleaseFixture(phase);
+  const candidate = api().projectPublicVisual(before, desired, "new");
+  const expected = structuredClone(before.Resources[lynxId]);
+  expected.Properties.DistributionConfig.Origins[0].OriginPath = "/frontend/angular-ssr/production/releases/new/browser";
+  assert.deepEqual(candidate.Resources[lynxId], expected);
+  const rollback = api().projectPublicVisual(candidate, before, "old");
+  assert.deepEqual(rollback.Resources[lynxId], before.Resources[lynxId]);
+ }
+});
+
+test("public SSR rotation rejects any Lynx alias drift or unmatched distribution", () => {
+ for (const drift of [
+  (resources) => { resources[lynxId].Properties.DistributionConfig.Aliases = ["other.example.com"]; },
+  (resources) => { resources[lynxId].Properties.DistributionConfig.Origins[0].OriginPath = "/unreviewed/browser"; },
+  (resources) => { resources.Unknown = resources[lynxId]; delete resources[lynxId]; },
+ ]) {
+  const { before, desired } = publicReleaseFixture("aliases");
+  drift(before.Resources);
+  assert.throws(() => api().projectPublicVisual(before, desired, "new"), /production_public_projection_invalid/);
+ }
+});
