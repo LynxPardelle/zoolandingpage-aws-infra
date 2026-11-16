@@ -1,6 +1,7 @@
 "use strict";
 
 const { selectThnAdminRelease } = require("../tools/thn-admin-release");
+const lynxMusicOfferHosts = require("./lynx-music-offer-hosts.json");
 
 const expectedAccount = "765932874577";
 const defaultRegion = "us-east-1";
@@ -197,6 +198,39 @@ function buildZooberiahProductionFrontDoor(source = process.env) {
         domainNames: ["zooberiahsystems.com", "www.zooberiahsystems.com"],
       },
     ],
+  };
+}
+
+function buildLynxMusicOffersProductionFrontDoor(source = process.env) {
+  const phase = String(source.FRONTEND_PRODUCTION_LYNX_MUSIC_OFFERS_PHASE || "").trim();
+  if (!phase) return null;
+  if (!["generated", "aliases"].includes(phase)) {
+    throw new Error("The Lynx music offers phase must be generated or aliases.");
+  }
+  const [domainName, ...alternateDomainNames] = lynxMusicOfferHosts;
+  const hostPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.music\.lynxpardelle\.com$/;
+  if (
+    lynxMusicOfferHosts.length !== 47
+    || new Set(lynxMusicOfferHosts).size !== lynxMusicOfferHosts.length
+    || lynxMusicOfferHosts.some((host) => !hostPattern.test(host))
+  ) {
+    throw new Error("The Lynx music offers manifest must contain 47 distinct exact offer hosts.");
+  }
+  const aliasesEnabled = phase === "aliases";
+  const certificateArn = aliasesEnabled ? String(source.FRONTEND_PRODUCTION_LYNX_MUSIC_OFFERS_CERTIFICATE_ARN || "").trim() : undefined;
+  const certificatePattern = new RegExp(`^arn:aws:acm:${defaultRegion}:${expectedAccount}:certificate/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$`);
+  if (aliasesEnabled && !certificatePattern.test(certificateArn)) {
+    throw new Error("The Lynx music offers aliases phase requires an ACM certificate in the expected account and region.");
+  }
+
+  return {
+    id: "lynx-music-offers",
+    domainName,
+    alternateDomainNames,
+    customDomainNamesEnabled: aliasesEnabled,
+    route53RecordsEnabled: false,
+    auditHostHint: aliasesEnabled ? undefined : domainName,
+    certificateArn,
   };
 }
 
@@ -520,6 +554,7 @@ const thnAdminTestFrontDoor = buildThnAdminTestFrontDoor();
 const thnPublicProductionFrontDoor = buildThnPublicProductionFrontDoor();
 const thnAdminProductionFrontDoor = buildThnAdminProductionFrontDoor();
 const zooberiahProductionFrontDoor = buildZooberiahProductionFrontDoor();
+const lynxMusicOffersProductionFrontDoor = buildLynxMusicOffersProductionFrontDoor();
 
 const environments = [
   {
@@ -657,6 +692,7 @@ const environments = [
         zooberiahProductionFrontDoor,
         ...(thnPublicProductionFrontDoor ? [thnPublicProductionFrontDoor] : []),
         ...(thnAdminProductionFrontDoor ? [thnAdminProductionFrontDoor] : []),
+        ...(lynxMusicOffersProductionFrontDoor ? [lynxMusicOffersProductionFrontDoor] : []),
       ],
     },
     removalPolicy: "retain",
@@ -668,6 +704,7 @@ function parseBooleanFlag(value) {
 }
 
 module.exports = {
+  buildLynxMusicOffersProductionFrontDoor,
   buildThnAdminProductionFrontDoor,
   buildThnAdminTestCertificate,
   buildThnAdminTestFrontDoor,
