@@ -43,7 +43,7 @@ case "$proof_mode" in
 esac
 
 cdk_parameters=()
-if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ]; then
+if [ "$THN_ADMIN_ORIGIN_ENABLED" = "true" ] && [ -z "${PUBLIC_SSR_ACTION:-}" ]; then
   [[ "${THN_AUTH_ADMIN_ORIGIN_VERIFY_SECRET:-}" =~ ^[A-Za-z0-9_-]{43}$ ]] || {
     echo "thn_origin_proof_invalid" >&2
     exit 1
@@ -61,6 +61,7 @@ npx --no-install cdk deploy "$STACK_PATH" \
   --change-set-name "$CHANGE_SET_NAME" \
   --require-approval never \
   --exclusively \
+  --previous-parameters \
   "${cdk_parameters[@]}"
 prepare_exit=$?
 set -e
@@ -121,11 +122,22 @@ test "$prepare_exit" -eq 0 || {
   exit "$prepare_exit"
 }
 
+if [[ "${PUBLIC_SSR_ACTION:-}" == review ]]; then
+  review_digest="$(node "$RELEASE_ROOT/release-tools/infra-test-aws.js" review-public-ssr \
+    "$RELEASE_ROOT" "$CHANGE_SET_NAME" "$change_set_arn")"
+  [[ "$review_digest" =~ ^[a-f0-9]{64}$ ]]
+  printf 'executed=false\npublic_ssr_review_digest=%s\n' "$review_digest" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
 # Recheck immutable provenance immediately before the CloudFormation mutation.
 test "$(node "$RELEASE_ROOT/release-tools/thn-admin-release.js" verify "$RELEASE_ROOT/thn-admin-selection.json")" = "$proof_mode"
 
 node "$RELEASE_ROOT/release-tools/infra-test-aws.js" execute-change-set "$RELEASE_ROOT" "$CHANGE_SET_NAME" "$change_set_arn"
 node "$RELEASE_ROOT/release-tools/infra-test-aws.js" wait-stack "$RELEASE_ROOT"
+if [[ "${PUBLIC_SSR_ACTION:-}" == execute ]]; then
+  node "$RELEASE_ROOT/release-tools/infra-test-aws.js" verify-public-ssr-activated "$RELEASE_ROOT"
+fi
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   printf 'executed=true\n' >> "$GITHUB_OUTPUT"
 fi

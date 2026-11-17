@@ -1,5 +1,6 @@
 "use strict";
 const {canonical,sha}=require("./thn-production-certificate-release");
+const lynx = require("./lynx-music-offers-contract");
 const same=(a,b)=>canonical(a)===canonical(b),fail=c=>{throw new Error(c);};
 const privateTypes=new Map([
  ["FrontendThnAdminSsrLogGroup25C7E89D","AWS::Logs::LogGroup"],["FrontendThnAdminSsrFunctionServiceRole633F1E33","AWS::IAM::Role"],["FrontendThnAdminSsrFunction874373CC","AWS::Lambda::Function"],["FrontendThnAdminSsrFunctionFunctionUrlA847D4A7","AWS::Lambda::Url"],["FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionUrlThehairnarrativeAdminProductionB8136A3A","AWS::Lambda::Permission"],["FrontendThnAdminSsrFunctionAllowCloudFrontInvokeFunctionThehairnarrativeAdminProduction8A0AB701","AWS::Lambda::Permission"],["FrontendViewerHostHeaderFunctionThehairnarrativeAdminProduction1D25C5CB","AWS::CloudFront::Function"],["FrontendResponseHeadersPolicyThehairnarrativeAdminProductionB0DBB124","AWS::CloudFront::ResponseHeadersPolicy"],["FrontendDistributionThehairnarrativeAdminProductionOrigin1FunctionUrlOriginAccessControl025A6E7B","AWS::CloudFront::OriginAccessControl"],["FrontendDistributionThehairnarrativeAdminProductionF99395A3","AWS::CloudFront::Distribution"],["FrontendDistributionDomainParameterThehairnarrativeAdminProduction2FBFA4CE","AWS::SSM::Parameter"]
@@ -34,8 +35,17 @@ function projectPublicVisual(before,desired,releaseId){
  result.Resources[id].Properties.Code=structuredClone(code);result.Resources[id].Properties.Environment.Variables.ZLP_RELEASE_ID=releaseId;
  let publicSeen=false;
  for(const [rid,r] of Object.entries(before.Resources)){
+  if (rid === lynx.distributionId) {
+   const currentRelease = fn.Properties.Environment?.Variables?.ZLP_RELEASE_ID;
+   const cfg = result.Resources[rid]?.Properties?.DistributionConfig;
+   if (r.Type !== "AWS::CloudFront::Distribution" || !release(currentRelease)) bad();
+   const origin = lynx.matchingStaticOrigin(cfg, currentRelease, cfg?.Aliases === undefined ? "generated" : "aliases");
+   if (!origin) bad();
+   origin.OriginPath = lynx.staticPrefix(releaseId);
+   continue;
+  }
   if(r.Type==="AWS::CloudFront::Distribution"&&!r.Properties.DistributionConfig.Aliases?.includes("admin.thehairnarrative.com")){
-   const d=desired.Resources[rid];if(!same(d?.Properties?.DistributionConfig?.Aliases,r.Properties.DistributionConfig.Aliases))bad();
+   const d=desired.Resources[rid];if(d?.Type!==r.Type||!same(d.Properties?.DistributionConfig?.Aliases,r.Properties.DistributionConfig.Aliases))bad();
    if(r.Properties.DistributionConfig.Aliases?.includes("thehairnarrative.com"))publicSeen=true;
    const oldOrigins=r.Properties.DistributionConfig.Origins||[],newOrigins=d.Properties.DistributionConfig.Origins||[];
    for(const origin of oldOrigins.filter(o=>o.DomainName==="assets.zoolandingpage.com.mx")){

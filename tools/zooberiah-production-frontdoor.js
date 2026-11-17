@@ -456,10 +456,10 @@ function templateBody(value) {
   return typeof value === "string" ? JSON.parse(value) : value;
 }
 
-function verifyVersionedTemplate(call, coordinate, bytes, directory) {
+function verifyVersionedTemplate(call, coordinate, bytes, directory, purpose) {
   if (
     coordinate?.bucket !== ASSET_BUCKET
-    || !/^thn-production\/zooberiah-frontdoor(?:-rollback)?\/[a-f0-9]{64}\.json$/.test(coordinate.key || "")
+    || coordinate.key !== `thn-production/${purpose}/${sha(bytes)}.json`
     || coordinate.sha256 !== sha(bytes)
     || typeof coordinate.versionId !== "string"
     || coordinate.versionId === "null"
@@ -509,7 +509,8 @@ function writeVersionedTemplate(call, bytes, purpose, directory) {
     call,
     { bucket: ASSET_BUCKET, key, versionId: result.VersionId, sha256: sha(bytes) },
     bytes,
-    directory
+    directory,
+    purpose
   );
 }
 
@@ -522,7 +523,8 @@ function freshReviewFields(
   action,
   phase,
   sourceSha,
-  fingerprint
+  fingerprint,
+  reviewChanges
 ) {
   const native = {};
   for (const stage of ["Original", "Processed"]) {
@@ -533,7 +535,7 @@ function freshReviewFields(
     }).TemplateBody);
   }
   if (!same(native.Original, candidate)) fail("zooberiah_frontdoor_native_template_invalid");
-  reviewZooberiahChanges(baseline.templates.Original, candidate, description, action, phase);
+  reviewChanges(baseline.templates.Original, candidate, description, action, phase);
   return {
     sourceSha,
     sourcePackageSha256: fingerprint,
@@ -561,7 +563,7 @@ async function waitForStack(call, stackId, pause) {
   fail("zooberiah_frontdoor_execution_timeout");
 }
 
-async function runZooberiahOperation(options) {
+async function runRetainedFrontDoorOperation(options, contract) {
   const {
     action,
     execution,
@@ -584,12 +586,13 @@ async function runZooberiahOperation(options) {
     || !/^[a-f0-9]{40}$/.test(options.sourceSha || "")
     || typeof call !== "function"
   ) fail("zooberiah_frontdoor_operation_invalid");
-  const purpose = purposeForAction(action);
+  const purpose = contract.purpose(action, phase);
   if (execution === "cleanup") {
     const record = retained.validateReview(options.record);
     if (record.purpose !== purpose || record.digest !== options.approvedDigest) {
       fail("zooberiah_frontdoor_review_invalid");
     }
+    contract.validateCleanup?.(record, options);
     const stack = call("deploy", "cloudformation", "describe-stacks", { StackName: record.stackId }).Stacks?.[0];
     const changeSet = call("deploy", "cloudformation", "describe-change-set", {
       StackName: record.stackId,
@@ -604,6 +607,7 @@ async function runZooberiahOperation(options) {
       || changeSet.ExecutionStatus !== "AVAILABLE"
       || retained.hash(changeSet.Changes) !== record.nativeInventorySha256
     ) fail("zooberiah_frontdoor_review_invalid");
+    if (contract.validateCleanup) options.verifySource?.();
     call("deploy", "cloudformation", "delete-change-set", {
       StackName: record.stackId,
       ChangeSetName: record.changeSetArn,
@@ -611,11 +615,11 @@ async function runZooberiahOperation(options) {
     return { cleanup: true, changeSetArn: record.changeSetArn };
   }
 
-  validateDesiredTemplate(desired, releaseId, phase);
-  const captureBaseline = options.captureBaseline || readZooberiahProductionBaseline;
+  contract.validateTemplate(desired, releaseId, phase);
+  const captureBaseline = options.captureBaseline || contract.captureBaseline;
   const pause = options.pause || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const baseline = captureBaseline(call);
-  const candidate = projectZooberiahFrontDoor(
+  const candidate = contract.project(
     baseline.templates.Original,
     desired,
     releaseId,
@@ -623,9 +627,9 @@ async function runZooberiahOperation(options) {
     phase,
     generatedDesired
   );
-  if (phase === "aliases") assertZooberiahAliasPreflight(call, action);
+  await contract.preflight(call, action, phase, desired);
   const bytes = Buffer.from(`${canonical(candidate)}\n`);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "zooberiah-production-frontdoor-"));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${contract.key}-production-frontdoor-`));
   try {
     if (execution === "review") {
       const coordinate = writeVersionedTemplate(call, bytes, purpose, directory);
@@ -638,7 +642,7 @@ async function runZooberiahOperation(options) {
         StackName: baseline.stackId,
         ChangeSetName: `thn-production-${purpose}-${runId}`,
         ChangeSetType: "UPDATE",
-        Description: `Zooberiah ${action} source ${options.sourceSha}; expires after 24 hours; execute exact ARN only`,
+        Description: `${contract.label} ${action} source ${options.sourceSha}; expires after 24 hours; execute exact ARN only`,
         TemplateURL: `https://${ASSET_BUCKET}.s3.${REGION}.amazonaws.com/${coordinate.key}?versionId=${encodeURIComponent(coordinate.versionId)}`,
         Parameters: baseline.parameters.map((parameter) => ({
           ParameterKey: parameter.ParameterKey,
@@ -649,7 +653,7 @@ async function runZooberiahOperation(options) {
       });
       const description = await certificate.waitPreview(call, baseline.stackId, created.Id, pause);
       const fields = freshReviewFields(
-        call, baseline, candidate, description, coordinate, action, phase, options.sourceSha, fingerprint
+        call, baseline, candidate, description, coordinate, action, phase, options.sourceSha, fingerprint, contract.reviewChanges
       );
       const createdAt = new Date(description.CreationTime).toISOString();
       const record = retained.sealReview({
@@ -679,14 +683,14 @@ async function runZooberiahOperation(options) {
       || record.packageManifest.length !== 1
     ) fail("zooberiah_frontdoor_review_invalid");
     const coordinate = record.packageManifest[0];
-    verifyVersionedTemplate(call, coordinate, bytes, directory);
+    verifyVersionedTemplate(call, coordinate, bytes, directory, purpose);
     const description = call("deploy", "cloudformation", "describe-change-set", {
       StackName: baseline.stackId,
       ChangeSetName: record.changeSetArn,
       IncludePropertyValues: true,
     });
     const fields = freshReviewFields(
-      call, baseline, candidate, description, coordinate, action, phase, options.sourceSha, fingerprint
+      call, baseline, candidate, description, coordinate, action, phase, options.sourceSha, fingerprint, contract.reviewChanges
     );
     retained.verifyRetainedExecution(record, options.approvedDigest, fields, description);
     const immediate = captureBaseline(call);
@@ -699,12 +703,12 @@ async function runZooberiahOperation(options) {
       IncludePropertyValues: true,
     });
     retained.verifyRetainedExecution(record, options.approvedDigest, fields, last);
-    if (phase === "aliases") assertZooberiahAliasPreflight(call, action);
+    await contract.preflight(call, action, phase, desired);
     options.verifySource?.();
     call("deploy", "cloudformation", "execute-change-set", {
       StackName: baseline.stackId,
       ChangeSetName: record.changeSetArn,
-      ClientRequestToken: `zooberiah-${action}-${record.digest}`,
+      ClientRequestToken: `${contract.key}-${action}-${record.digest}`,
     });
     const stack = await waitForStack(call, baseline.stackId, pause);
     const actual = templateBody(call("lookup", "cloudformation", "get-template", {
@@ -720,7 +724,7 @@ async function runZooberiahOperation(options) {
     const resources = call("lookup", "cloudformation", "list-stack-resources", { StackName: baseline.stackId });
     if (resources.NextToken) fail("zooberiah_frontdoor_postcheck_failed");
     const present = new Set(resources.StackResourceSummaries.map(({ LogicalResourceId }) => LogicalResourceId));
-    if ([...RESOURCE_TYPES.keys()].some((logicalId) => present.has(logicalId) !== (action === "deploy"))) {
+    if ([...contract.resourceTypes.keys()].some((logicalId) => present.has(logicalId) !== contract.expectedPresence(action, phase))) {
       fail("zooberiah_frontdoor_postcheck_failed");
     }
     return { complete: true, action, digest: record.digest };
@@ -730,12 +734,35 @@ async function runZooberiahOperation(options) {
   }
 }
 
+function runZooberiahOperation(options) {
+  return runRetainedFrontDoorOperation(options, {
+    key: "zooberiah",
+    label: "Zooberiah",
+    purpose: purposeForAction,
+    resourceTypes: RESOURCE_TYPES,
+    validateTemplate: validateDesiredTemplate,
+    captureBaseline: readZooberiahProductionBaseline,
+    project: projectZooberiahFrontDoor,
+    reviewChanges: reviewZooberiahChanges,
+    preflight: (call, action, phase) => {
+      if (phase === "aliases") assertZooberiahAliasPreflight(call, action);
+    },
+    expectedPresence: (action) => action === "deploy",
+  });
+}
+
+function runLynxMusicOffersOperation(options) {
+  const { operationContract } = require("./lynx-music-offers-production-frontdoor");
+  return runRetainedFrontDoorOperation(options, operationContract);
+}
+
 function sourcePackageHash(root = path.resolve(__dirname, "..")) {
   const files = [
     "tools/zooberiah-production-frontdoor.js",
     "tools/thn-production-certificate-release.js",
     "tools/thn-production-retained-review.js",
     "config/environments.js",
+    "config/lynx-music-offer-hosts.json",
     "lib/stacks/frontend-stack.js",
     "lib/project-helpers.js",
     ".github/workflows/zooberiah-production-frontdoor.yml",
@@ -750,12 +777,14 @@ function sourcePackageHash(root = path.resolve(__dirname, "..")) {
 module.exports = {
   OUTPUT_ID,
   RESOURCE_TYPES,
+  assertReleaseBinding,
   assertZooberiahAliasPreflight,
   normalizeParameters,
   prepareZooberiahFrontDoor,
   projectZooberiahFrontDoor,
   readZooberiahProductionBaseline,
   reviewZooberiahChanges,
+  runLynxMusicOffersOperation,
   runZooberiahOperation,
   sourcePackageHash,
   validateDesiredTemplate,
