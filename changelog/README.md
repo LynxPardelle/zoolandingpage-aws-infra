@@ -1,5 +1,7 @@
 # Changelog
 
+- [2026-11-18 — Reproducible TEST Node runtime](2026-11-18-test-node-runtime-pin.md)
+
 - [2026-10-07 — Zooberiah production front door preparation](2026-10-07-zooberiah-production-frontdoor.md)
 
 - [2026-09-27 — Private TEST rotation after Query Fence](2026-09-27-thn-current-query-private-artifact.md)
