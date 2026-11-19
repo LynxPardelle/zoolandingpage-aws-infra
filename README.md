@@ -147,6 +147,11 @@ The workflow compares the sealed CDK assembly with the live template, allowing
 only the public SSR, static origin, and release pointers to change, plus the
 reviewed CDK bookkeeping. It records a digest without executing the change set.
 Dispatch `public_ssr_action=execute` with the same release IDs and that digest.
+Both `Deploy Test` jobs pin Node.js to `22.23.5`: CDK telemetry includes the
+synthesis runtime, so a floating patch can change the candidate template and
+invalidate a review even when the functional resources are identical. Update
+both pins together and obtain a fresh review after a runtime change; retain the
+exact template and review-digest checks.
 The workflow repeats the template and native change-set checks before execution.
 The prior immutable public release ID is the rollback target through a new review
 and execute pair, with the two release IDs reversed.
