@@ -34,6 +34,28 @@ function count(haystack, needle) {
   return haystack.split(needle).length - 1;
 }
 
+test("TEST review and execution use the same exact Node patch for stable CDK metadata", () => {
+  const workflow = deploy.replace(/\r\n/g, "\n");
+  const jobs = [
+    workflow.slice(workflow.indexOf("  validate:"), workflow.indexOf("  deploy:")),
+    workflow.slice(workflow.indexOf("  deploy:")),
+  ];
+  const versions = jobs.map(job => {
+    const steps = [...job.matchAll(/uses: actions\/setup-node@[^\n]+\n\s+with:\n\s+node-version: ([^\n]+)/g)];
+    assert.equal(steps.length, 1, "Each TEST job must select one explicit Node runtime");
+    return steps[0][1].trim().replace(/^['"]|['"]$/g, "");
+  });
+  assert.deepEqual(versions, ["22.23.5", "22.23.5"],
+    "Floating Node patches change synthesized CDK telemetry and invalidate the reviewed public SSR digest");
+});
+
+test("credential-free CI synthesis binds the configured regional API profile", () => {
+  const workflow = readFileSync(path.join(root, ".github/workflows/cdk-validate.yml"), "utf8")
+    .replace(/\r\n/g, "\n");
+  assert.match(workflow, /      - run: npm run validate\n        env:\n          AWS_REGION: us-east-1(?:\n|$)/,
+    "CDK must resolve the existing regional endpoint profile independently of the hosted runner's default region");
+});
+
 test("TEST transports safe selection before credentials and verifies published bytes before each mutation", () => {
   const validate = deploy.slice(deploy.indexOf("  validate:"), deploy.indexOf("  deploy:"));
   assert.match(validate, /FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64: \$\{\{ vars\.FRONTEND_TEST_THN_ADMIN_MANIFEST_BASE64 \}\}/);
